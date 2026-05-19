@@ -1,43 +1,49 @@
-# Gastro-Tag
+# GastroTag 🏷️🥑
 
-O **Gastro-Tag** é um sistema de software desenvolvido para auxiliar na identificação e rotulagem de alimentos dentro de cozinhas pedagógicas e depósitos. O sistema automatiza o processo de registro de abertura de insumos, calcula datas de descarte baseadas em normas técnicas e gera etiquetas prontas para impressão, substituindo métodos manuais ineficientes.
+> "O cérebro digital da cozinha."
 
-## 📌 Introdução
+O **GastroTag** é uma solução inteligente de software desenvolvida para automatizar a gestão de validade, rastreabilidade e rotulagem de produtos alimentícios pós-abertos. Projetado especificamente para operar em dispositivos como **tablets e totens dedicados** dentro de cozinhas pedagógicas e comerciais, o sistema substitui os métodos manuais ineficientes (como escrita em fita crepe) por um processo digital imutável e ágil.
 
-O sistema opera em um **terminal eletrônico fixo** dentro do ambiente da cozinha. Funcionários autorizados utilizam a interface para preencher informações sobre as condições do alimento, e o software processa esses dados para emitir etiquetas de identificação precisas, garantindo a segurança alimentar e a rastreabilidade dos processos.
+O projeto nasceu focado em atender às cozinhas pedagógicas do **SENAC Amazonas**, em conformidade rigorosa com a resolução **RDC 216 da ANVISA**, com alto potencial de escalabilidade para o mercado B2B gastronômico.
 
-## 🚀 Principais Funcionalidades
+---
 
-* **Cadastro de Produtos:** Inserção detalhada de dados, incluindo nome, marca, prazo de validade original e regras específicas para o pós-abertura.
-* **Busca Otimizada:** Localização rápida de produtos cadastrados apenas digitando parte do nome.
-* **Cálculo Automático de Validade:** Determinação precisa da nova data de descarte com base na data de abertura e no tipo de armazenamento (**refrigerado ou congelado**).
-* **Alerta Visual de Vencimento:** Diferenciação visual na interface (sistema de cores por mês) para identificar produtos que estão próximos da data de descarte.
-* **Geração de Etiquetas:** Layout automático contendo nome, lote, data de abertura, nova data de validade, modo de armazenamento, temperatura e campo para assinatura.
-* **Identidade Visual:** Módulo para inclusão de logotipos institucionais (como o do **SENAC-AM**) diretamente nas etiquetas impressas.
-* **Controle de Responsabilidade:** Registro do funcionário responsável pela manipulação do produto diretamente na etiqueta.
+## 🚀 Principais Funcionalidades (MVP)
 
-## 🛠️ Requisitos do Sistema
+* **Motor de Cálculo Automático:** Determina instantaneamente a nova data de descarte pós-abertura com base nas regras de conservação da ANVISA (distinguindo automaticamente se o insumo será refrigerado ou congelado).
+* **Interface Totem/Tablet UI:** Design focado em UX operacional para telas de toque em ambientes de alta pressão de cozinhas profissionais.
+* **Identificação via Short-Code ID:** Busca rápida e registro ágil utilizando códigos curtos para os insumos.
+* **Geração e Impressão de Etiquetas:** Emissão automática de layouts de etiquetas contendo Nome, Lote, Data de Abertura, Data de Descarte, Modo de Armazenamento, e Campo de Assinatura do manipulador.
+* **Integração Térmica:** Conexão direta com mini impressoras térmicas locais para impressão física resistente à umidade e ao frio da cozinha.
+* **Módulo de Identidade Visual:** Personalização das etiquetas impressas com o logotipo da instituição (SENAC-AM ou restaurante parceiro).
+* **Alertas Visuais por Cores:** Dashboard com alertas baseados em cores para identificar produtos com validades e descartes próximos.
 
-* **Hardware:** Terminal de computador fixo ou computador dedicado (**não suporta dispositivos móveis/tablets**).
-* **Impressão:** Impressora térmica ou mini impressora de etiquetas configurada para operação local.
-* **Persistência:** Banco de dados relacional para armazenamento de produtos, usuários e histórico de etiquetas geradas.
-* **Tempo de Operação:** O sistema deve permitir a conclusão do processo de rotulagem em aproximadamente 5 minutos.
+---
 
-## ⚖️ Conformidade e Regras Técnicas
+## 🚫 Fora do Escopo Atual (MVP)
 
-O desenvolvimento e a lógica de cálculo do sistema seguem rigorosamente as resoluções e regulamentos aplicáveis à rotulagem e validade de alimentos, especificamente a **RDC 216** e normas correlatas da **Anvisa**.
+Para garantir a máxima eficiência na entrega do núcleo da aplicação, os seguintes módulos **não fazem parte** do escopo atual:
+* Controle quantitativo de estoque ou inventário físico.
+* Gestão/pesagem de desperdício e análise de sobras.
+* Integração com leitura de códigos de barras ou QR Codes (método focado em Short-Code e busca nominal).
 
-## 🚫 Exclusões do Escopo (MVP)
+---
 
-Para manter o foco na rotulagem e eficiência operacional, as seguintes funcionalidades não estão inclusas nesta versão inicial:
-* Controle de estoque ou inventário quantitativo.
-* Gestão de desperdício ou pesagem de sobras.
-* Integração com leitura de QR Codes ou códigos de barras.
+## 🛠️ Tech Stack & Arquitetura
 
-## 👥 Colaboradores (3º Período - ADS)
+* **Backend:** Python (Lógica de negócios e APIs de integração)
+* **Ambiente de Operação:** Dispositivos móveis dedicados (Tablets/Totens) conectados à rede local/nuvem.
+* **Persistência:** Banco de dados relacional para armazenamento de regras de insumos, usuários e histórico de rotulagem.
 
-* Bianka Rocha da Silva
-* Carlos Felipe
-* Francisco Sinval
-* João Pedro Garcia
-* Sávio José
+<!-- ## 📦 Como Executar o Projeto Localmente
+
+### Pré-requisitos
+* Docker e Docker Compose instalados.
+* *(Opcional)* Python 3.10+ configurado se for rodar o ambiente bare-metal.
+
+### Passos para Inicialização (Via Docker)
+
+1. Clone o repositório do projeto:
+   ```bash
+   git clone [https://github.com/seu-usuario/gastrotag.git](https://github.com/seu-usuario/gastrotag.git)
+   cd gastrotag
