@@ -1,0 +1,84 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Usuário do sistema ────────────────────────────────────
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(OPERATOR)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  labels Label[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  OPERATOR
+}
+
+// ── Produto (insumo cadastrado) ───────────────────────────
+model Product {
+  id                      String   @id @default(uuid())
+  name                    String
+  brand                   String
+  category                String?
+  originalExpiryDate      DateTime @map("original_expiry_date") @db.Date
+  daysValidRefrigerated   Int      @default(0) @map("days_valid_refrigerated")
+  daysValidFrozen         Int      @default(0) @map("days_valid_frozen")
+  unit                    String?                                             // kg, L, un, etc.
+  notes                   String?
+  active                  Boolean  @default(true)
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  labels Label[]
+
+  @@index([name])
+  @@index([brand])
+  @@index([createdAt])
+  @@index([originalExpiryDate])
+  @@map("products")
+}
+
+// ── Etiqueta gerada ──────────────────────────────────────
+model Label {
+  id               String          @id @default(uuid())
+  shortCode        String          @unique @map("short_code")
+  productId        String          @map("product_id")
+  userId           String          @map("user_id")
+  lot              String
+  openedAt         DateTime        @map("opened_at") @db.Date
+  discardAt        DateTime        @map("discard_at") @db.Date
+  storageType      StorageType     @map("storage_type")
+  storageTemp      String          @map("storage_temp")
+  printedAt        DateTime?       @map("printed_at")
+  printCount       Int             @default(0) @map("print_count")
+  createdAt        DateTime        @default(now()) @map("created_at")
+
+  product Product @relation(fields: [productId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@index([productId])
+  @@index([userId])
+  @@index([discardAt])
+  @@index([createdAt])
+  @@map("labels")
+}
+
+enum StorageType {
+  REFRIGERADO
+  CONGELADO
+}

@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    @apply bg-slate-50 text-slate-900 antialiased;
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-600 ring-offset-2;
+  }
+}
+
+@layer components {
+  /* ── Card ── */
+  .card {
+    @apply bg-white rounded-lg border border-slate-200 shadow-card;
+  }
+
+  /* ── Input ── */
+  .input {
+    @apply w-full px-3 py-2.5 text-sm border border-slate-300 rounded-md
+           focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20
+           outline-none transition-all placeholder:text-slate-400 bg-white;
+  }
+
+  /* ── Btn variants ── */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5
+           rounded-md text-sm font-medium transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2
+           focus-visible:ring-brand-600 focus-visible:ring-offset-2;
+  }
+  .btn-primary {
+    @apply btn bg-brand-700 text-white hover:bg-brand-800 shadow-sm;
+  }
+  .btn-outline {
+    @apply btn border border-slate-300 text-slate-700
+           hover:border-brand-600 hover:text-brand-700 hover:bg-brand-50;
+  }
+  .btn-ghost {
+    @apply btn text-slate-500 hover:bg-slate-100 hover:text-slate-700;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  .btn-lg {
+    @apply px-6 py-3 text-base;
+  }
+
+  /* ── Badge ── */
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full
+           text-xs font-semibold uppercase tracking-wide;
+  }
+  .badge-valid    { @apply bg-emerald-100 text-emerald-800; }
+  .badge-expiring { @apply bg-amber-100 text-amber-800; }
+  .badge-expired  { @apply bg-red-100 text-red-800; }
+  .badge-recent   { @apply bg-blue-100 text-blue-800; }
+  .badge-neutral  { @apply bg-slate-100 text-slate-600; }
+
+  /* ── Page title ── */
+  .page-title {
+    @apply text-2xl font-bold text-slate-900 tracking-tight;
+  }
+  .page-subtitle {
+    @apply text-sm text-slate-500 mt-0.5;
+  }
+
+  /* ── Section label ── */
+  .section-label {
+    @apply text-xs font-bold uppercase tracking-widest text-slate-400
+           pb-2.5 border-b border-slate-200 mb-4;
+  }
+}
+
+/* ── Print ─────────────────────────────────────────── */
+@media print {
+  body > *:not(#print-root) { display: none !important; }
+  #print-root { display: block !important; }
+
+  .print-label {
+    width: 9cm;
+    margin: 1.5cm auto;
+    border: 1.5pt solid #000;
+    font-family: Arial, sans-serif;
+    page-break-inside: avoid;
+  }
+}
