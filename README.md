@@ -24,14 +24,14 @@ gastrotag/
 │   │   ├── routes/
 │   │   ├── services/
 │   │   └── utils/
-│   └── prisma/       # Schema + migrations
-├── frontend/         # SPA React
+│   └── prisma/       
+├── frontend/         
 │   └── src/
 │       ├── components/
 │       ├── pages/
-│       ├── services/  # Axios API clients
+│       ├── services/  
 │       ├── hooks/
-│       ├── store/     # Zustand
+│       ├── store/     
 │       └── types/
 └── docker-compose.yml
 ```
