@@ -29,7 +29,6 @@ Thumbs.db
 *.sln
 
 # Prisma
-backend/prisma/migrations/*.sql
 
 # Docker volumes
 postgres_data/
