@@ -1,7 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
-import { daysUntil } from '../utils/dateUtils';
+import { daysUntil, getProductStatus, kitchenToday, kitchenWeekAgo } from '../utils/dateUtils';
+import { parseDateOnly } from '../domain/shelfLife';
 
 export type ProductStatus = 'all' | 'valid' | 'expiring' | 'expired' | 'recent';
 export type ProductSort   = 'name' | 'brand' | 'date' | 'created';
@@ -27,8 +28,7 @@ export const ProductService = {
     } = filters;
 
     const skip = (page - 1) * limit;
-    const now  = new Date();
-    now.setUTCHours(0, 0, 0, 0);
+    const now = kitchenToday();
 
     // ── Build WHERE ────────────────────────────────────
     const where: Prisma.ProductWhereInput = { active: true };
@@ -53,11 +53,10 @@ export const ProductService = {
     // Status baseado em validade original
     const sevenDaysFromNow = new Date(now);
     sevenDaysFromNow.setUTCDate(sevenDaysFromNow.getUTCDate() + 7);
-    const sevenDaysAgo = new Date(now);
-    sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
+    const sevenDaysAgo = kitchenWeekAgo();
 
-    if (status === 'valid')    where.originalExpiryDate = { gte: sevenDaysFromNow };
-    if (status === 'expiring') where.originalExpiryDate = { gte: now, lt: sevenDaysFromNow };
+    if (status === 'valid')    where.originalExpiryDate = { gt: sevenDaysFromNow };
+    if (status === 'expiring') where.originalExpiryDate = { gte: now, lte: sevenDaysFromNow };
     if (status === 'expired')  where.originalExpiryDate = { lt: now };
     if (status === 'recent')   where.createdAt          = { gte: sevenDaysAgo };
 
@@ -82,7 +81,7 @@ export const ProductService = {
       ...p,
       daysUntilExpiry:  daysUntil(p.originalExpiryDate),
       labelCount:       p._count.labels,
-      computedStatus:   computeStatus(p.originalExpiryDate),
+      computedStatus:   getProductStatus(p.originalExpiryDate),
     }));
 
     return {
@@ -114,7 +113,7 @@ export const ProductService = {
     return {
       ...product,
       daysUntilExpiry: daysUntil(product.originalExpiryDate),
-      computedStatus:  computeStatus(product.originalExpiryDate),
+      computedStatus:  getProductStatus(product.originalExpiryDate),
       labelCount:      product._count.labels,
     };
   },
@@ -147,13 +146,18 @@ export const ProductService = {
     unit: string;
     notes: string;
   }>) {
-    await ProductService.getById(id);
+    const current = await prisma.product.findUnique({ where: { id, active: true } });
+    if (!current) throw Errors.notFound('Produto');
+    if (
+      (data.daysValidRefrigerated ?? current.daysValidRefrigerated) <= 0 &&
+      (data.daysValidFrozen ?? current.daysValidFrozen) <= 0
+    ) throw Errors.validation('O produto precisa manter ao menos um tipo de validade pós-abertura.');
     return prisma.product.update({
       where: { id },
       data: {
         ...data,
         ...(data.originalExpiryDate && {
-          originalExpiryDate: new Date(data.originalExpiryDate + 'T00:00:00Z'),
+          originalExpiryDate: parseDateOnly(data.originalExpiryDate),
         }),
       },
     });
@@ -175,10 +179,3 @@ export const ProductService = {
     return rows.map((r) => r.category).filter(Boolean);
   },
 };
-
-function computeStatus(expiryDate: Date): 'valid' | 'expiring' | 'expired' {
-  const days = daysUntil(expiryDate);
-  if (days < 0)  return 'expired';
-  if (days <= 7) return 'expiring';
-  return 'valid';
-}

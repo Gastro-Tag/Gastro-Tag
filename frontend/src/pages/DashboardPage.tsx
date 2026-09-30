@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, Tag, AlertTriangle, CheckCircle, Clock, TrendingUp } from 'lucide-react';
+import { Package, Tag, AlertTriangle, CheckCircle, TrendingUp } from 'lucide-react';
 import { dashboardApi } from '@/services';
 import type { DashboardStats } from '@/types';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -14,6 +14,7 @@ export function DashboardPage() {
   useEffect(() => {
     dashboardApi.getStats()
       .then((r) => setStats(r.data.data))
+      .catch(() => setStats(null))
       .finally(() => setLoading(false));
   }, []);
 
@@ -31,7 +32,7 @@ export function DashboardPage() {
       </div>
 
       {/* ── Status Cards ──────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
         <StatCard
           label="Produtos cadastrados"
           value={products.total}
@@ -64,7 +65,7 @@ export function DashboardPage() {
 
       {/* ── Label Stats ───────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="card p-5">
+        <div className="card p-4 sm:p-5">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center">
               <Tag className="w-4 h-4 text-brand-700" />
@@ -81,7 +82,7 @@ export function DashboardPage() {
         </div>
 
         {/* Top Products */}
-        <div className="card p-5 col-span-1 lg:col-span-2">
+        <div className="card p-4 sm:p-5 col-span-1 lg:col-span-2">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center">
               <TrendingUp className="w-4 h-4 text-brand-700" />
@@ -93,9 +94,9 @@ export function DashboardPage() {
           ) : (
             <div className="space-y-2">
               {topProducts.map((p, i) => (
-                <div key={p.id}
-                  className="flex items-center gap-3 p-3 rounded-lg hover:bg-slate-50 cursor-pointer transition-colors"
-                  onClick={() => navigate(`/products/${p.id}`)}
+                <button key={p.id} type="button"
+                  className="flex w-full items-center gap-3 rounded-lg p-3 text-left transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+                  onClick={() => navigate(`/products/${p.id}/edit`)}
                 >
                   <span className="w-6 h-6 rounded-full bg-brand-100 text-brand-700
                                    text-xs font-bold flex items-center justify-center flex-shrink-0">
@@ -105,10 +106,10 @@ export function DashboardPage() {
                     <div className="text-sm font-medium text-slate-800 truncate">{p.name}</div>
                     <div className="text-xs text-slate-500">{p.brand}</div>
                   </div>
-                  <span className="text-sm font-semibold text-brand-700">
+                  <span className="shrink-0 text-sm font-semibold text-brand-700">
                     {p.labelCount} etiq.
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -152,10 +153,11 @@ function StatCard({ label, value, icon: Icon, color, onClick }: {
 }) {
   const c = colorMap[color];
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       className={cn(
-        'card p-5 cursor-pointer hover:shadow-card-lg transition-shadow border',
+        'card block w-full border p-4 text-left transition-shadow hover:shadow-card-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 sm:p-5',
         c.border,
       )}
     >
@@ -164,7 +166,7 @@ function StatCard({ label, value, icon: Icon, color, onClick }: {
       </div>
       <div className="text-3xl font-bold text-slate-900">{value}</div>
       <div className="text-xs text-slate-500 mt-1 font-medium">{label}</div>
-    </div>
+    </button>
   );
 }
 

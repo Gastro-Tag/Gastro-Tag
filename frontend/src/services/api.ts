@@ -1,69 +1,60 @@
-import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3333';
+﻿import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 
 export const api = axios.create({
-  baseURL: `${BASE_URL}/api`,
+  baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
   timeout: 10_000,
 });
 
-// ── Request: attach access token ──────────────────────
 api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = localStorage.getItem('accessToken');
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
-// ── Response: auto refresh on 401 ────────────────────
-let refreshing = false;
-let queue: Array<(token: string) => void> = [];
+let refreshPromise: Promise<string> | null = null;
 
 api.interceptors.response.use(
-  (res) => res,
+  (response) => response,
   async (error: AxiosError) => {
-    const original = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+    const url = original?.url ?? '';
+    const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/refresh');
 
-    if (error.response?.status === 401 && !original._retry) {
-      original._retry = true;
-
-      if (refreshing) {
-        return new Promise((resolve) => {
-          queue.push((token) => {
-            original.headers.Authorization = `Bearer ${token}`;
-            resolve(api(original));
-          });
-        });
-      }
-
-      refreshing = true;
-      const refreshToken = localStorage.getItem('refreshToken');
-
-      if (!refreshToken) {
-        refreshing = false;
-        logout();
-        return Promise.reject(error);
-      }
-
-      try {
-        const { data } = await axios.post(`${BASE_URL}/api/auth/refresh`, { refreshToken });
-        const newAccess  = data.data.accessToken;
-        const newRefresh = data.data.refreshToken;
-        localStorage.setItem('accessToken',  newAccess);
-        localStorage.setItem('refreshToken', newRefresh);
-        queue.forEach((fn) => fn(newAccess));
-        queue = [];
-        original.headers.Authorization = `Bearer ${newAccess}`;
-        return api(original);
-      } catch {
-        logout();
-        return Promise.reject(error);
-      } finally {
-        refreshing = false;
-      }
+    if (error.response?.status !== 401 || !original || original._retry || isAuthRequest) {
+      return Promise.reject(error);
     }
 
-    return Promise.reject(error);
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) {
+      logout();
+      return Promise.reject(error);
+    }
+
+    original._retry = true;
+    if (!refreshPromise) {
+      refreshPromise = axios.post('/api/auth/refresh', { refreshToken }, { timeout: 10_000 })
+        .then(({ data }) => {
+          const accessToken = data.data.accessToken as string;
+          const nextRefreshToken = data.data.refreshToken as string;
+          localStorage.setItem('accessToken', accessToken);
+          localStorage.setItem('refreshToken', nextRefreshToken);
+          return accessToken;
+        })
+        .catch((refreshError) => {
+          logout();
+          throw refreshError;
+        })
+        .finally(() => { refreshPromise = null; });
+    }
+
+    try {
+      const accessToken = await refreshPromise;
+      original.headers.Authorization = `Bearer ${accessToken}`;
+      return api(original);
+    } catch {
+      return Promise.reject(error);
+    }
   },
 );
 
@@ -73,7 +64,6 @@ function logout() {
   window.location.href = '/login';
 }
 
-// ── Generic helpers ───────────────────────────────────
 export function extractError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     return (err.response?.data as any)?.error?.message ?? err.message;

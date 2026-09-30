@@ -21,7 +21,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={{ toast }}>
       {children}
       {/* Portal */}
-      <div className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2 pointer-events-none">
+      <div className="pointer-events-none fixed inset-x-4 bottom-4 z-[9999] flex flex-col gap-2 sm:inset-x-auto sm:bottom-6 sm:right-6">
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onDismiss={dismiss} />
         ))}
@@ -51,7 +51,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
     <div
       className={cn(
         'pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-card-lg',
-        'text-sm font-medium min-w-[260px] max-w-sm animate-in slide-in-from-right-4',
+        'w-full min-w-0 max-w-sm break-words text-sm font-medium sm:min-w-[260px]',
         styles[toast.type],
       )}
     >

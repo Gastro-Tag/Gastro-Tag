@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../prisma/client';
-import { signAccessToken, signRefreshToken, verifyToken } from '../utils/jwt';
+import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { Errors } from '../utils/errors';
 
 export const AuthService = {
@@ -20,8 +20,7 @@ export const AuthService = {
   },
 
   async refresh(refreshToken: string) {
-    const payload = verifyToken(refreshToken);
-    if (payload.type !== 'refresh') throw Errors.unauthorized();
+    const payload = verifyRefreshToken(refreshToken);
 
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user || !user.active) throw Errors.unauthorized();

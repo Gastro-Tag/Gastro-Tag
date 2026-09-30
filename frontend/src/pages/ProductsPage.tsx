@@ -16,6 +16,7 @@ import { useDebounce }   from '@/hooks/useDebounce';
 import { formatBR, daysUntilLabel } from '@/utils/date';
 import { cn } from '@/utils/cn';
 import { extractError } from '@/services/api';
+import { useAuthStore } from '@/store/authStore';
 
 // ── Filter tab config ────────────────────────────────────
 const statusTabs: { value: ProductStatus; label: string; icon: string }[] = [
@@ -121,13 +122,13 @@ export function ProductsPage() {
       </div>
 
       {/* ── Status Tabs ─────────────────────────────── */}
-      <div className="flex gap-1 p-1 bg-slate-100 rounded-lg w-full overflow-x-auto">
+      <div className="flex w-full gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1">
         {statusTabs.map((tab) => (
           <button
             key={tab.value}
             onClick={() => changeFilter(setStatus)(tab.value)}
             className={cn(
-              'flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium whitespace-nowrap transition-all flex-1 justify-center',
+              'flex flex-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-all sm:flex-1 sm:px-3',
               status === tab.value
                 ? 'bg-white text-slate-900 shadow-sm'
                 : 'text-slate-500 hover:text-slate-700',
@@ -141,8 +142,8 @@ export function ProductsPage() {
 
       {/* ── Search + Filters ────────────────────────── */}
       <div className="space-y-3">
-        <div className="flex gap-2">
-          <div className="relative flex-1">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="search"
@@ -152,22 +153,25 @@ export function ProductsPage() {
               className="input pl-9"
             />
           </div>
-          <button
-            onClick={() => setFiltersOpen(!filtersOpen)}
-            className={cn('btn-outline btn gap-2', filtersOpen && 'border-brand-600 text-brand-700 bg-brand-50')}
-          >
-            <Filter className="w-4 h-4" />
-            Filtros
-            <ChevronDown className={cn('w-3 h-3 transition-transform', filtersOpen && 'rotate-180')} />
-          </button>
-          <button onClick={fetchProducts} className="btn-ghost btn">
-            <RefreshCw className="w-4 h-4" />
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setFiltersOpen(!filtersOpen)}
+              className={cn('btn-outline btn flex-1 gap-2 sm:flex-none', filtersOpen && 'border-brand-600 bg-brand-50 text-brand-700')}
+              aria-expanded={filtersOpen}
+            >
+              <Filter className="h-4 w-4" />
+              Filtros
+              <ChevronDown className={cn('h-3 w-3 transition-transform', filtersOpen && 'rotate-180')} />
+            </button>
+            <button onClick={fetchProducts} className="btn-ghost btn" aria-label="Atualizar produtos" title="Atualizar produtos">
+              <RefreshCw className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Advanced filters panel */}
         {filtersOpen && (
-          <div className="card p-4 grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="card grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label className="block text-xs font-medium text-slate-600 mb-1.5">Armazenamento</label>
               <select value={storage} onChange={(e) => changeFilter(setStorage)(e.target.value)} className="input text-sm">
@@ -255,6 +259,7 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
   onEdit:   () => void;
   onDelete: () => void;
 }) {
+  const canDelete = useAuthStore((state) => state.user?.role === 'ADMIN');
   const borderColor =
     p.computedStatus === 'expired'  ? 'border-l-red-500' :
     p.computedStatus === 'expiring' ? 'border-l-amber-500' :
@@ -266,18 +271,18 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
   ].filter(Boolean).join('  ·  ');
 
   return (
-    <div className={cn('card border-l-4 p-4 flex gap-4 items-start hover:shadow-card-lg transition-shadow', borderColor)}>
+    <div className={cn('card grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-3 border-l-4 p-3 transition-shadow hover:shadow-card-lg sm:flex sm:gap-4 sm:p-4', borderColor)}>
       {/* Icon */}
-      <div className="w-10 h-10 rounded-lg bg-brand-50 flex items-center justify-center flex-shrink-0">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50">
         <Package className="w-5 h-5 text-brand-700" />
       </div>
 
       {/* Info */}
-      <div className="flex-1 min-w-0">
+      <div className="col-start-2 row-start-1 min-w-0 sm:flex-1">
         <div className="flex items-start justify-between gap-2 flex-wrap">
           <div>
-            <div className="font-semibold text-slate-900 text-sm">{p.name}</div>
-            <div className="text-xs text-slate-500 mt-0.5">{p.brand}{p.category ? ` · ${p.category}` : ''}{p.unit ? ` · ${p.unit}` : ''}</div>
+            <div className="break-words text-sm font-semibold text-slate-900">{p.name}</div>
+            <div className="mt-0.5 break-words text-xs text-slate-500">{p.brand}{p.category ? ` · ${p.category}` : ''}{p.unit ? ` · ${p.unit}` : ''}</div>
           </div>
           <StatusBadge
             status={p.computedStatus}
@@ -285,22 +290,22 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
           />
         </div>
 
-        <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2.5 text-xs text-slate-500">
+        <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
           <span>📅 Val. original: <strong className="text-slate-700">{formatBR(p.originalExpiryDate)}</strong></span>
-          <span>{storageInfo}</span>
+          {storageInfo && <span>{storageInfo}</span>}
           <span>🏷 {p.labelCount} etiqueta{p.labelCount !== 1 ? 's' : ''}</span>
         </div>
       </div>
 
       {/* Actions */}
-      <div className="flex gap-2 flex-shrink-0">
-        <button className="btn-primary btn btn-sm" onClick={onLabel}>
+      <div className={cn('col-span-2 grid w-full gap-2 sm:flex sm:w-auto sm:shrink-0', canDelete ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]' : 'grid-cols-2')}>
+        <button className="btn-primary btn btn-sm w-full whitespace-nowrap px-2 sm:w-auto sm:px-3" onClick={onLabel}>
           <Tag className="w-3.5 h-3.5" /> Etiqueta
         </button>
-        <button className="btn-outline btn btn-sm" onClick={onEdit}>Editar</button>
-        <button className="btn-ghost btn btn-sm text-red-500 hover:bg-red-50 hover:text-red-600" onClick={onDelete}>
+        <button className="btn-outline btn btn-sm w-full whitespace-nowrap px-2 sm:w-auto sm:px-3" onClick={onEdit}>Editar</button>
+        {canDelete && <button className="btn-ghost btn btn-sm text-red-500 hover:bg-red-50 hover:text-red-600" onClick={onDelete} aria-label={`Excluir ${p.name}`}>
           <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        </button>}
       </div>
     </div>
   );

@@ -87,6 +87,14 @@ export interface Label {
   discardAt:   string;
   storageType: StorageType;
   storageTemp: string;
+  ruleId?: string | null;
+  shelfLifeDays?: number;
+  originalExpiryDate?: string;
+  cappedByOriginalExpiry?: boolean;
+  productName?: string;
+  productBrand?: string;
+  responsibleName?: string | null;
+  rule?: { id: string; shelfLifeDays: number; source: string; observation?: string | null } | null;
   printedAt?:  string;
   printCount:  number;
   createdAt:   string;
@@ -94,9 +102,20 @@ export interface Label {
   user?:       { name: string };
 }
 
+export interface LabelPreview {
+  product: Pick<Product, 'id' | 'name' | 'brand'>;
+  storageType: StorageType;
+  openedAt: string;
+  discardAt: string;
+  rule: { id: string | null; shelfLifeDays: number; source: string; observation?: string | null };
+  originalExpiryDate: string;
+  cappedByOriginalExpiry: boolean;
+}
+
 export interface CreateLabelDTO {
   productId:   string;
   lot:         string;
+  responsibleName: string;
   openedAt:    string;
   storageType: StorageType;
   storageTemp: string;

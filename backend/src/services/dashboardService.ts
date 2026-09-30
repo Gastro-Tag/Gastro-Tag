@@ -1,15 +1,15 @@
 import { prisma } from '../prisma/client';
+import { kitchenDayStartInstant, kitchenToday, kitchenWeekAgo } from '../utils/dateUtils';
 
 export const DashboardService = {
   async getStats() {
-    const now = new Date();
-    now.setUTCHours(0, 0, 0, 0);
+    const now = kitchenToday();
+    const todayStart = kitchenDayStartInstant(now);
 
     const in7Days = new Date(now);
     in7Days.setUTCDate(in7Days.getUTCDate() + 7);
 
-    const sevenDaysAgo = new Date(now);
-    sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 7);
+    const sevenDaysAgo = kitchenWeekAgo();
 
     const [
       totalProducts,
@@ -30,11 +30,11 @@ export const DashboardService = {
       }),
 
       prisma.product.count({
-        where: { active: true, originalExpiryDate: { gte: now, lt: in7Days } },
+        where: { active: true, originalExpiryDate: { gte: now, lte: in7Days } },
       }),
 
       prisma.product.count({
-        where: { active: true, originalExpiryDate: { gte: in7Days } },
+        where: { active: true, originalExpiryDate: { gt: in7Days } },
       }),
 
       prisma.product.count({
@@ -44,7 +44,7 @@ export const DashboardService = {
       prisma.label.count(),
 
       prisma.label.count({
-        where: { createdAt: { gte: now } },
+        where: { createdAt: { gte: todayStart } },
       }),
 
       prisma.label.count({

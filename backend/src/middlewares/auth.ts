@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyToken, TokenPayload } from '../utils/jwt';
+import { prisma } from '../prisma/client';
+import { verifyAccessToken, TokenPayload } from '../utils/jwt';
 import { Errors } from '../utils/errors';
 
 declare global {
@@ -10,12 +11,18 @@ declare global {
   }
 }
 
-export function authenticate(req: Request, _res: Response, next: NextFunction): void {
+export async function authenticate(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer ')) throw Errors.unauthorized();
 
-  const token = auth.slice(7);
-  req.user = verifyToken(token);
+  const payload = verifyAccessToken(auth.slice(7));
+  const user = await prisma.user.findUnique({
+    where: { id: payload.sub },
+    select: { id: true, name: true, role: true, active: true },
+  });
+  if (!user?.active) throw Errors.unauthorized();
+
+  req.user = { sub: user.id, name: user.name, role: user.role, type: 'access' };
   next();
 }
 

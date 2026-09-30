@@ -3,15 +3,15 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 
 import { ProductService, ProductFilters } from '../services/productService';
+import { parseDateOnly } from '../domain/shelfLife';
 
 const productFields = z.object({
   name: z.string().min(2).max(120),
   brand: z.string().min(1).max(120),
   category: z.string().max(60).optional(),
-  originalExpiryDate: z.string().regex(
-    /^\d{4}-\d{2}-\d{2}$/,
-    'Use o formato YYYY-MM-DD.',
-  ),
+  originalExpiryDate: z.string().refine((value) => {
+    try { parseDateOnly(value); return true; } catch { return false; }
+  }, 'Informe uma data real no formato YYYY-MM-DD.'),
   daysValidRefrigerated: z.number().int().min(0).max(365),
   daysValidFrozen: z.number().int().min(0).max(1095),
   unit: z.string().max(20).optional(),

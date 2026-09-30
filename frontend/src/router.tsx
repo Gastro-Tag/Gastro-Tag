@@ -1,4 +1,4 @@
-import { createBrowserRouter } from 'react-router-dom';
+import { createBrowserRouter, Link } from 'react-router-dom';
 import { ProtectedRoute }   from '@/components/layout/ProtectedRoute';
 import { LoginPage }        from '@/pages/LoginPage';
 import { DashboardPage }    from '@/pages/DashboardPage';
@@ -25,6 +25,12 @@ export const router = createBrowserRouter([
   },
   {
     path: '*',
-    element: <LoginPage />,
+    element: (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3 px-4 text-center">
+        <h1 className="text-3xl font-bold">Página não encontrada</h1>
+        <p className="text-slate-500">Confira o endereço ou volte ao início.</p>
+        <Link className="btn-primary btn" to="/">Voltar ao início</Link>
+      </main>
+    ),
   },
 ]);

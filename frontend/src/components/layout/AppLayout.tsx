@@ -24,7 +24,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-[100dvh] min-h-[100svh] overflow-hidden bg-slate-50">
 
       {/* ── Sidebar ─────────────────────────────────── */}
       <aside className={cn(
@@ -43,8 +43,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <div className="text-[10px] text-slate-400 mt-0.5">Rotulagem de Alimentos</div>
           </div>
           <button
-            className="ml-auto lg:hidden text-slate-400 hover:text-white"
+            className="ml-auto flex h-10 w-10 items-center justify-center text-slate-400 hover:text-white lg:hidden"
             onClick={() => setMobileOpen(false)}
+            aria-label="Fechar menu"
           >
             <X className="w-5 h-5" />
           </button>
@@ -107,8 +108,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
         {/* Top bar (mobile) */}
         <header className="flex items-center gap-3 px-4 h-14 bg-white border-b border-slate-200 lg:hidden">
           <button
-            className="text-slate-500 hover:text-slate-800"
+            className="flex h-10 w-10 shrink-0 items-center justify-center text-slate-500 hover:text-slate-800"
             onClick={() => setMobileOpen(true)}
+            aria-label="Abrir menu"
           >
             <Menu className="w-5 h-5" />
           </button>

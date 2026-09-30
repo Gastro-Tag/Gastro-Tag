@@ -2,8 +2,6 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-
 @layer base {
   *, *::before, *::after { box-sizing: border-box; }
 
@@ -84,15 +82,39 @@
 }
 
 /* ── Print ─────────────────────────────────────────── */
-@media print {
-  body > *:not(#print-root) { display: none !important; }
-  #print-root { display: block !important; }
+#print-root { display: none; }
 
+@media print {
+  @page { margin: 12mm; }
+  #root { display: none !important; }
+  #print-root { display: block !important; }
   .print-label {
-    width: 9cm;
-    margin: 1.5cm auto;
-    border: 1.5pt solid #000;
-    font-family: Arial, sans-serif;
-    page-break-inside: avoid;
+    width: 9cm; margin: 0 auto; border: 1pt solid #000;
+    font-family: Arial, sans-serif; page-break-inside: avoid; color: #111; background: #fff;
   }
+  .print-header {
+    background: #1a2332 !important; color: #fff !important; padding: 8px 12px;
+    display: flex; justify-content: space-between; gap: 8px; font-size: 9pt;
+    font-weight: 700; text-transform: uppercase; print-color-adjust: exact; -webkit-print-color-adjust: exact;
+  }
+  .print-code { font: 8pt monospace; text-transform: none; }
+  .print-content { padding: 10px 12px; }
+  .print-logo { text-align: center; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid #ccc; }
+  .print-logo img { max-height: 34px; max-width: 100%; object-fit: contain; }
+  .print-content h1 { margin: 0 0 2px; font-size: 15pt; font-weight: 700; }
+  .print-brand { margin: 0 0 10px; color: #555; font-size: 9pt; }
+  .print-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 10px; }
+  .print-grid dt { color: #777; font-size: 7pt; font-weight: 700; text-transform: uppercase; }
+  .print-grid dd { margin: 2px 0 0; font-size: 10pt; font-weight: 600; }
+  .print-discard {
+    background: #dc2626 !important; color: white !important; padding: 8px 10px;
+    display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
+    font-weight: 700; text-transform: uppercase; print-color-adjust: exact; -webkit-print-color-adjust: exact;
+  }
+  .print-discard strong { font-size: 14pt; }
+  .print-rule, .print-cap { margin: 4px 0; font-size: 7pt; color: #555; }
+  .print-cap { color: #9a3412; font-weight: 700; }
+  .print-signature { border-top: 1px solid #ccc; padding-top: 7px; margin-top: 9px; font-size: 8pt; color: #555; }
+  .print-signature div { height: 18px; border-bottom: 1px solid #111; margin: 7px 0 3px; }
+  .print-signature small { display: block; text-align: center; color: #777; font-size: 7pt; }
 }

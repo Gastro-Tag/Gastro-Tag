@@ -11,6 +11,18 @@ export function formatBR(iso: string): string {
   return d.toLocaleDateString('pt-BR');
 }
 
+/** Format a timestamp consistently with the application's Manaus timezone. */
+export function formatDateTimeBR(iso?: string | null): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('pt-BR', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+    timeZone: 'America/Manaus',
+  }).format(date);
+}
+
 /** Today as YYYY-MM-DD (local time, no timezone shift) */
 export function todayISO(): string {
   const now = new Date();

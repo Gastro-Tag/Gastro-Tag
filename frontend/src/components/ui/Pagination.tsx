@@ -10,8 +10,16 @@ interface PaginationProps {
 export function Pagination({ page, totalPages, onPage }: PaginationProps) {
   if (totalPages <= 1) return null;
 
+  const pages: Array<number | 'left-gap' | 'right-gap'> = totalPages <= 7
+    ? Array.from({ length: totalPages }, (_, index) => index + 1)
+    : page <= 4
+      ? [1, 2, 3, 4, 5, 'right-gap', totalPages]
+      : page >= totalPages - 3
+        ? [1, 'left-gap', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+        : [1, 'left-gap', page - 1, page, page + 1, 'right-gap', totalPages];
+
   return (
-    <div className="flex items-center justify-center gap-1 mt-6">
+    <div className="mt-6 flex items-center justify-center gap-1">
       <button
         className="btn-ghost btn btn-sm"
         disabled={page <= 1}
@@ -20,23 +28,24 @@ export function Pagination({ page, totalPages, onPage }: PaginationProps) {
         <ChevronLeft className="w-4 h-4" />
       </button>
 
-      {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-        const p = i + 1;
-        return (
+      <span className="px-2 text-sm font-medium text-slate-600 sm:hidden" aria-live="polite">
+        {page} / {totalPages}
+      </span>
+
+      {pages.map((entry) => typeof entry === 'number' ? (
           <button
-            key={p}
-            onClick={() => onPage(p)}
+            key={entry}
+            onClick={() => onPage(entry)}
             className={cn(
-              'btn btn-sm w-9 h-9',
-              p === page
-                ? 'bg-brand-700 text-white font-semibold'
+              'btn btn-sm hidden h-9 w-9 sm:inline-flex',
+              entry === page
+                ? '!inline-flex bg-brand-700 font-semibold text-white'
                 : 'btn-ghost',
             )}
           >
-            {p}
+            {entry}
           </button>
-        );
-      })}
+        ) : <span key={entry} className="hidden px-1 text-slate-400 sm:inline" aria-hidden="true">…</span>)}
 
       <button
         className="btn-ghost btn btn-sm"

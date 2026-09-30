@@ -5,8 +5,8 @@ import { useAuthStore } from '@/store/authStore';
 import { Spinner } from '@/components/ui/Spinner';
 
 export function LoginPage() {
-  const [email, setEmail]       = useState('admin@gastrotag.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail]       = useState('');
+  const [password, setPassword] = useState('');
   const { login, isLoading, error, clearError } = useAuthStore();
   const navigate = useNavigate();
 

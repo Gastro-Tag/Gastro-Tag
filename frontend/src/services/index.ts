@@ -2,7 +2,7 @@ import { api } from './api';
 import type {
   ApiResponse, PaginatedResponse, AuthTokens, User,
   Product, CreateProductDTO, ProductFilters,
-  Label, CreateLabelDTO,
+  Label, CreateLabelDTO, LabelPreview,
   DashboardStats,
 } from '@/types';
 
@@ -41,8 +41,14 @@ export const productApi = {
 
 // ── Labels ──────────────────────────────────────────────
 export const labelApi = {
-  list: (params?: { productId?: string; page?: number; limit?: number }) =>
+  list: (params?: {
+    productId?: string; userId?: string; page?: number; limit?: number;
+    q?: string; from?: string; to?: string; storageType?: string;
+  }) =>
     api.get<PaginatedResponse<Label>>('/labels', { params }),
+
+  preview: (data: Omit<CreateLabelDTO, 'lot' | 'responsibleName'>) =>
+    api.post<ApiResponse<LabelPreview>>('/labels/preview', data),
 
   getById: (id: string) =>
     api.get<ApiResponse<Label>>(`/labels/${id}`),

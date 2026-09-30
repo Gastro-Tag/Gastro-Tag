@@ -21,11 +21,47 @@ export function calcDiscardDate(openedAt: Date, days: number): Date {
 
 /** Retorna número de dias até a data (negativo = vencido) */
 export function daysUntil(date: Date): number {
-  const now = new Date();
-  now.setUTCHours(0, 0, 0, 0);
+  const now = kitchenToday();
   const d = new Date(date);
   d.setUTCHours(0, 0, 0, 0);
   return Math.round((d.getTime() - now.getTime()) / 86_400_000);
+}
+
+export function kitchenToday(): Date {
+  const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
+  return new Date(Date.UTC(part('year'), part('month') - 1, part('day')));
+}
+
+export function kitchenDayStartInstant(date = kitchenToday()): Date {
+  const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+  const guess = new Date(date);
+  guess.setUTCHours(0, 0, 0, 0);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(guess);
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
+  const displayedAsUtc = Date.UTC(
+    part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second'),
+  );
+  return new Date(guess.getTime() + guess.getTime() - displayedAsUtc);
+}
+
+export function getProductStatus(date: Date): 'valid' | 'expiring' | 'expired' {
+  const days = daysUntil(date);
+  if (days < 0) return 'expired';
+  if (days <= 7) return 'expiring';
+  return 'valid';
+}
+
+export function kitchenWeekAgo(): Date {
+  const today = kitchenToday();
+  today.setUTCDate(today.getUTCDate() - 7);
+  return kitchenDayStartInstant(today);
 }
 
 /** Gera short code único de 8 chars para etiqueta */

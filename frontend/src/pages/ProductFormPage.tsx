@@ -106,7 +106,7 @@ export function ProductFormPage() {
       <form onSubmit={handleSubmit} className="space-y-6">
 
         {/* Basic Info */}
-        <div className="card p-6 space-y-4">
+        <div className="card space-y-4 p-4 sm:p-6">
           <p className="section-label">Informações básicas</p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -137,7 +137,7 @@ export function ProductFormPage() {
         </div>
 
         {/* Storage */}
-        <div className="card p-6 space-y-4">
+        <div className="card space-y-4 p-4 sm:p-6">
           <p className="section-label">Validade pós-abertura</p>
 
           <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800 flex gap-2">
@@ -164,7 +164,7 @@ export function ProductFormPage() {
         </div>
 
         {/* Notes */}
-        <div className="card p-6">
+        <div className="card p-4 sm:p-6">
           <p className="section-label">Observações</p>
           <textarea
             value={form.notes}
@@ -176,12 +176,12 @@ export function ProductFormPage() {
         </div>
 
         {/* Actions */}
-        <div className="flex gap-3">
-          <button type="submit" disabled={submitting} className="btn-primary btn btn-lg">
+        <div className="flex flex-col gap-2 sm:flex-row sm:gap-3">
+          <button type="submit" disabled={submitting} className="btn-primary btn btn-lg w-full sm:w-auto">
             {submitting ? <Spinner size="sm" className="text-white" /> : <Save className="w-4 h-4" />}
             {isEdit ? 'Salvar alterações' : 'Cadastrar Produto'}
           </button>
-          <button type="button" className="btn-outline btn btn-lg" onClick={() => navigate(-1)}>
+          <button type="button" className="btn-outline btn btn-lg w-full sm:w-auto" onClick={() => navigate(-1)}>
             Cancelar
           </button>
         </div>

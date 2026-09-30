@@ -45,6 +45,7 @@ model Product {
   updatedAt               DateTime @updatedAt @map("updated_at")
 
   labels Label[]
+  shelfLifeRules ShelfLifeRule[]
 
   @@index([name])
   @@index([brand])
@@ -64,20 +65,50 @@ model Label {
   discardAt        DateTime        @map("discard_at") @db.Date
   storageType      StorageType     @map("storage_type")
   storageTemp      String          @map("storage_temp")
+  ruleId           String?         @map("rule_id")
+  shelfLifeDays    Int             @map("shelf_life_days")
+  originalExpiryDate DateTime      @map("original_expiry_date") @db.Date
+  cappedByOriginalExpiry Boolean   @default(false) @map("capped_by_original_expiry")
+  productName      String          @map("product_name")
+  productBrand     String          @map("product_brand")
+  responsibleName  String?         @map("responsible_name")
   printedAt        DateTime?       @map("printed_at")
   printCount       Int             @default(0) @map("print_count")
   createdAt        DateTime        @default(now()) @map("created_at")
 
   product Product @relation(fields: [productId], references: [id])
   user    User    @relation(fields: [userId], references: [id])
+  rule    ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
 
   @@index([productId])
   @@index([userId])
   @@index([discardAt])
   @@index([createdAt])
+  @@index([ruleId])
   @@map("labels")
 }
 
+model ShelfLifeRule {
+  id             String      @id @default(uuid())
+  productId      String?     @map("product_id")
+  category       String?
+  storageType    StorageType @map("storage_type")
+  shelfLifeDays  Int         @map("shelf_life_days")
+  minTemperature Decimal?    @map("min_temperature") @db.Decimal(5, 2)
+  maxTemperature Decimal?    @map("max_temperature") @db.Decimal(5, 2)
+  source         String
+  observation    String?
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  product Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
+  labels  Label[]
+
+  @@index([productId, storageType, active])
+  @@index([category, storageType, active])
+  @@map("shelf_life_rules")
+}
 enum StorageType {
   REFRIGERADO
   CONGELADO
