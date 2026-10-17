@@ -6,78 +6,81 @@
   *, *::before, *::after { box-sizing: border-box; }
 
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
-    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    @apply bg-[#F8F9FA] text-slate-800 antialiased;
+    font-family: 'Plus Jakarta Sans', 'Inter', 'Segoe UI', system-ui, sans-serif;
   }
 
   :focus-visible {
-    @apply outline-none ring-2 ring-brand-600 ring-offset-2;
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2;
   }
 }
 
 @layer components {
   /* ── Card ── */
   .card {
-    @apply bg-white rounded-lg border border-slate-200 shadow-card;
+    @apply bg-white rounded-2xl border border-slate-200/80 shadow-card transition-all duration-200;
   }
 
   /* ── Input ── */
   .input {
-    @apply w-full px-3 py-2.5 text-sm border border-slate-300 rounded-md
-           focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20
-           outline-none transition-all placeholder:text-slate-400 bg-white;
+    @apply w-full px-3.5 py-2.5 text-sm border border-slate-200 rounded-xl
+           focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20
+           outline-none transition-all placeholder:text-slate-400 bg-white text-slate-800;
   }
 
   /* ── Btn variants ── */
   .btn {
     @apply inline-flex items-center justify-center gap-2 px-4 py-2.5
-           rounded-md text-sm font-medium transition-all duration-150
+           rounded-xl text-sm font-semibold transition-all duration-150
            disabled:opacity-50 disabled:cursor-not-allowed focus-visible:ring-2
-           focus-visible:ring-brand-600 focus-visible:ring-offset-2;
+           focus-visible:ring-brand-500 focus-visible:ring-offset-2;
   }
   .btn-primary {
-    @apply btn bg-brand-700 text-white hover:bg-brand-800 shadow-sm;
+    @apply btn bg-charcoal-800 text-white hover:bg-charcoal-900 active:scale-[0.99] shadow-sm;
+  }
+  .btn-accent {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 active:scale-[0.99] shadow-sm;
   }
   .btn-outline {
-    @apply btn border border-slate-300 text-slate-700
-           hover:border-brand-600 hover:text-brand-700 hover:bg-brand-50;
+    @apply btn border border-slate-200 bg-white text-slate-700
+           hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900;
   }
   .btn-ghost {
-    @apply btn text-slate-500 hover:bg-slate-100 hover:text-slate-700;
+    @apply btn text-slate-600 hover:bg-slate-100 hover:text-slate-900;
   }
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700;
+    @apply btn bg-rose-600 text-white hover:bg-rose-700 shadow-sm active:scale-[0.99];
   }
   .btn-sm {
-    @apply px-3 py-1.5 text-xs;
+    @apply px-3 py-1.5 text-xs rounded-lg;
   }
   .btn-lg {
-    @apply px-6 py-3 text-base;
+    @apply px-6 py-3 text-base rounded-xl;
   }
 
-  /* ── Badge ── */
+  /* ── Badge (Pill style matching references) ── */
   .badge {
-    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full
-           text-xs font-semibold uppercase tracking-wide;
+    @apply inline-flex items-center gap-1.5 px-3 py-1 rounded-full
+           text-xs font-semibold tracking-wide border;
   }
-  .badge-valid    { @apply bg-emerald-100 text-emerald-800; }
-  .badge-expiring { @apply bg-amber-100 text-amber-800; }
-  .badge-expired  { @apply bg-red-100 text-red-800; }
-  .badge-recent   { @apply bg-blue-100 text-blue-800; }
-  .badge-neutral  { @apply bg-slate-100 text-slate-600; }
+  .badge-valid    { @apply bg-emerald-50 text-emerald-700 border-emerald-200/80; }
+  .badge-expiring { @apply bg-amber-50 text-amber-700 border-amber-200/80; }
+  .badge-expired  { @apply bg-rose-50 text-rose-700 border-rose-200/80; }
+  .badge-recent   { @apply bg-sky-50 text-sky-700 border-sky-200/80; }
+  .badge-neutral  { @apply bg-slate-100 text-slate-600 border-slate-200/80; }
 
   /* ── Page title ── */
   .page-title {
-    @apply text-2xl font-bold text-slate-900 tracking-tight;
+    @apply text-2xl lg:text-3xl font-extrabold text-charcoal-800 tracking-tight;
   }
   .page-subtitle {
-    @apply text-sm text-slate-500 mt-0.5;
+    @apply text-sm text-slate-500 mt-1;
   }
 
   /* ── Section label ── */
   .section-label {
-    @apply text-xs font-bold uppercase tracking-widest text-slate-400
-           pb-2.5 border-b border-slate-200 mb-4;
+    @apply text-xs font-bold uppercase tracking-wider text-slate-400
+           pb-2.5 border-b border-slate-100 mb-4;
   }
 }
 
@@ -93,7 +96,7 @@
     font-family: Arial, sans-serif; page-break-inside: avoid; color: #111; background: #fff;
   }
   .print-header {
-    background: #1a2332 !important; color: #fff !important; padding: 8px 12px;
+    background: #1e232a !important; color: #fff !important; padding: 8px 12px;
     display: flex; justify-content: space-between; gap: 8px; font-size: 9pt;
     font-weight: 700; text-transform: uppercase; print-color-adjust: exact; -webkit-print-color-adjust: exact;
   }
@@ -107,7 +110,7 @@
   .print-grid dt { color: #777; font-size: 7pt; font-weight: 700; text-transform: uppercase; }
   .print-grid dd { margin: 2px 0 0; font-size: 10pt; font-weight: 600; }
   .print-discard {
-    background: #dc2626 !important; color: white !important; padding: 8px 10px;
+    background: #ea580c !important; color: white !important; padding: 8px 10px;
     display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;
     font-weight: 700; text-transform: uppercase; print-color-adjust: exact; -webkit-print-color-adjust: exact;
   }

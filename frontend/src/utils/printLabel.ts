@@ -1,4 +1,4 @@
-﻿import type { Label } from '@/types';
+import type { Label } from '@/types';
 import { formatBR } from './date';
 
 export function esc(value: unknown): string {
@@ -8,8 +8,10 @@ export function esc(value: unknown): string {
 }
 
 function safeLogoSource(value: string | null): string {
-  if (!value || !/^data:image\/(?:png|jpeg|webp);base64,[a-z\d+/=]+$/i.test(value)) return '';
-  return value;
+  if (!value) return '/logo.png';
+  if (value === '/logo.png') return '/logo.png';
+  if (/^data:image\/(?:png|jpeg|webp);base64,[a-z\d+/=]+$/i.test(value)) return value;
+  return '/logo.png';
 }
 
 export function printLabel(label: Label, logoUrl: string | null): void {
@@ -21,13 +23,13 @@ export function printLabel(label: Label, logoUrl: string | null): void {
   const source = label.rule?.source ?? `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
   const logo = safeLogoSource(logoUrl);
   const logoHtml = logo
-    ? `<div class="print-logo"><img src="${esc(logo)}" alt="Logo" /></div>`
+    ? `<div class="print-logo"><img src="${esc(logo)}" alt="GastroTag" /></div>`
     : '';
 
   root.innerHTML = `
     <article class="print-label">
       <header class="print-header">
-        <span>Etiqueta de identificação de alimento</span>
+        <span>Etiqueta de Identificação Sanitária</span>
         <span class="print-code">Cód: ${esc(label.shortCode)}</span>
       </header>
       <section class="print-content">
@@ -47,10 +49,9 @@ export function printLabel(label: Label, logoUrl: string | null): void {
         <p class="print-rule">Prazo aplicado: ${esc(label.shelfLifeDays ?? '—')} dias. Fonte: ${esc(source)}.</p>
         ${label.cappedByOriginalExpiry ? '<p class="print-cap">Data limitada pela validade original do fabricante.</p>' : ''}
         <div class="print-signature">
-          <span>Responsável pela manipulação</span>
-          <strong>${esc(label.responsibleName || '—')}</strong>
+          <span>Responsável pela manipulação: <strong>${esc(label.responsibleName || '—')}</strong></span>
           <div></div>
-          <small>Assinatura do responsável</small>
+          <small>Assinatura do Manipulador</small>
         </div>
       </section>
     </article>`;

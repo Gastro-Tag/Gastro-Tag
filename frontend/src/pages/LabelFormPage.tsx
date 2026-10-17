@@ -1,6 +1,9 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ChevronLeft, Printer, Tag, Upload, X } from 'lucide-react';
+import {
+  AlertTriangle, ArrowLeft, Printer, Tag, Upload, X,
+  Refrigerator, Snowflake, CheckCircle2, User, Hash, Calendar, Thermometer
+} from 'lucide-react';
 import { productApi, labelApi } from '@/services';
 import type { LabelPreview, Product, StorageType } from '@/types';
 import { useToastContext } from '@/components/ui/Toast';
@@ -35,10 +38,15 @@ export function LabelFormPage() {
         if (!active) return;
         const nextProduct = data.data;
         setProduct(nextProduct);
-        if (nextProduct.daysValidRefrigerated > 0) setForm((value) => ({ ...value, storageType: 'REFRIGERADO' }));
-        else if (nextProduct.daysValidFrozen > 0) setForm((value) => ({ ...value, storageType: 'CONGELADO' }));
+        if (nextProduct.daysValidRefrigerated > 0) {
+          setForm((value) => ({ ...value, storageType: 'REFRIGERADO', storageTemp: '4 °C' }));
+        } else if (nextProduct.daysValidFrozen > 0) {
+          setForm((value) => ({ ...value, storageType: 'CONGELADO', storageTemp: '-18 °C' }));
+        }
       })
-      .catch(() => { if (active) { toast('Produto não encontrado.', 'error'); navigate('/products', { replace: true }); } })
+      .catch(() => {
+        if (active) { toast('Produto não encontrado.', 'error'); navigate('/products', { replace: true }); }
+      })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [productId, navigate, toast]);
@@ -72,7 +80,7 @@ export function LabelFormPage() {
       } finally {
         if (active) setPreviewLoading(false);
       }
-    }, 350);
+    }, 300);
     return () => { active = false; window.clearTimeout(timer); };
   }, [product, productId, form.openedAt, form.storageType, form.storageTemp, previewReady, requestKey]);
 
@@ -87,21 +95,25 @@ export function LabelFormPage() {
     let createdLabel: import('@/types').Label | null = null;
     try {
       const { data } = await labelApi.create({
-        productId, lot: form.lot.trim(), responsibleName: form.responsibleName.trim(), openedAt: form.openedAt,
-        storageType: form.storageType, storageTemp: form.storageTemp.trim(),
+        productId,
+        lot: form.lot.trim(),
+        responsibleName: form.responsibleName.trim(),
+        openedAt: form.openedAt,
+        storageType: form.storageType,
+        storageTemp: form.storageTemp.trim(),
       });
       createdLabel = data.data;
       printLabel(createdLabel, logoUrl);
       try {
         await labelApi.registerPrint(createdLabel.id);
-        toast('Etiqueta gerada e impressão registrada.', 'success');
+        toast('Etiqueta gerada e impressão enviada!', 'success');
       } catch {
-        toast('Etiqueta gerada. Não foi possível registrar a impressão.', 'warning');
+        toast('Etiqueta gerada. Falha ao atualizar contador de impressão.', 'warning');
       }
       navigate('/labels');
     } catch (error) {
       toast(createdLabel
-        ? 'Etiqueta criada, mas ocorreu um erro na impressão. Ela está no histórico para reimprimir.'
+        ? 'Etiqueta criada, mas ocorreu um erro na impressão. Ela está salva no histórico.'
         : extractError(error), 'error');
       if (createdLabel) navigate('/labels');
     } finally {
@@ -113,15 +125,15 @@ export function LabelFormPage() {
     const file = event.target.files?.[0];
     if (!file) return;
     if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-      toast('Use uma imagem PNG, JPG ou WebP.', 'error'); return;
+      toast('Envie um arquivo PNG, JPG ou WebP.', 'error'); return;
     }
-    if (file.size > 2 * 1024 * 1024) { toast('Logo muito grande. Máximo 2 MB.', 'error'); return; }
+    if (file.size > 2 * 1024 * 1024) { toast('Tamanho máximo permitido: 2 MB.', 'error'); return; }
     const reader = new FileReader();
     reader.onloadend = () => {
       const value = reader.result as string;
       setLogoUrl(value);
       localStorage.setItem('gastrotag_logo', value);
-      toast('Logo salvo.', 'success');
+      toast('Logo institucional salvo.', 'success');
     };
     reader.readAsDataURL(file);
   }
@@ -134,85 +146,236 @@ export function LabelFormPage() {
   if (loading) return <PageLoader />;
   if (!product) return null;
 
-  const storageOptions: { value: StorageType; label: string }[] = [
-    { value: 'REFRIGERADO', label: 'Refrigerado' },
-    { value: 'CONGELADO', label: 'Congelado' },
-  ];
-
   return (
-    <div className="max-w-5xl">
-      <div className="mb-6">
-        <button onClick={() => navigate(-1)} className="mb-3 flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800">
-          <ChevronLeft className="h-4 w-4" /> Voltar
+    <div className="max-w-6xl space-y-6">
+      {/* Header */}
+      <div>
+        <button
+          onClick={() => navigate(-1)}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-charcoal-800 mb-3 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Voltar para Produtos</span>
         </button>
-        <h1 className="page-title">Gerar Etiqueta</h1>
-        <p className="page-subtitle"><span className="font-medium text-slate-700">{product.name}</span> · {product.brand}</p>
+        <h1 className="page-title">Gerar Etiqueta Sanitária</h1>
+        <p className="page-subtitle">
+          Alimento: <strong className="text-charcoal-800">{product.name}</strong> • Marca: {product.brand}
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="space-y-4">
-          <form id="label-form" onSubmit={handleSubmit} className="card space-y-4 p-5">
-            <p className="section-label">Dados da etiqueta</p>
-            <Field label="Número do lote" required>
-              <input value={form.lot} onChange={(event) => setField('lot', event.target.value)} className="input" placeholder="Ex.: L20260417" required maxLength={60} />
-            </Field>
-            <Field label="Nome do responsável pela manipulação" required>
-              <input value={form.responsibleName} onChange={(event) => setField('responsibleName', event.target.value)} className="input" placeholder="Nome completo" required maxLength={100} autoComplete="name" />
-            </Field>
-            <Field label="Data de abertura" required>
-              <input type="date" value={form.openedAt} onChange={(event) => setField('openedAt', event.target.value)} className="input" required />
-            </Field>
-            <Field label="Tipo de armazenamento" required>
-              <div className="flex flex-col gap-2">
-                {storageOptions.map((option) => (
-                  <label key={option.value} className={cn(
-                    'flex cursor-pointer items-center gap-3 rounded-lg border-2 px-4 py-3 transition-all',
-                    form.storageType === option.value ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-slate-200 hover:border-slate-300',
-                  )}>
-                    <input type="radio" name="storageType" value={option.value} checked={form.storageType === option.value} onChange={() => setField('storageType', option.value)} className="accent-brand-700" />
-                    <span className="text-sm font-medium">{option.label}</span>
-                  </label>
-                ))}
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 items-start">
+
+        {/* Left: Input Form */}
+        <div className="lg:col-span-7 space-y-6">
+          <form id="label-form" onSubmit={handleSubmit} className="card p-6 sm:p-7 space-y-5">
+            <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+              <div className="w-7 h-7 rounded-lg bg-orange-50 text-brand-600 flex items-center justify-center">
+                <Tag className="w-4 h-4" />
+              </div>
+              <h2 className="text-sm font-bold text-charcoal-800 uppercase tracking-wider">
+                Dados da Manipulação
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Número do Lote" required>
+                <div className="relative">
+                  <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    value={form.lot}
+                    onChange={(e) => setField('lot', e.target.value)}
+                    className="input pl-10"
+                    placeholder="Ex: LOTE-2026-10"
+                    required
+                    maxLength={60}
+                  />
+                </div>
+              </Field>
+
+              <Field label="Responsável pela Manipulação" required>
+                <div className="relative">
+                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                  <input
+                    value={form.responsibleName}
+                    onChange={(e) => setField('responsibleName', e.target.value)}
+                    className="input pl-10"
+                    placeholder="Nome completo do manipulador"
+                    required
+                    maxLength={100}
+                  />
+                </div>
+              </Field>
+            </div>
+
+            <Field label="Data de Abertura / Preparo" required>
+              <div className="relative max-w-sm">
+                <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  type="date"
+                  value={form.openedAt}
+                  onChange={(e) => setField('openedAt', e.target.value)}
+                  className="input pl-10"
+                  required
+                />
               </div>
             </Field>
-            <Field label="Temperatura de armazenamento" required>
-              <input value={form.storageTemp} onChange={(event) => setField('storageTemp', event.target.value)} className="input" placeholder="Ex.: 4 °C" required maxLength={40} />
+
+            <Field label="Condição de Armazenamento" required>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1.5">
+                <label className={cn(
+                  'flex items-center gap-3 p-3.5 rounded-2xl border-2 cursor-pointer transition-all',
+                  form.storageType === 'REFRIGERADO'
+                    ? 'border-brand-500 bg-orange-50/40 text-charcoal-800 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300 bg-white text-slate-600'
+                )}>
+                  <input
+                    type="radio"
+                    name="storageType"
+                    value="REFRIGERADO"
+                    checked={form.storageType === 'REFRIGERADO'}
+                    onChange={() => {
+                      setField('storageType', 'REFRIGERADO');
+                      if (!form.storageTemp) setField('storageTemp', '4 °C');
+                    }}
+                    className="accent-brand-600"
+                  />
+                  <Refrigerator className="w-5 h-5 text-sky-600 shrink-0" />
+                  <div>
+                    <span className="text-xs font-bold block">Refrigerado</span>
+                    <span className="text-[11px] text-slate-400">Padronizado ~4 °C</span>
+                  </div>
+                </label>
+
+                <label className={cn(
+                  'flex items-center gap-3 p-3.5 rounded-2xl border-2 cursor-pointer transition-all',
+                  form.storageType === 'CONGELADO'
+                    ? 'border-brand-500 bg-orange-50/40 text-charcoal-800 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300 bg-white text-slate-600'
+                )}>
+                  <input
+                    type="radio"
+                    name="storageType"
+                    value="CONGELADO"
+                    checked={form.storageType === 'CONGELADO'}
+                    onChange={() => {
+                      setField('storageType', 'CONGELADO');
+                      if (!form.storageTemp) setField('storageTemp', '-18 °C');
+                    }}
+                    className="accent-brand-600"
+                  />
+                  <Snowflake className="w-5 h-5 text-indigo-600 shrink-0" />
+                  <div>
+                    <span className="text-xs font-bold block">Congelado</span>
+                    <span className="text-[11px] text-slate-400">Padronizado ~ -18 °C</span>
+                  </div>
+                </label>
+              </div>
+            </Field>
+
+            <Field label="Temperatura Registrada no Ponto" required>
+              <div className="relative max-w-sm">
+                <Thermometer className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  value={form.storageTemp}
+                  onChange={(e) => setField('storageTemp', e.target.value)}
+                  className="input pl-10"
+                  placeholder="Ex: 4 °C ou -18 °C"
+                  required
+                  maxLength={40}
+                />
+              </div>
             </Field>
           </form>
 
+          {/* Logo Customizer */}
           <div className="card p-5">
-            <p className="section-label">Logo institucional</p>
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100 mb-3">
+              Identificação do Estabelecimento
+            </p>
             {logoUrl ? (
-              <div className="flex items-center gap-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <img src={logoUrl} alt="Logo" className="max-h-12 object-contain" />
-                <button type="button" onClick={removeLogo} className="btn-ghost btn btn-sm ml-auto text-red-500"><X className="h-4 w-4" /> Remover</button>
+              <div className="flex items-center justify-between gap-4 p-3 rounded-xl border border-slate-200 bg-slate-50">
+                <img src={logoUrl} alt="Logo Cozinha" className="max-h-10 object-contain" />
+                <button
+                  type="button"
+                  onClick={removeLogo}
+                  className="btn btn-ghost btn-sm text-rose-600 hover:bg-rose-50"
+                >
+                  <X className="h-4 w-4" />
+                  <span>Remover logo customizado</span>
+                </button>
               </div>
             ) : (
-              <label className="flex cursor-pointer flex-col items-center gap-2 rounded-lg border-2 border-dashed border-slate-300 p-5 transition-all hover:border-brand-500 hover:bg-brand-50">
-                <Upload className="h-6 w-6 text-slate-400" />
-                <span className="text-sm text-slate-500">Enviar logo</span>
-                <span className="text-xs text-slate-400">PNG, JPG ou WebP · máx. 2 MB</span>
+              <label className="flex cursor-pointer items-center justify-between p-3.5 rounded-xl border-2 border-dashed border-slate-200 hover:border-brand-500 hover:bg-orange-50/30 transition-all">
+                <div className="flex items-center gap-3">
+                  <Upload className="w-5 h-5 text-slate-400" />
+                  <div>
+                    <span className="text-xs font-bold text-slate-700 block">Personalizar Logo da Cozinha</span>
+                    <span className="text-[11px] text-slate-400">Padrão: Logo Oficial GastroTag (PNG, JPG até 2 MB)</span>
+                  </div>
+                </div>
+                <span className="btn btn-outline btn-sm">Selecionar</span>
                 <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoUpload} />
               </label>
             )}
           </div>
 
-          <button type="submit" form="label-form" disabled={submitting || !previewMatchesForm || previewLoading} className="btn-primary btn btn-lg w-full">
-            {submitting || previewLoading ? <Spinner size="sm" className="text-white" /> : <Printer className="h-4 w-4" />}
-            Gerar e imprimir etiqueta
+          <button
+            type="submit"
+            form="label-form"
+            disabled={submitting || !previewMatchesForm || previewLoading}
+            className="btn btn-accent w-full py-3.5 text-sm font-bold shadow-md"
+          >
+            {submitting || previewLoading ? (
+              <Spinner size="sm" className="text-white" />
+            ) : (
+              <>
+                <Printer className="h-4 w-4" />
+                <span>Gerar e Imprimir Etiqueta Sanitária</span>
+              </>
+            )}
           </button>
         </div>
 
-        <div>
-          <p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-400">Prévia da etiqueta</p>
-          {previewError && <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{previewError}</p>}
-          {!previewReady && <p className="mb-3 rounded-lg bg-slate-100 p-3 text-sm text-slate-500">Informe o armazenamento e a temperatura para calcular a data de descarte.</p>}
-          <div className="rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-5">
-            <LabelPreview product={product} lot={form.lot} responsibleName={form.responsibleName} openedAt={form.openedAt} storageType={form.storageType} storageTemp={form.storageTemp} preview={previewMatchesForm ? preview : null} previewLoading={previewLoading} logoUrl={logoUrl} />
+        {/* Right: Real-time Label Preview */}
+        <div className="lg:col-span-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Pré-Visualização em Tempo Real
+            </p>
+            {preview && (
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md">
+                <CheckCircle2 className="w-3 h-3" />
+                <span>Cálculo Sanitário Ativo</span>
+              </span>
+            )}
           </div>
+
+          {previewError && (
+            <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-medium">
+              {previewError}
+            </div>
+          )}
+
+          <div className="p-6 rounded-3xl border-2 border-dashed border-slate-200 bg-slate-100/60 flex justify-center">
+            <LabelPreviewCard
+              product={product}
+              lot={form.lot}
+              responsibleName={form.responsibleName}
+              openedAt={form.openedAt}
+              storageType={form.storageType}
+              storageTemp={form.storageTemp}
+              preview={previewMatchesForm ? preview : null}
+              previewLoading={previewLoading}
+              logoUrl={logoUrl || '/logo.png'}
+            />
+          </div>
+
           {previewMatchesForm && preview?.cappedByOriginalExpiry && (
-            <div className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <AlertTriangle className="h-5 w-5 shrink-0" /> O prazo calculado foi limitado pela validade original do fabricante ({formatBR(preview.originalExpiryDate)}).
+            <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-xs text-amber-900">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Regra de Teto Sanitário:</strong> O prazo calculado foi limitado pela data de validade original do fabricante ({formatBR(preview.originalExpiryDate)}).
+              </span>
             </div>
           )}
         </div>
@@ -221,38 +384,109 @@ export function LabelFormPage() {
   );
 }
 
-function LabelPreview({ product, lot, responsibleName, openedAt, storageType, storageTemp, preview, previewLoading, logoUrl }: {
-  product: Product; lot: string; responsibleName: string; openedAt: string; storageType: StorageType | ''; storageTemp: string;
-  preview: LabelPreview | null; previewLoading: boolean; logoUrl: string | null;
+// ── Preview Card Component ─────────────────────────────
+function LabelPreviewCard({
+  product, lot, responsibleName, openedAt, storageType, storageTemp, preview, previewLoading, logoUrl
+}: {
+  product: Product;
+  lot: string;
+  responsibleName: string;
+  openedAt: string;
+  storageType: StorageType | '';
+  storageTemp: string;
+  preview: LabelPreview | null;
+  previewLoading: boolean;
+  logoUrl: string | null;
 }) {
   return (
-    <div className="overflow-hidden rounded-md border-2 border-slate-800 bg-white font-sans text-sm">
-      <div className="flex items-center justify-between bg-slate-800 px-4 py-2.5 text-white">
-        <span className="text-xs font-bold uppercase tracking-wide">Etiqueta de identificação</span>
-        <span className="font-mono text-[10px] text-slate-400">PRÉVIA</span>
+    <div className="w-full max-w-[340px] bg-white rounded-2xl border-2 border-charcoal-800 shadow-card-lg overflow-hidden text-slate-900 font-sans text-xs">
+      {/* Header */}
+      <div className="bg-charcoal-800 px-4 py-2.5 text-white flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <Tag className="w-3.5 h-3.5 text-brand-400" />
+          <span className="text-[11px] font-extrabold uppercase tracking-wider">Identificação Sanitária</span>
+        </div>
+        <span className="font-mono text-[9px] text-slate-300 font-bold bg-slate-700/60 px-1.5 py-0.5 rounded">
+          PRÉVIA
+        </span>
       </div>
-      <div className="space-y-3 p-4">
-        {logoUrl && <div className="flex justify-center border-b border-slate-200 pb-2"><img src={logoUrl} alt="Logo" className="max-h-10 object-contain" /></div>}
-        <div><div className="text-base font-bold text-slate-900">{product.name}</div><div className="text-xs text-slate-500">Marca: {product.brand}</div></div>
-        <div className="grid grid-cols-2 gap-2.5">
-          {[
-            { label: 'Lote', value: lot || '—' }, { label: 'Data de abertura', value: formatBR(openedAt) },
-            { label: 'Armazenamento', value: storageType === 'REFRIGERADO' ? 'Refrigerado' : storageType === 'CONGELADO' ? 'Congelado' : '—' },
-            { label: 'Temperatura', value: storageTemp || '—' },
-          ].map((field) => <div key={field.label}><div className="text-[9px] font-bold uppercase text-slate-400">{field.label}</div><div className="text-xs font-semibold text-slate-800">{field.value}</div></div>)}
+
+      <div className="p-4 space-y-3.5">
+        {/* Logo */}
+        <div className="flex justify-center border-b border-slate-100 pb-2.5">
+          <img src={logoUrl || '/logo.png'} alt="GastroTag" className="max-h-8 object-contain" />
         </div>
-        <div className="flex items-center justify-between rounded-md bg-red-600 px-3 py-2 text-white">
-          <span className="text-[10px] font-bold uppercase">Descartar em</span>
-          <span className="text-base font-extrabold">{preview ? formatBR(preview.discardAt) : previewLoading ? 'Calculando…' : '—'}</span>
+
+        {/* Product Details */}
+        <div>
+          <h3 className="font-extrabold text-sm text-charcoal-800 leading-tight">{product.name}</h3>
+          <p className="text-[11px] text-slate-500 font-medium">Marca: {product.brand}</p>
         </div>
-        {preview && <div className="text-[10px] text-slate-500">Prazo: {preview.rule.shelfLifeDays} dias · Fonte: {preview.rule.source}</div>}
-        {preview?.cappedByOriginalExpiry && <div className="text-[10px] font-semibold text-amber-800">Limitado pela validade original do fabricante.</div>}
-        <div className="border-t border-slate-200 pt-2.5"><div className="mb-1 text-[10px] text-slate-500">Responsável pela manipulação:</div><div className="mb-1 min-h-6 border-b border-slate-800 text-xs font-semibold text-slate-800">{responsibleName || '—'}</div><div className="text-center text-[9px] text-slate-400">Assinatura do responsável</div></div>
+
+        {/* Grid info */}
+        <div className="grid grid-cols-2 gap-2.5 bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+          <div>
+            <span className="text-[9px] font-bold uppercase text-slate-400 block">Lote</span>
+            <span className="text-xs font-bold text-charcoal-800 truncate block">{lot || '—'}</span>
+          </div>
+          <div>
+            <span className="text-[9px] font-bold uppercase text-slate-400 block">Data Abertura</span>
+            <span className="text-xs font-bold text-charcoal-800 block">{formatBR(openedAt)}</span>
+          </div>
+          <div>
+            <span className="text-[9px] font-bold uppercase text-slate-400 block">Armazenamento</span>
+            <span className="text-xs font-bold text-charcoal-800 block">
+              {storageType === 'REFRIGERADO' ? 'Refrigerado' : storageType === 'CONGELADO' ? 'Congelado' : '—'}
+            </span>
+          </div>
+          <div>
+            <span className="text-[9px] font-bold uppercase text-slate-400 block">Temperatura</span>
+            <span className="text-xs font-bold text-charcoal-800 block">{storageTemp || '—'}</span>
+          </div>
+        </div>
+
+        {/* Big Discard Banner */}
+        <div className="bg-brand-600 rounded-xl p-3 text-white flex items-center justify-between shadow-xs">
+          <div>
+            <span className="text-[9px] font-bold uppercase tracking-wider opacity-90 block">Data de Descarte</span>
+            <span className="text-sm font-extrabold tracking-tight">
+              {preview ? formatBR(preview.discardAt) : previewLoading ? 'Calculando...' : 'Preencha dados'}
+            </span>
+          </div>
+          <span className="text-[10px] font-bold bg-black/20 px-2 py-1 rounded-md">
+            {preview ? `${preview.rule.shelfLifeDays} dias` : '—'}
+          </span>
+        </div>
+
+        {preview && (
+          <div className="text-[10px] text-slate-500 font-medium">
+            Fonte: {preview.rule.source}
+          </div>
+        )}
+
+        {/* Signature & Responsible */}
+        <div className="pt-2 border-t border-slate-100">
+          <div className="text-[10px] text-slate-500 mb-0.5">
+            Responsável: <strong className="text-charcoal-800">{responsibleName || '—'}</strong>
+          </div>
+          <div className="h-5 border-b border-slate-300" />
+          <div className="text-center text-[8px] text-slate-400 mt-0.5 uppercase tracking-wide">
+            Assinatura do Manipulador
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
+// ── Field wrapper ─────────────────────────────────────────
 function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
-  return <div><label className="mb-1.5 block text-sm font-medium text-slate-700">{label} {required && <span className="text-red-500">*</span>}</label>{children}</div>;
+  return (
+    <div>
+      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+        {label} {required && <span className="text-rose-500">*</span>}
+      </label>
+      {children}
+    </div>
+  );
 }

@@ -19,17 +19,18 @@ export function Pagination({ page, totalPages, onPage }: PaginationProps) {
         : [1, 'left-gap', page - 1, page, page + 1, 'right-gap', totalPages];
 
   return (
-    <div className="mt-6 flex items-center justify-center gap-1">
+    <div className="mt-8 flex items-center justify-center gap-1.5">
       <button
-        className="btn-ghost btn btn-sm"
+        className="btn btn-outline btn-sm h-9 w-9 p-0 rounded-xl"
         disabled={page <= 1}
         onClick={() => onPage(page - 1)}
+        aria-label="Página anterior"
       >
-        <ChevronLeft className="w-4 h-4" />
+        <ChevronLeft className="w-4 h-4 text-slate-600" />
       </button>
 
-      <span className="px-2 text-sm font-medium text-slate-600 sm:hidden" aria-live="polite">
-        {page} / {totalPages}
+      <span className="px-3 text-xs font-bold text-slate-600 sm:hidden" aria-live="polite">
+        Pág. {page} de {totalPages}
       </span>
 
       {pages.map((entry) => typeof entry === 'number' ? (
@@ -37,22 +38,23 @@ export function Pagination({ page, totalPages, onPage }: PaginationProps) {
             key={entry}
             onClick={() => onPage(entry)}
             className={cn(
-              'btn btn-sm hidden h-9 w-9 sm:inline-flex',
+              'btn btn-sm hidden h-9 w-9 sm:inline-flex rounded-xl text-xs font-bold transition-all',
               entry === page
-                ? '!inline-flex bg-brand-700 font-semibold text-white'
-                : 'btn-ghost',
+                ? '!inline-flex bg-charcoal-800 text-white shadow-xs'
+                : 'btn-ghost text-slate-600 hover:text-charcoal-800',
             )}
           >
             {entry}
           </button>
-        ) : <span key={entry} className="hidden px-1 text-slate-400 sm:inline" aria-hidden="true">…</span>)}
+        ) : <span key={entry} className="hidden px-1.5 text-slate-400 sm:inline" aria-hidden="true">…</span>)}
 
       <button
-        className="btn-ghost btn btn-sm"
+        className="btn btn-outline btn-sm h-9 w-9 p-0 rounded-xl"
         disabled={page >= totalPages}
         onClick={() => onPage(page + 1)}
+        aria-label="Próxima página"
       >
-        <ChevronRight className="w-4 h-4" />
+        <ChevronRight className="w-4 h-4 text-slate-600" />
       </button>
     </div>
   );

@@ -1,6 +1,18 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Package, Tag, AlertTriangle, CheckCircle, TrendingUp } from 'lucide-react';
+import {
+  Package,
+  Tag,
+  AlertTriangle,
+  CheckCircle2,
+  TrendingUp,
+  Plus,
+  ArrowUpRight,
+  Clock,
+  Snowflake,
+  Refrigerator,
+  UtensilsCrossed,
+} from 'lucide-react';
 import { dashboardApi } from '@/services';
 import type { DashboardStats } from '@/types';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -19,162 +31,327 @@ export function DashboardPage() {
   }, []);
 
   if (loading) return <PageLoader />;
-  if (!stats)  return <p className="text-red-500">Erro ao carregar estatísticas.</p>;
+  if (!stats)  return (
+    <div className="card p-6 text-center text-rose-600">
+      <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-rose-500" />
+      <p className="font-semibold">Erro ao carregar estatísticas do sistema.</p>
+    </div>
+  );
 
   const { products, labels, topProducts } = stats;
 
   return (
     <div className="space-y-8">
-      {/* Header */}
-      <div>
-        <h1 className="page-title">Dashboard</h1>
-        <p className="page-subtitle">Visão geral do sistema de rotulagem</p>
+      {/* ── Top Bar / Page Header ──────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-charcoal-800 tracking-tight">
+            Controle de Alimentos
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
+            Monitoramento de validades, estoque ativo e rotulagem sanitária
+          </p>
+        </div>
+
+        {/* Quick Action Buttons */}
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => navigate('/products/new')}
+            className="btn btn-outline py-2.5 px-4 text-xs sm:text-sm"
+          >
+            <Plus className="w-4 h-4 text-slate-500" />
+            <span>Cadastrar Produto</span>
+          </button>
+          <button
+            onClick={() => navigate('/labels/new')}
+            className="btn btn-accent py-2.5 px-4 text-xs sm:text-sm shadow-sm"
+          >
+            <Tag className="w-4 h-4" />
+            <span>Gerar Etiqueta</span>
+          </button>
+        </div>
       </div>
 
-      {/* ── Status Cards ──────────────────────────── */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+      {/* ── Critical Alert Banner (if any expiring) ────────── */}
+      {products.expiring > 0 && (
+        <div className="flex items-center justify-between gap-3 p-4 bg-amber-50/80 border border-amber-200/80 rounded-2xl shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-amber-950">
+                Atenção de Validade: {products.expiring} {products.expiring === 1 ? 'produto próximo' : 'produtos próximos'} do vencimento
+              </p>
+              <p className="text-xs text-amber-800 mt-0.5">
+                Itens com data limite nos próximos 7 dias necessitam de rotação prioritária.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => navigate('/products?status=expiring')}
+            className="hidden sm:inline-flex items-center gap-1.5 text-xs font-bold text-amber-900 bg-white px-3 py-1.5 rounded-lg border border-amber-300 hover:bg-amber-100/50 transition-colors shrink-0"
+          >
+            <span>Ver itens</span>
+            <ArrowUpRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ── KPI Stat Cards (Matching Gestão de Estoque) ───── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <StatCard
-          label="Produtos cadastrados"
+          label="Total de Produtos"
+          description="Itens ativos cadastrados"
           value={products.total}
           icon={Package}
-          color="brand"
+          variant="brand"
           onClick={() => navigate('/products')}
         />
         <StatCard
-          label="Válidos"
+          label="Validades Regulares"
+          description="Em conformidade (OK)"
           value={products.valid}
-          icon={CheckCircle}
-          color="green"
+          icon={CheckCircle2}
+          variant="emerald"
           onClick={() => navigate('/products?status=valid')}
         />
         <StatCard
-          label="Próx. do vencimento"
+          label="Próx. do Vencimento"
+          description="Atenção nos próx. 7 dias"
           value={products.expiring}
-          icon={AlertTriangle}
-          color="amber"
+          icon={Clock}
+          variant="amber"
           onClick={() => navigate('/products?status=expiring')}
         />
         <StatCard
-          label="Vencidos"
+          label="Produtos Vencidos"
+          description="Descarte obrigatório"
           value={products.expired}
           icon={AlertTriangle}
-          color="red"
+          variant="rose"
           onClick={() => navigate('/products?status=expired')}
         />
       </div>
 
-      {/* ── Label Stats ───────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="card p-4 sm:p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center">
-              <Tag className="w-4 h-4 text-brand-700" />
+      {/* ── Main Content Grid (Etiquetas + Mais Utilizados) ─── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+        {/* Resumo de Rotulagem */}
+        <div className="card p-5 sm:p-6 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-5">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-orange-50 text-brand-600 border border-orange-100 flex items-center justify-center">
+                  <Tag className="w-4 h-4" />
+                </div>
+                <h3 className="font-bold text-charcoal-800 text-base">Atividade de Rotulagem</h3>
+              </div>
+              <button
+                onClick={() => navigate('/labels')}
+                className="text-xs font-semibold text-brand-600 hover:text-brand-700 flex items-center gap-1"
+              >
+                <span>Histórico</span>
+                <ArrowUpRight className="w-3.5 h-3.5" />
+              </button>
             </div>
-            <h3 className="font-semibold text-slate-800">Etiquetas</h3>
+
+            <div className="space-y-3.5">
+              <MetricRow
+                label="Total de etiquetas geradas"
+                value={labels.total}
+                badge="Geral"
+              />
+              <MetricRow
+                label="Manipulados hoje"
+                value={labels.today}
+                badge="Hoje"
+                highlight={labels.today > 0}
+              />
+              <MetricRow
+                label="Manipulados nesta semana"
+                value={labels.thisWeek}
+              />
+            </div>
+
+            <div className="mt-6 pt-5 border-t border-slate-100">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-3">
+                Distribuição por Armazenamento
+              </span>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <Refrigerator className="w-4 h-4 text-sky-600 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block truncate">Refrigerado</span>
+                    <span className="text-sm font-bold text-charcoal-800">{labels.byStorage['REFRIGERADO'] ?? 0}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-100">
+                  <Snowflake className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <div className="min-w-0">
+                    <span className="text-xs text-slate-500 block truncate">Congelado</span>
+                    <span className="text-sm font-bold text-charcoal-800">{labels.byStorage['CONGELADO'] ?? 0}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div className="space-y-3">
-            <Row label="Total geradas" value={labels.total} />
-            <Row label="Hoje"          value={labels.today} />
-            <Row label="Esta semana"   value={labels.thisWeek} />
-            <Row label="Refrigerado"   value={labels.byStorage['REFRIGERADO'] ?? 0} />
-            <Row label="Congelado"     value={labels.byStorage['CONGELADO']   ?? 0} />
-          </div>
+
+          <button
+            onClick={() => navigate('/labels/new')}
+            className="btn btn-outline w-full mt-6 text-xs font-bold"
+          >
+            Imprimir nova etiqueta sanitária
+          </button>
         </div>
 
-        {/* Top Products */}
-        <div className="card p-4 sm:p-5 col-span-1 lg:col-span-2">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center">
-              <TrendingUp className="w-4 h-4 text-brand-700" />
+        {/* Top Produtos mais etiquetados (Estilo Lista Ilustrativa) */}
+        <div className="card p-5 sm:p-6 lg:col-span-2">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-slate-100 text-charcoal-800 flex items-center justify-center">
+                <TrendingUp className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="font-bold text-charcoal-800 text-base">Alimentos Mais Etiquetados</h3>
+                <p className="text-xs text-slate-400">Itens com maior rotatividade e manipulação na cozinha</p>
+              </div>
             </div>
-            <h3 className="font-semibold text-slate-800">Produtos mais etiquetados</h3>
+            <button
+              onClick={() => navigate('/products')}
+              className="text-xs font-semibold text-slate-500 hover:text-charcoal-900"
+            >
+              Ver todos
+            </button>
           </div>
+
           {topProducts.length === 0 ? (
-            <p className="text-sm text-slate-400 text-center py-6">Nenhum dado ainda.</p>
+            <div className="py-12 text-center">
+              <UtensilsCrossed className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-semibold text-slate-600">Nenhuma etiqueta registrada ainda</p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Ao gerar etiquetas para produtos manipulados, os itens mais frequentes aparecerão aqui.
+              </p>
+            </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {topProducts.map((p, i) => (
-                <button key={p.id} type="button"
-                  className="flex w-full items-center gap-3 rounded-lg p-3 text-left transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+                <button
+                  key={p.id}
+                  type="button"
                   onClick={() => navigate(`/products/${p.id}/edit`)}
+                  className="group flex w-full items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-100 bg-white hover:bg-slate-50/80 hover:border-slate-200 transition-all text-left"
                 >
-                  <span className="w-6 h-6 rounded-full bg-brand-100 text-brand-700
-                                   text-xs font-bold flex items-center justify-center flex-shrink-0">
-                    {i + 1}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-800 truncate">{p.name}</div>
-                    <div className="text-xs text-slate-500">{p.brand}</div>
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-orange-50 border border-orange-100/60 text-brand-600 flex items-center justify-center font-bold text-sm shrink-0">
+                      #{i + 1}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-charcoal-800 group-hover:text-brand-600 transition-colors truncate">
+                        {p.name}
+                      </div>
+                      <div className="text-xs text-slate-400 flex items-center gap-2 truncate">
+                        <span>Marca: {p.brand}</span>
+                      </div>
+                    </div>
                   </div>
-                  <span className="shrink-0 text-sm font-semibold text-brand-700">
-                    {p.labelCount} etiq.
-                  </span>
+
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-charcoal-800 border border-slate-200/60">
+                      {p.labelCount} {p.labelCount === 1 ? 'etiqueta' : 'etiquetas'}
+                    </span>
+                    <ArrowUpRight className="w-4 h-4 text-slate-300 group-hover:text-charcoal-800 transition-colors" />
+                  </div>
                 </button>
               ))}
             </div>
           )}
         </div>
       </div>
-
-      {/* Recent alert */}
-      {products.expiring > 0 && (
-        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
-          <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-medium text-amber-900">
-              {products.expiring} produto{products.expiring !== 1 ? 's' : ''} vence{products.expiring === 1 ? '' : 'm'} nos próximos 7 dias.
-            </p>
-            <button
-              onClick={() => navigate('/products?status=expiring')}
-              className="text-sm text-amber-700 underline underline-offset-2 mt-0.5"
-            >
-              Ver produtos →
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-// ── Sub-components ──────────────────────────────────────
-type Color = 'brand' | 'green' | 'amber' | 'red';
+// ── Sub-components & Helpers ────────────────────────────
 
-const colorMap: Record<Color, { bg: string; icon: string; border: string }> = {
-  brand: { bg: 'bg-brand-50',  icon: 'text-brand-700', border: 'border-brand-200' },
-  green: { bg: 'bg-emerald-50', icon: 'text-emerald-700', border: 'border-emerald-200' },
-  amber: { bg: 'bg-amber-50',  icon: 'text-amber-700', border: 'border-amber-200' },
-  red:   { bg: 'bg-red-50',    icon: 'text-red-700',   border: 'border-red-200'   },
+interface StatCardProps {
+  label: string;
+  description: string;
+  value: number;
+  icon: React.ElementType;
+  variant: 'brand' | 'emerald' | 'amber' | 'rose';
+  onClick?: () => void;
+}
+
+const variantStyles = {
+  brand: {
+    squircle: 'bg-orange-50 text-brand-600 border border-orange-100',
+    borderHover: 'hover:border-orange-200',
+    number: 'text-charcoal-900',
+  },
+  emerald: {
+    squircle: 'bg-emerald-50 text-emerald-600 border border-emerald-100',
+    borderHover: 'hover:border-emerald-200',
+    number: 'text-charcoal-900',
+  },
+  amber: {
+    squircle: 'bg-amber-50 text-amber-600 border border-amber-100',
+    borderHover: 'hover:border-amber-200',
+    number: 'text-charcoal-900',
+  },
+  rose: {
+    squircle: 'bg-rose-50 text-rose-600 border border-rose-100',
+    borderHover: 'hover:border-rose-200',
+    number: 'text-charcoal-900',
+  },
 };
 
-function StatCard({ label, value, icon: Icon, color, onClick }: {
-  label: string; value: number;
-  icon: React.ElementType; color: Color; onClick?: () => void;
-}) {
-  const c = colorMap[color];
+function StatCard({ label, description, value, icon: Icon, variant, onClick }: StatCardProps) {
+  const styles = variantStyles[variant];
+
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        'card block w-full border p-4 text-left transition-shadow hover:shadow-card-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 sm:p-5',
-        c.border,
+        'card p-5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover group',
+        styles.borderHover
       )}
     >
-      <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center mb-3', c.bg)}>
-        <Icon className={cn('w-5 h-5', c.icon)} />
+      <div className="flex items-center justify-between mb-4">
+        <div className={cn('w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 transition-transform group-hover:scale-105', styles.squircle)}>
+          <Icon className="w-5 h-5" />
+        </div>
+        <ArrowUpRight className="w-4 h-4 text-slate-300 group-hover:text-slate-600 transition-colors" />
       </div>
-      <div className="text-3xl font-bold text-slate-900">{value}</div>
-      <div className="text-xs text-slate-500 mt-1 font-medium">{label}</div>
+      <div className={cn('text-3xl sm:text-4xl font-extrabold tracking-tight', styles.number)}>
+        {value}
+      </div>
+      <div className="text-sm font-bold text-charcoal-800 mt-1">{label}</div>
+      <div className="text-xs text-slate-400 mt-0.5 font-medium">{description}</div>
     </button>
   );
 }
 
-function Row({ label, value }: { label: string; value: number }) {
+function MetricRow({ label, value, badge, highlight }: {
+  label: string;
+  value: number;
+  badge?: string;
+  highlight?: boolean;
+}) {
   return (
-    <div className="flex items-center justify-between text-sm">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-semibold text-slate-800">{value}</span>
+    <div className="flex items-center justify-between text-sm py-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-slate-500 font-medium">{label}</span>
+        {badge && (
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 uppercase">
+            {badge}
+          </span>
+        )}
+      </div>
+      <span className={cn('font-bold', highlight ? 'text-brand-600' : 'text-charcoal-800')}>
+        {value}
+      </span>
     </div>
   );
 }

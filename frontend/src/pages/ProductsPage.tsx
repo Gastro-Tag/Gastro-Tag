@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus, Search, Filter, RefreshCw, Trash2, Tag,
-  Package, ChevronDown,
+  Package, ChevronDown, Utensils, Refrigerator, Snowflake, Calendar,
+  Edit2
 } from 'lucide-react';
 import { productApi } from '@/services';
 import type { Product, ProductFilters, ProductStatus } from '@/types';
@@ -19,12 +20,12 @@ import { extractError } from '@/services/api';
 import { useAuthStore } from '@/store/authStore';
 
 // ── Filter tab config ────────────────────────────────────
-const statusTabs: { value: ProductStatus; label: string; icon: string }[] = [
-  { value: 'all',      label: 'Todos',           icon: '📦' },
-  { value: 'valid',    label: 'Válidos',          icon: '✅' },
-  { value: 'expiring', label: 'Próx. vencimento', icon: '⚠️' },
-  { value: 'expired',  label: 'Vencidos',         icon: '🔴' },
-  { value: 'recent',   label: 'Recentes',         icon: '🆕' },
+const statusTabs: { value: ProductStatus; label: string }[] = [
+  { value: 'all',      label: 'Todos os Itens' },
+  { value: 'valid',    label: 'Válidos (OK)' },
+  { value: 'expiring', label: 'Próx. Vencimento' },
+  { value: 'expired',  label: 'Vencidos / Crítico' },
+  { value: 'recent',   label: 'Recentes' },
 ];
 
 export function ProductsPage() {
@@ -94,7 +95,7 @@ export function ProductsPage() {
     if (!toDelete) return;
     try {
       await productApi.remove(toDelete.id);
-      toast(`"${toDelete.name}" removido.`, 'success');
+      toast(`"${toDelete.name}" removido com sucesso.`, 'success');
       setToDelete(null);
       fetchProducts();
     } catch (err) {
@@ -111,96 +112,122 @@ export function ProductsPage() {
     <div className="space-y-6">
 
       {/* ── Header ──────────────────────────────────── */}
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="page-title">Produtos</h1>
-          <p className="page-subtitle">{meta.total} produto{meta.total !== 1 ? 's' : ''} cadastrado{meta.total !== 1 ? 's' : ''}</p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-charcoal-800 tracking-tight">
+            Controle de Produtos
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
+            {meta.total} {meta.total === 1 ? 'alimento cadastrado' : 'alimentos cadastrados no catálogo'}
+          </p>
         </div>
-        <button className="btn-primary btn" onClick={() => navigate('/products/new')}>
-          <Plus className="w-4 h-4" /> Novo Produto
+        <button
+          className="btn btn-primary shadow-sm"
+          onClick={() => navigate('/products/new')}
+        >
+          <Plus className="w-4 h-4 text-brand-400" />
+          <span>Novo Alimento</span>
         </button>
       </div>
 
-      {/* ── Status Tabs ─────────────────────────────── */}
-      <div className="flex w-full gap-1 overflow-x-auto rounded-lg bg-slate-100 p-1">
-        {statusTabs.map((tab) => (
-          <button
-            key={tab.value}
-            onClick={() => changeFilter(setStatus)(tab.value)}
-            className={cn(
-              'flex flex-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-2 text-xs font-medium transition-all sm:flex-1 sm:px-3',
-              status === tab.value
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-slate-500 hover:text-slate-700',
-            )}
-          >
-            <span>{tab.icon}</span>
-            {tab.label}
-          </button>
-        ))}
+      {/* ── Status Tabs (Clean Pills) ───────────────── */}
+      <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-white border border-slate-200/80 shadow-xs overflow-x-auto">
+        {statusTabs.map((tab) => {
+          const isActive = status === tab.value;
+          return (
+            <button
+              key={tab.value}
+              onClick={() => changeFilter(setStatus)(tab.value)}
+              className={cn(
+                'px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap shrink-0',
+                isActive
+                  ? 'bg-charcoal-800 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-charcoal-800 hover:bg-slate-50'
+              )}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
-      {/* ── Search + Filters ────────────────────────── */}
+      {/* ── Search + Filter Bar ─────────────────────── */}
       <div className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row">
           <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input
               type="search"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              placeholder="Buscar por nome ou marca…"
-              className="input pl-9"
+              placeholder="Buscar por nome do produto ou marca..."
+              className="input pl-10"
             />
           </div>
           <div className="flex gap-2">
             <button
               onClick={() => setFiltersOpen(!filtersOpen)}
-              className={cn('btn-outline btn flex-1 gap-2 sm:flex-none', filtersOpen && 'border-brand-600 bg-brand-50 text-brand-700')}
+              className={cn(
+                'btn btn-outline flex-1 sm:flex-none gap-2 text-xs font-bold',
+                filtersOpen && 'border-charcoal-800 bg-slate-100 text-charcoal-800'
+              )}
               aria-expanded={filtersOpen}
             >
               <Filter className="h-4 w-4" />
-              Filtros
-              <ChevronDown className={cn('h-3 w-3 transition-transform', filtersOpen && 'rotate-180')} />
+              <span>Filtros</span>
+              <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', filtersOpen && 'rotate-180')} />
             </button>
-            <button onClick={fetchProducts} className="btn-ghost btn" aria-label="Atualizar produtos" title="Atualizar produtos">
-              <RefreshCw className="h-4 w-4" />
+            <button
+              onClick={fetchProducts}
+              className="btn btn-outline px-3"
+              aria-label="Atualizar lista"
+              title="Atualizar lista"
+            >
+              <RefreshCw className={cn('h-4 w-4 text-slate-500', loading && 'animate-spin')} />
             </button>
           </div>
         </div>
 
-        {/* Advanced filters panel */}
+        {/* Advanced filters dropdown card */}
         {filtersOpen && (
-          <div className="card grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="card grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4 bg-white">
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">Armazenamento</label>
-              <select value={storage} onChange={(e) => changeFilter(setStorage)(e.target.value)} className="input text-sm">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Armazenamento
+              </label>
+              <select value={storage} onChange={(e) => changeFilter(setStorage)(e.target.value)} className="input text-xs">
                 <option value="">Todos</option>
-                <option value="refrigerado">🌡 Refrigerado</option>
-                <option value="congelado">❄️ Congelado</option>
+                <option value="refrigerado">Refrigerado</option>
+                <option value="congelado">Congelado</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">Categoria</label>
-              <select value={category} onChange={(e) => changeFilter(setCategory)(e.target.value)} className="input text-sm">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Categoria
+              </label>
+              <select value={category} onChange={(e) => changeFilter(setCategory)(e.target.value)} className="input text-xs">
                 <option value="">Todas</option>
-                {categories.map((c) => <option key={c} value={c!}>{c}</option>)}
+                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">Ordenar por</label>
-              <select value={sort} onChange={(e) => changeFilter(setSort)(e.target.value)} className="input text-sm">
-                <option value="name">Nome</option>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Ordenar por
+              </label>
+              <select value={sort} onChange={(e) => changeFilter(setSort)(e.target.value)} className="input text-xs">
+                <option value="name">Nome do Produto</option>
                 <option value="brand">Marca</option>
-                <option value="date">Validade</option>
-                <option value="created">Cadastro</option>
+                <option value="date">Data de Validade</option>
+                <option value="created">Data de Cadastro</option>
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1.5">Direção</label>
-              <select value={order} onChange={(e) => changeFilter(setOrder)(e.target.value as 'asc'|'desc')} className="input text-sm">
-                <option value="asc">A → Z / Mais antigo</option>
-                <option value="desc">Z → A / Mais recente</option>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                Ordem
+              </label>
+              <select value={order} onChange={(e) => changeFilter(setOrder)(e.target.value as 'asc'|'desc')} className="input text-xs">
+                <option value="asc">Crescente (A → Z / Antigos)</option>
+                <option value="desc">Decrescente (Z → A / Novos)</option>
               </select>
             </div>
           </div>
@@ -214,10 +241,10 @@ export function ProductsPage() {
         <EmptyState
           icon="📦"
           title="Nenhum produto encontrado"
-          desc={debouncedSearch ? `Sem resultados para "${debouncedSearch}".` : 'Cadastre seu primeiro produto para começar.'}
+          desc={debouncedSearch ? `Sem resultados para "${debouncedSearch}".` : 'Cadastre seu primeiro alimento para começar a rotulagem.'}
           action={
-            <button className="btn-primary btn" onClick={() => navigate('/products/new')}>
-              <Plus className="w-4 h-4" /> Cadastrar Produto
+            <button className="btn btn-primary" onClick={() => navigate('/products/new')}>
+              <Plus className="w-4 h-4 text-brand-400" /> Cadastrar Alimento
             </button>
           }
         />
@@ -242,7 +269,7 @@ export function ProductsPage() {
       <ConfirmDialog
         open={!!toDelete}
         title="Excluir produto"
-        body={`Tem certeza que deseja remover "${toDelete?.name}"? Esta ação não pode ser desfeita.`}
+        body={`Tem certeza que deseja remover "${toDelete?.name}"? Esta ação desativará o produto no catálogo.`}
         confirmLabel="Excluir"
         danger
         onConfirm={confirmDelete}
@@ -252,7 +279,7 @@ export function ProductsPage() {
   );
 }
 
-// ── Product Card ─────────────────────────────────────────
+// ── Product Card Component (Matching Reference) ─────────
 function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
   product:  Product;
   onLabel:  () => void;
@@ -260,52 +287,95 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
   onDelete: () => void;
 }) {
   const canDelete = useAuthStore((state) => state.user?.role === 'ADMIN');
-  const borderColor =
-    p.computedStatus === 'expired'  ? 'border-l-red-500' :
-    p.computedStatus === 'expiring' ? 'border-l-amber-500' :
-    'border-l-brand-600';
 
-  const storageInfo = [
-    p.daysValidRefrigerated > 0 ? `🌡 ${p.daysValidRefrigerated}d` : '',
-    p.daysValidFrozen > 0       ? `❄️ ${p.daysValidFrozen}d`       : '',
-  ].filter(Boolean).join('  ·  ');
+  // Badge squircle icon styling based on status
+  const iconStyle =
+    p.computedStatus === 'expired'  ? 'bg-rose-50 text-rose-600 border border-rose-100' :
+    p.computedStatus === 'expiring' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+    'bg-emerald-50 text-emerald-600 border border-emerald-100';
 
   return (
-    <div className={cn('card grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-3 border-l-4 p-3 transition-shadow hover:shadow-card-lg sm:flex sm:gap-4 sm:p-4', borderColor)}>
-      {/* Icon */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand-50">
-        <Package className="w-5 h-5 text-brand-700" />
-      </div>
+    <div className="card p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-slate-300/80 hover:shadow-card-hover group">
 
-      {/* Info */}
-      <div className="col-start-2 row-start-1 min-w-0 sm:flex-1">
-        <div className="flex items-start justify-between gap-2 flex-wrap">
-          <div>
-            <div className="break-words text-sm font-semibold text-slate-900">{p.name}</div>
-            <div className="mt-0.5 break-words text-xs text-slate-500">{p.brand}{p.category ? ` · ${p.category}` : ''}{p.unit ? ` · ${p.unit}` : ''}</div>
+      {/* Left Item Info */}
+      <div className="flex items-start gap-4 min-w-0 flex-1">
+        <div className={cn('w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-2xs', iconStyle)}>
+          <Utensils className="w-5 h-5" />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2 mb-1">
+            <h3 className="font-bold text-charcoal-800 text-base group-hover:text-brand-600 transition-colors truncate">
+              {p.name}
+            </h3>
+            <StatusBadge
+              status={p.computedStatus}
+              label={daysUntilLabel(p.daysUntilExpiry)}
+            />
           </div>
-          <StatusBadge
-            status={p.computedStatus}
-            label={daysUntilLabel(p.daysUntilExpiry)}
-          />
-        </div>
 
-        <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-          <span>📅 Val. original: <strong className="text-slate-700">{formatBR(p.originalExpiryDate)}</strong></span>
-          {storageInfo && <span>{storageInfo}</span>}
-          <span>🏷 {p.labelCount} etiqueta{p.labelCount !== 1 ? 's' : ''}</span>
+          <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-medium text-slate-600">{p.brand}</span>
+            {p.category && <span>• {p.category}</span>}
+            {p.unit && <span>({p.unit})</span>}
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-slate-400" />
+              <span>Val. Original: <strong className="text-charcoal-800">{formatBR(p.originalExpiryDate)}</strong></span>
+            </span>
+
+            {p.daysValidRefrigerated > 0 && (
+              <span className="inline-flex items-center gap-1 text-sky-700 bg-sky-50 px-2 py-0.5 rounded-md text-[11px] font-semibold border border-sky-100">
+                <Refrigerator className="w-3 h-3" />
+                <span>Refr.: {p.daysValidRefrigerated}d</span>
+              </span>
+            )}
+
+            {p.daysValidFrozen > 0 && (
+              <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md text-[11px] font-semibold border border-indigo-100">
+                <Snowflake className="w-3 h-3" />
+                <span>Cong.: {p.daysValidFrozen}d</span>
+              </span>
+            )}
+
+            <span className="text-[11px] text-slate-400 font-medium">
+              {p.labelCount} {p.labelCount === 1 ? 'etiqueta gerada' : 'etiquetas geradas'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Actions */}
-      <div className={cn('col-span-2 grid w-full gap-2 sm:flex sm:w-auto sm:shrink-0', canDelete ? 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]' : 'grid-cols-2')}>
-        <button className="btn-primary btn btn-sm w-full whitespace-nowrap px-2 sm:w-auto sm:px-3" onClick={onLabel}>
-          <Tag className="w-3.5 h-3.5" /> Etiqueta
+      {/* Right Actions */}
+      <div className="flex items-center gap-2 pt-3 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
+        <button
+          onClick={onLabel}
+          className="btn btn-accent btn-sm flex-1 sm:flex-none gap-1.5 shadow-xs"
+        >
+          <Tag className="w-3.5 h-3.5" />
+          <span>Etiquetar</span>
         </button>
-        <button className="btn-outline btn btn-sm w-full whitespace-nowrap px-2 sm:w-auto sm:px-3" onClick={onEdit}>Editar</button>
-        {canDelete && <button className="btn-ghost btn btn-sm text-red-500 hover:bg-red-50 hover:text-red-600" onClick={onDelete} aria-label={`Excluir ${p.name}`}>
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>}
+
+        <button
+          onClick={onEdit}
+          className="btn btn-outline btn-sm px-3 text-slate-600"
+          title="Editar produto"
+        >
+          <Edit2 className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Editar</span>
+        </button>
+
+        {canDelete && (
+          <button
+            onClick={onDelete}
+            className="btn btn-ghost btn-sm p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+            aria-label={`Excluir ${p.name}`}
+            title="Excluir alimento"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   );

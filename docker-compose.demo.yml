@@ -1,0 +1,53 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gastrotag_demo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env.demo.local}
+      POSTGRES_DB: ${POSTGRES_DB:-gastrotag_demo}
+      TZ: America/Manaus
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gastrotag_demo} -d ${POSTGRES_DB:-gastrotag_demo}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3333
+      TZ: America/Manaus
+      KITCHEN_TIME_ZONE: ${KITCHEN_TIME_ZONE:-America/Manaus}
+      CAP_DISCARD_TO_ORIGINAL_EXPIRY: ${CAP_DISCARD_TO_ORIGINAL_EXPIRY:-true}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gastrotag_demo}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env.demo.local}@db:5432/${POSTGRES_DB:-gastrotag_demo}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Defina JWT_ACCESS_SECRET no arquivo .env.demo.local}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?Defina JWT_REFRESH_SECRET no arquivo .env.demo.local}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Defina ADMIN_EMAIL no arquivo .env.demo.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Defina ADMIN_PASSWORD no arquivo .env.demo.local}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8081}
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - demo_uploads_data:/app/uploads
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      - api
+
+volumes:
+  demo_postgres_data:
+  demo_uploads_data:

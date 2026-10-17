@@ -18,23 +18,25 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-        <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-card-lg sm:p-6">
-        <div className="flex gap-3 items-start mb-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-in fade-in duration-150">
+      <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-card-lg border border-slate-200/80">
+        <div className="flex gap-4 items-start mb-4">
           {danger && (
-            <div className="w-10 h-10 flex items-center justify-center rounded-full bg-red-100 flex-shrink-0">
-              <AlertTriangle className="w-5 h-5 text-red-600" />
+            <div className="w-11 h-11 flex items-center justify-center rounded-2xl bg-rose-50 border border-rose-100 shrink-0 text-rose-600">
+              <AlertTriangle className="w-5 h-5" />
             </div>
           )}
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">{title}</h2>
-            <div className="text-sm text-slate-500 mt-1">{body}</div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-bold text-charcoal-800">{title}</h2>
+            <div className="text-xs text-slate-500 mt-1 leading-relaxed">{body}</div>
           </div>
         </div>
-        <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <button className="btn-outline w-full sm:w-auto" onClick={onCancel}>Cancelar</button>
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button className="btn btn-outline w-full sm:w-auto text-xs" onClick={onCancel}>
+            Cancelar
+          </button>
           <button
-            className={cn(danger ? 'btn-danger' : 'btn-primary', 'btn w-full sm:w-auto')}
+            className={cn(danger ? 'btn btn-danger' : 'btn btn-primary', 'w-full sm:w-auto text-xs')}
             onClick={onConfirm}
           >
             {confirmLabel}
