@@ -1,4 +1,4 @@
-# Gastro-Tag
+ # Gastro-Tag
 
 Sistema web para identificar alimentos, acompanhar validade após abertura e gerar etiquetas com data de descarte.
 
@@ -16,7 +16,7 @@ Sistema web para identificar alimentos, acompanhar validade após abertura e ger
 
 - `backend/`: API Express, regras de aplicação, Prisma e seed.
 - `frontend/`: interface React, páginas e chamadas à API.
-- `docs/`: documentação local de planejamento e arquitetura; o diretório é ignorado pelo Git.
+- `docs/`: documentação local de planejamento e arquitetura; o diretório é ignorado pelo Git; apenas `docs/TOTEM.md` é versionado.
 - `docker-compose.yml`: banco, API e frontend para execução conjunta.
 
 ## Executar com Docker Compose
@@ -121,6 +121,10 @@ Remove-Item Env:DATABASE_URL
 ```
 
 Sem `DATABASE_URL`, o Vitest executa os testes unitários e ignora `tests/api.test.ts`. Não aponte a suíte para um banco de produção ou para o banco com dados que deseja preservar.
+
+## Modo totem
+
+A interface de totem para a bancada fica em `http://localhost/totem`: grade de produtos, data de descarte já calculada e impressão em 2 toques. Detalhes de uso, instalação em modo quiosque e limitações em [`docs/TOTEM.md`](docs/TOTEM.md).
 
 ## Roteiro da demonstração
 

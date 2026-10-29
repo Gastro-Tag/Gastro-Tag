@@ -7,6 +7,7 @@ node_modules/
 .env
 .env.local
 .env.*.local
+.env.test
 
 # Build outputs
 dist/
@@ -34,4 +35,5 @@ Thumbs.db
 postgres_data/
 uploads/
 
-docs/
+docs/*
+!docs/TOTEM.md

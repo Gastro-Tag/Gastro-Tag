@@ -14,7 +14,7 @@ function safeLogoSource(value: string | null): string {
   return '/logo.png';
 }
 
-export function printLabel(label: Label, logoUrl: string | null): void {
+export function printLabel(label: Label, logoUrl: string | null, copies = 1): void {
   const root = document.getElementById('print-root');
   if (!root) throw new Error('Área de impressão não encontrada.');
 
@@ -26,7 +26,7 @@ export function printLabel(label: Label, logoUrl: string | null): void {
     ? `<div class="print-logo"><img src="${esc(logo)}" alt="GastroTag" /></div>`
     : '';
 
-  root.innerHTML = `
+  const article = `
     <article class="print-label">
       <header class="print-header">
         <span>Etiqueta de Identificação Sanitária</span>
@@ -55,6 +55,8 @@ export function printLabel(label: Label, logoUrl: string | null): void {
         </div>
       </section>
     </article>`;
+  const count = Math.min(Math.max(Math.trunc(copies) || 1, 1), 20);
+  root.innerHTML = Array.from({ length: count }, () => article).join('');
 
   try {
     window.print();

@@ -6,11 +6,23 @@ import { ProductsPage }     from '@/pages/ProductsPage';
 import { ProductFormPage }  from '@/pages/ProductFormPage';
 import { LabelFormPage }    from '@/pages/LabelFormPage';
 import { LabelsPage }       from '@/pages/LabelsPage';
+import { TotemRoute }       from '@/components/totem/TotemShell';
+import { TotemLoginPage }   from '@/pages/totem/TotemLoginPage';
+import { TotemHomePage }    from '@/pages/totem/TotemHomePage';
+import { TotemLabelPage }   from '@/pages/totem/TotemLabelPage';
 
 export const router = createBrowserRouter([
   {
     path: '/login',
     element: <LoginPage />,
+  },
+  { path: '/totem/login', element: <TotemLoginPage /> },
+  {
+    element: <TotemRoute />,
+    children: [
+      { path: '/totem',                     element: <TotemHomePage /> },
+      { path: '/totem/etiqueta/:productId', element: <TotemLabelPage /> },
+    ],
   },
   {
     element: <ProtectedRoute />,
