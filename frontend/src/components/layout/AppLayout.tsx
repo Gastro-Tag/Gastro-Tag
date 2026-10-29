@@ -11,6 +11,7 @@ import {
   Search,
   Bell,
   Sparkles,
+  Tablet,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/',         label: 'Dashboard',  icon: LayoutDashboard },
   { to: '/products', label: 'Produtos',   icon: Package         },
   { to: '/labels',   label: 'Etiquetas',  icon: Tag             },
+  { to: '/totem',    label: 'Modo Totem', icon: Tablet          },
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {

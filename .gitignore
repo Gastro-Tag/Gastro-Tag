@@ -34,4 +34,5 @@ Thumbs.db
 postgres_data/
 uploads/
 
-docs/
+docs/*
+!docs/TOTEM.md
