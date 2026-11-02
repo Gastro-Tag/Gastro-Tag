@@ -24,6 +24,12 @@ export const AuthController = {
     res.json({ success: true, data: result });
   },
 
+  async verifyAdmin(req: Request, res: Response) {
+    const { email, password } = loginSchema.parse(req.body);
+    await AuthService.verifyAdmin(email, password);
+    res.json({ success: true, data: { valid: true } });
+  },
+
   async me(req: Request, res: Response) {
     res.json({ success: true, data: req.user });
   },

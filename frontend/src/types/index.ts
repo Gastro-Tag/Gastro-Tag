@@ -18,11 +18,25 @@ export interface PaginatedResponse<T> {
 }
 
 // ── Auth ────────────────────────────────────────────────
+export type UserRole = 'ADMIN' | 'OPERATOR';
+
 export interface User {
   id:    string;
   name:  string;
   email: string;
-  role:  'ADMIN' | 'OPERATOR';
+  role:  UserRole;
+}
+
+export interface ManagedUser extends User {
+  active:    boolean;
+  createdAt: string;
+}
+
+export interface CreateUserDTO {
+  name:     string;
+  email:    string;
+  role:     UserRole;
+  password: string;
 }
 
 export interface AuthTokens {

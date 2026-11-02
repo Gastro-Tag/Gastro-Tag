@@ -32,6 +32,7 @@ export function ProductsPage() {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const { toast } = useToastContext();
+  const isAdmin = useAuthStore((state) => state.user?.role === 'ADMIN');
 
   // ── State ──────────────────────────────────────────────
   const [products, setProducts]     = useState<Product[]>([]);
@@ -121,13 +122,15 @@ export function ProductsPage() {
             {meta.total} {meta.total === 1 ? 'alimento cadastrado' : 'alimentos cadastrados no catálogo'}
           </p>
         </div>
-        <button
-          className="btn btn-primary shadow-sm"
-          onClick={() => navigate('/products/new')}
-        >
-          <Plus className="w-4 h-4 text-brand-400" />
-          <span>Novo Alimento</span>
-        </button>
+        {isAdmin && (
+          <button
+            className="btn btn-primary shadow-sm"
+            onClick={() => navigate('/products/new')}
+          >
+            <Plus className="w-4 h-4 text-brand-400" />
+            <span>Novo Alimento</span>
+          </button>
+        )}
       </div>
 
       {/* ── Status Tabs (Clean Pills) ───────────────── */}
@@ -242,11 +245,11 @@ export function ProductsPage() {
           icon="📦"
           title="Nenhum produto encontrado"
           desc={debouncedSearch ? `Sem resultados para "${debouncedSearch}".` : 'Cadastre seu primeiro alimento para começar a rotulagem.'}
-          action={
+          action={isAdmin ? (
             <button className="btn btn-primary" onClick={() => navigate('/products/new')}>
               <Plus className="w-4 h-4 text-brand-400" /> Cadastrar Alimento
             </button>
-          }
+          ) : undefined}
         />
       ) : (
         <>
@@ -286,7 +289,7 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
   onEdit:   () => void;
   onDelete: () => void;
 }) {
-  const canDelete = useAuthStore((state) => state.user?.role === 'ADMIN');
+  const isAdmin = useAuthStore((state) => state.user?.role === 'ADMIN');
 
   // Badge squircle icon styling based on status
   const iconStyle =
@@ -357,16 +360,18 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
           <span>Etiquetar</span>
         </button>
 
-        <button
-          onClick={onEdit}
-          className="btn btn-outline btn-sm px-3 text-slate-600"
-          title="Editar produto"
-        >
-          <Edit2 className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Editar</span>
-        </button>
+        {isAdmin && (
+          <button
+            onClick={onEdit}
+            className="btn btn-outline btn-sm px-3 text-slate-600"
+            title="Editar produto"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Editar</span>
+          </button>
+        )}
 
-        {canDelete && (
+        {isAdmin && (
           <button
             onClick={onDelete}
             className="btn btn-ghost btn-sm p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50"

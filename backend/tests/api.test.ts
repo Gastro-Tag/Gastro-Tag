@@ -12,6 +12,7 @@ let userId = '';
 let operatorId = '';
 const productIds: string[] = [];
 const ruleIds: string[] = [];
+const createdUserIds: string[] = [];
 let accessToken = '';
 let refreshToken = '';
 let operatorToken = '';
@@ -34,6 +35,7 @@ afterAll(async () => {
   if (productIds.length) await prisma.label.deleteMany({ where: { productId: { in: productIds } } });
   if (ruleIds.length) await prisma.shelfLifeRule.deleteMany({ where: { id: { in: ruleIds } } });
   if (productIds.length) await prisma.product.deleteMany({ where: { id: { in: productIds } } });
+  if (createdUserIds.length) await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
   if (operatorId) await prisma.user.deleteMany({ where: { id: operatorId } });
   if (userId) await prisma.user.deleteMany({ where: { id: userId } });
   await prisma.$disconnect();
@@ -166,5 +168,108 @@ describe('API integration flow', () => {
     expect(denied.status).toBe(403);
     await request(app).delete(`/api/products/${product.body.data.id}`)
       .set('Authorization', `Bearer ${accessToken}`).expect(200);
+  });
+
+  it('blocks operators from writing products and from managing users', async () => {
+    const productPayload = {
+      name: 'Produto bloqueado', brand: 'Teste', originalExpiryDate: '2035-12-31',
+      daysValidRefrigerated: 2, daysValidFrozen: 5,
+    };
+    const created = await request(app).post('/api/products')
+      .set('Authorization', `Bearer ${operatorToken}`).send(productPayload);
+    expect(created.status).toBe(403);
+
+    const product = await request(app).post('/api/products')
+      .set('Authorization', `Bearer ${accessToken}`).send(productPayload).expect(201);
+    productIds.push(product.body.data.id);
+
+    const updated = await request(app).put(`/api/products/${product.body.data.id}`)
+      .set('Authorization', `Bearer ${operatorToken}`).send({ daysValidRefrigerated: 30 });
+    expect(updated.status).toBe(403);
+
+    expect((await request(app).get('/api/users').set('Authorization', `Bearer ${operatorToken}`)).status).toBe(403);
+    const newUser = await request(app).post('/api/users').set('Authorization', `Bearer ${operatorToken}`).send({
+      name: 'Bloqueado', email: `blocked-${suffix}@example.test`, password: 'TestPassword123!', role: 'ADMIN',
+    });
+    expect(newUser.status).toBe(403);
+  });
+
+  it('lets an admin create an operator who can log in and label, never exposing the password hash', async () => {
+    const newEmail = `api-new-operator-${suffix}@example.test`;
+    const created = await request(app).post('/api/users').set('Authorization', `Bearer ${accessToken}`).send({
+      name: 'Operador criado', email: newEmail, password: 'TestPassword123!', role: 'OPERATOR',
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.data.passwordHash).toBeUndefined();
+    createdUserIds.push(created.body.data.id);
+
+    const duplicate = await request(app).post('/api/users').set('Authorization', `Bearer ${accessToken}`).send({
+      name: 'Duplicado', email: newEmail, password: 'TestPassword123!', role: 'OPERATOR',
+    });
+    expect(duplicate.status).toBe(409);
+
+    const list = await request(app).get('/api/users').set('Authorization', `Bearer ${accessToken}`).expect(200);
+    expect(list.body.data.some((user: { email: string }) => user.email === newEmail)).toBe(true);
+    expect(JSON.stringify(list.body)).not.toContain('passwordHash');
+
+    const login = await request(app).post('/api/auth/login').send({ email: newEmail, password: 'TestPassword123!' });
+    expect(login.status).toBe(200);
+    const token = login.body.data.accessToken as string;
+
+    const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${token}`).send({
+      productId: productIds[0], lot: 'LOT-OPERADOR', responsibleName: 'Operador criado',
+      openedAt: new Date().toISOString().slice(0, 10), storageType: 'REFRIGERADO', storageTemp: '4°C',
+    });
+    expect(label.status).toBe(201);
+
+    await request(app).put(`/api/users/${created.body.data.id}`)
+      .set('Authorization', `Bearer ${accessToken}`).send({ active: false }).expect(200);
+    expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`)).status).toBe(401);
+  });
+
+  it('keeps an admin from locking out their own account', async () => {
+    const deactivate = await request(app).put(`/api/users/${userId}`)
+      .set('Authorization', `Bearer ${accessToken}`).send({ active: false });
+    expect(deactivate.status).toBe(422);
+    const demote = await request(app).put(`/api/users/${userId}`)
+      .set('Authorization', `Bearer ${accessToken}`).send({ role: 'OPERATOR' });
+    expect(demote.status).toBe(422);
+  });
+
+  it('applies a password reset made by an admin', async () => {
+    const resetEmail = `api-reset-${suffix}@example.test`;
+    const created = await request(app).post('/api/users').set('Authorization', `Bearer ${accessToken}`).send({
+      name: 'Troca de senha', email: resetEmail, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    createdUserIds.push(created.body.data.id);
+
+    const tooShort = await request(app).patch(`/api/users/${created.body.data.id}/password`)
+      .set('Authorization', `Bearer ${accessToken}`).send({ password: 'curta' });
+    expect(tooShort.status).toBe(422);
+
+    await request(app).patch(`/api/users/${created.body.data.id}/password`)
+      .set('Authorization', `Bearer ${accessToken}`).send({ password: 'NewTestPassword456!' }).expect(200);
+    const oldLogin = await request(app).post('/api/auth/login').send({ email: resetEmail, password: 'TestPassword123!' });
+    expect(oldLogin.status).toBe(401);
+    const newLogin = await request(app).post('/api/auth/login').send({ email: resetEmail, password: 'NewTestPassword456!' });
+    expect(newLogin.status).toBe(200);
+  });
+
+  it('unlocks admin actions only with administrator credentials', async () => {
+    const asOperator = await request(app).post('/api/auth/verify-admin')
+      .set('Authorization', `Bearer ${operatorToken}`).send({ email: operatorEmail, password: 'TestPassword123!' });
+    expect(asOperator.status).toBe(403);
+
+    const wrongPassword = await request(app).post('/api/auth/verify-admin')
+      .set('Authorization', `Bearer ${operatorToken}`).send({ email, password: 'WrongPassword123!' });
+    expect(wrongPassword.status).toBe(403);
+
+    const asAdmin = await request(app).post('/api/auth/verify-admin')
+      .set('Authorization', `Bearer ${operatorToken}`).send({ email, password: 'TestPassword123!' });
+    expect(asAdmin.status).toBe(200);
+    expect(asAdmin.body.data.valid).toBe(true);
+
+    const anonymous = await request(app).post('/api/auth/verify-admin').send({ email, password: 'TestPassword123!' });
+    expect(anonymous.status).toBe(401);
   });
 });

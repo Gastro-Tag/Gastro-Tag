@@ -5,10 +5,11 @@ import { useAuthStore } from '@/store/authStore';
 import { useTotemStore } from '@/store/totemStore';
 import { useIdle } from '@/hooks/useIdle';
 import { cn } from '@/utils/cn';
+import { AdminUnlockDialog } from './AdminUnlockDialog';
 import { OperatorSheet } from './OperatorSheet';
 
 const IDLE_MS = 60_000;        // volta ao início após 60 s sem toque
-const LONG_PRESS_MS = 1_500;   // segurar o logo abre o menu do administrador
+const LONG_PRESS_MS = 1_500;   // segurar o logo pede a senha do administrador
 
 /** Protege as rotas do totem: exige sessão, mas não usa o layout administrativo. */
 export function TotemRoute() {
@@ -22,7 +23,7 @@ function TotemShell() {
   const location = useLocation();
   const logout = useAuthStore((state) => state.logout);
   const { operator, openOperatorSheet } = useTotemStore();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [adminMenu, setAdminMenu] = useState<'locked' | 'unlocked' | null>(null);
   const [now, setNow] = useState(() => new Date());
   const pressTimer = useRef(0);
 
@@ -47,13 +48,14 @@ function TotemShell() {
   }, []);
 
   useIdle(IDLE_MS, () => {
+    setAdminMenu(null); // o menu destravado nunca fica aberto em um totem sem ninguém
     window.dispatchEvent(new Event('totem:idle'));
     if (location.pathname !== '/totem') navigate('/totem', { replace: true });
   });
 
   const startPress = () => {
     window.clearTimeout(pressTimer.current);
-    pressTimer.current = window.setTimeout(() => setMenuOpen(true), LONG_PRESS_MS);
+    pressTimer.current = window.setTimeout(() => setAdminMenu('locked'), LONG_PRESS_MS);
   };
   const cancelPress = () => window.clearTimeout(pressTimer.current);
 
@@ -105,7 +107,11 @@ function TotemShell() {
 
       <OperatorSheet />
 
-      {menuOpen && (
+      {adminMenu === 'locked' && (
+        <AdminUnlockDialog onUnlock={() => setAdminMenu('unlocked')} onCancel={() => setAdminMenu(null)} />
+      )}
+
+      {adminMenu === 'unlocked' && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-6" role="dialog" aria-modal="true">
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
             <h2 className="text-2xl font-extrabold">Opções do totem</h2>
@@ -114,7 +120,7 @@ function TotemShell() {
               <button
                 type="button"
                 className="btn btn-primary h-16 text-lg"
-                onClick={() => { setMenuOpen(false); navigate('/'); }}
+                onClick={() => { setAdminMenu(null); navigate('/'); }}
               >
                 <LayoutDashboard className="h-5 w-5" /> Abrir painel administrativo
               </button>
@@ -125,7 +131,7 @@ function TotemShell() {
               >
                 <LogOut className="h-5 w-5" /> Encerrar sessão do totem
               </button>
-              <button type="button" className="btn btn-ghost h-16 text-lg" onClick={() => setMenuOpen(false)}>
+              <button type="button" className="btn btn-ghost h-16 text-lg" onClick={() => setAdminMenu(null)}>
                 Voltar ao totem
               </button>
             </div>

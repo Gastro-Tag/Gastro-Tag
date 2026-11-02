@@ -82,11 +82,16 @@ O frontend usa `/api` como URL base. No desenvolvimento, o Vite encaminha `/api`
 | POST | `/api/auth/login` | Entrar |
 | POST | `/api/auth/refresh` | Renovar tokens |
 | GET | `/api/auth/me` | Consultar usuário autenticado |
+| POST | `/api/auth/verify-admin` | Confirmar credenciais de administrador (usada pelo totem) |
+| GET | `/api/users` | Listar usuários (ADMIN) |
+| POST | `/api/users` | Criar usuário (ADMIN) |
+| PUT | `/api/users/:id` | Atualizar, desativar ou reativar usuário (ADMIN) |
+| PATCH | `/api/users/:id/password` | Redefinir senha (ADMIN) |
 | GET | `/api/products` | Listar produtos com filtros |
 | GET | `/api/products/categories` | Listar categorias |
-| POST | `/api/products` | Cadastrar produto |
+| POST | `/api/products` | Cadastrar produto (ADMIN) |
 | GET | `/api/products/:id` | Buscar produto |
-| PUT | `/api/products/:id` | Atualizar produto |
+| PUT | `/api/products/:id` | Atualizar produto (ADMIN) |
 | DELETE | `/api/products/:id` | Desativar produto (ADMIN) |
 | GET | `/api/labels` | Consultar histórico |
 | POST | `/api/labels/preview` | Pré-visualizar o cálculo de descarte |

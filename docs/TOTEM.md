@@ -35,7 +35,7 @@ As memórias ficam no `localStorage` do navegador do totem. A **regra sanitária
 
 ## Instalação do totem
 
-1. Abra `http://<servidor>/totem` e faça o login **uma vez** (conta ADMIN ou OPERATOR). A sessão se renova sozinha enquanto o totem for usado pelo menos 1 vez a cada 7 dias.
+1. No painel, em **Usuários**, crie uma conta OPERATOR só para o totem. Abra `http://<servidor>/totem` e faça o login **uma vez** com essa conta (não use uma conta ADMIN: ela daria poderes de gestão a quem está na bancada). A sessão se renova sozinha enquanto o totem for usado pelo menos 1 vez a cada 7 dias.
 2. Defina a impressora de etiquetas como **padrão** do sistema e ajuste o tamanho do papel no driver.
 3. Abra o navegador em modo quiosque com impressão direta (sem diálogo), exemplo no Windows:
 
@@ -45,13 +45,13 @@ chrome.exe --kiosk --kiosk-printing --disable-pinch --overscroll-history-navigat
 
 Sem `--kiosk-printing` o Chrome mostra o diálogo de impressão e exige um toque extra.
 
-**Saída do totem:** segure o logo por ~1,5 s para abrir o menu do administrador (painel administrativo ou encerrar sessão).
+**Saída do totem:** segure o logo por ~1,5 s e confirme com e-mail e senha de um administrador para abrir o menu (painel ou encerrar sessão). O menu fecha sozinho após 60 s sem toque. O painel continua na sessão do totem: para gerenciar produtos e usuários, encerre a sessão e entre com a conta de administrador.
 
 ## Limitações conhecidas
 
 - O responsável é um **nome digitado**, não uma conta: não há PIN por operador. Recomendado para o MVP (usuários + PIN).
 - A temperatura da etiqueta é a de armazenamento padrão/informada, não uma leitura de sensor.
 - A data de abertura é sempre a do dia; para outra data, use o painel administrativo.
-- O login do totem usa o teclado do sistema operacional (feito uma vez, por um administrador).
+- O login do totem e a confirmação do administrador usam o teclado do sistema operacional.
 - Impressão pelo navegador; integração direta com impressora térmica continua fora do escopo do TCC.
 - A etiqueta com "Quantidade" > 1 imprime cópias do mesmo registro (mesmo código), não registros separados.
