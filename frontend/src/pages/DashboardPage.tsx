@@ -51,7 +51,7 @@ export function DashboardPage() {
             Controle de Alimentos
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
-            Monitoramento de validades, estoque ativo e rotulagem sanitária
+            Monitoramento de validades e etiquetas
           </p>
         </div>
 
@@ -114,7 +114,7 @@ export function DashboardPage() {
         />
         <StatCard
           label="Validades Regulares"
-          description="Em conformidade (OK)"
+          description="Dentro da validade"
           value={products.valid}
           icon={CheckCircle2}
           variant="emerald"
@@ -205,7 +205,7 @@ export function DashboardPage() {
             onClick={() => navigate('/labels/new')}
             className="btn btn-outline w-full mt-6 text-xs font-bold"
           >
-            Imprimir nova etiqueta sanitária
+            Imprimir nova etiqueta
           </button>
         </div>
 

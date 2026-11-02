@@ -10,11 +10,11 @@ import type { Label, LabelPreview, Product, StorageType } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { useTotemStore } from '@/store/totemStore';
-import { formatBR, todayISO } from '@/utils/date';
+import { formatBR } from '@/utils/date';
 import { printLabel } from '@/utils/printLabel';
 import {
   DEFAULT_TEMP, STORAGE_LABEL, defaultLot, formatTemperature, getLastLot,
-  getLastStorage, rememberChoices, temperatureDraft, weekdayShort,
+  getLastStorage, getOperator, rememberChoices, temperatureDraft, weekdayShort,
 } from '@/utils/totem';
 import { cn } from '@/utils/cn';
 
@@ -37,8 +37,7 @@ function logo(): string | null {
 export function TotemLabelPage() {
   const { productId = '' } = useParams<{ productId: string }>();
   const navigate = useNavigate();
-  const { operator, openOperatorSheet } = useTotemStore();
-  const today = useMemo(() => todayISO(), []);
+  const { operator, openOperatorSheet, syncOperator } = useTotemStore();
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -62,7 +61,7 @@ export function TotemLabelPage() {
         if (!active) return;
         const loaded = data.data;
         setProduct(loaded);
-        setLot(getLastLot(loaded.id) ?? defaultLot());
+        setLot(getLastLot(loaded.id) ?? '');
         const options = storagesOf(loaded);
         const last = getLastStorage(loaded.id);
         setStorage(last && options.includes(last) ? last : options[0]);
@@ -78,22 +77,24 @@ export function TotemLabelPage() {
 
   const options = useMemo(() => (product ? storagesOf(product) : []), [product]);
 
-  // Pré-cálculo de cada armazenamento (a regra e o teto são do servidor).
+  // Pré-cálculo de cada armazenamento. A regra, o teto e a data de hoje são do servidor.
   useEffect(() => {
     if (!product) return;
     let active = true;
     for (const type of options) {
       setPreviews((current) => ({ ...current, [type]: { status: 'loading' } }));
-      labelApi.preview({ productId: product.id, openedAt: today, storageType: type, storageTemp: temps[type] })
+      labelApi.preview({ productId: product.id, storageType: type, storageTemp: temps[type] })
         .then(({ data }) => {
-          if (active) setPreviews((current) => ({ ...current, [type]: { status: 'ok', data: data.data } }));
+          if (!active) return;
+          setPreviews((current) => ({ ...current, [type]: { status: 'ok', data: data.data } }));
+          setLot((current) => current || defaultLot(data.data.openedAt));
         })
         .catch((err) => {
           if (active) setPreviews((current) => ({ ...current, [type]: { status: 'error', message: extractError(err) } }));
         });
     }
     return () => { active = false; };
-  }, [product, options, today, temps.REFRIGERADO, temps.CONGELADO]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [product, options, temps.REFRIGERADO, temps.CONGELADO]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Contagem regressiva para voltar ao início depois de imprimir.
   useEffect(() => {
@@ -119,7 +120,9 @@ export function TotemLabelPage() {
 
   async function handlePrint() {
     if (lock.current || !product || !storage) return;
-    if (!operator) { openOperatorSheet(); return; }
+    // Lê de novo no toque: o turno pode ter expirado desde a última sincronização.
+    const responsible = getOperator();
+    if (!responsible) { syncOperator(); openOperatorSheet(); return; }
     if (selectedPreview?.status !== 'ok' || !lot.trim()) return;
 
     lock.current = true;
@@ -130,8 +133,7 @@ export function TotemLabelPage() {
       const { data } = await labelApi.create({
         productId: product.id,
         lot: lot.trim(),
-        responsibleName: operator,
-        openedAt: today,
+        responsibleName: responsible,
         storageType: storage,
         storageTemp: temps[storage],
       });

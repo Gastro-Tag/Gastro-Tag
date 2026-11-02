@@ -1,9 +1,16 @@
 ﻿import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import app from '../src/app';
 import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
+import { kitchenToday } from '../src/utils/dateUtils';
+
+// Precisa valer antes de importar o app: simula a API atrás do nginx.
+vi.hoisted(() => { process.env.TRUST_PROXY_HOPS = '1'; });
+const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+const today = () => isoDate(kitchenToday());
+const daysFromToday = (days: number) => isoDate(new Date(kitchenToday().getTime() + days * 86_400_000));
 
 const suffix = randomUUID();
 const email = `api-test-${suffix}@example.test`;
@@ -71,16 +78,14 @@ describe('API integration flow', () => {
     const missingResponsible = await request(app).post('/api/labels')
       .set('Authorization', `Bearer ${accessToken}`).send({
         productId: product.body.data.id, lot: `LOT-${suffix.slice(0, 8)}`,
-        openedAt: new Date().toISOString().slice(0, 10), storageType: 'REFRIGERADO', storageTemp: '4°C',
+        openedAt: today(), storageType: 'REFRIGERADO', storageTemp: '4°C',
       });
     expect(missingResponsible.status).toBe(422);
     expect(missingResponsible.body.error.code).toBe('VALIDATION_ERROR');
   });
 
   it('creates a product and a label using the backend discard calculation', async () => {
-    const date = new Date();
-    date.setUTCDate(date.getUTCDate() + 30);
-    const expiry = date.toISOString().slice(0, 10);
+    const expiry = daysFromToday(30);
     const product = await request(app).post('/api/products').set('Authorization', `Bearer ${accessToken}`).send({
       name: 'Produto integração', brand: 'Teste', category: 'Integração',
       originalExpiryDate: expiry, daysValidRefrigerated: 2, daysValidFrozen: 5,
@@ -89,14 +94,14 @@ describe('API integration flow', () => {
     const productId = product.body.data.id as string;
     productIds.push(productId);
 
-    const openedAt = new Date().toISOString().slice(0, 10);
+    const openedAt = today();
     const preview = await request(app).post('/api/labels/preview')
       .set('Authorization', `Bearer ${accessToken}`).send({
         productId, openedAt, storageType: 'REFRIGERADO', storageTemp: '4°C',
       });
     expect(preview.status).toBe(200);
     expect(preview.body.data.rule.shelfLifeDays).toBe(2);
-    expect(preview.body.data.discardAt.slice(0, 10)).toBe(new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10));
+    expect(preview.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(1));
 
     const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${accessToken}`).send({
       productId, lot: `LOT-${suffix.slice(0, 8)}`, responsibleName: 'Operador de Teste', openedAt,
@@ -105,7 +110,7 @@ describe('API integration flow', () => {
     expect(label.status).toBe(201);
     expect(label.body.data.shelfLifeDays).toBe(2);
     expect(label.body.data.productName).toBe('Produto integração');
-    expect(label.body.data.discardAt.slice(0, 10)).toBe(new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10));
+    expect(label.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(1));
 
     await request(app).put(`/api/products/${productId}`).set('Authorization', `Bearer ${accessToken}`).send({
       name: 'Nome alterado', brand: 'Marca alterada',
@@ -120,6 +125,43 @@ describe('API integration flow', () => {
       .set('Authorization', `Bearer ${accessToken}`).expect(200);
     expect(printed.body.data.printCount).toBe(1);
     expect(printed.body.data.responsibleName).toBe('Operador de Teste');
+  });
+
+  it('uses the kitchen date when openedAt is omitted', async () => {
+    const preview = await request(app).post('/api/labels/preview')
+      .set('Authorization', `Bearer ${accessToken}`).send({
+        productId: productIds[0], storageType: 'REFRIGERADO', storageTemp: '4°C',
+      });
+    expect(preview.status).toBe(200);
+    expect(preview.body.data.openedAt.slice(0, 10)).toBe(today());
+
+    const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${accessToken}`).send({
+      productId: productIds[0], lot: `LOT-${suffix.slice(0, 8)}`, responsibleName: 'Operador de Teste',
+      storageType: 'REFRIGERADO', storageTemp: '4°C',
+    });
+    expect(label.status).toBe(201);
+    expect(label.body.data.openedAt.slice(0, 10)).toBe(today());
+  });
+
+  it('rejects a future opening date and a label that would be born expired', async () => {
+    const payload = {
+      productId: productIds[0], lot: `LOT-${suffix.slice(0, 8)}`, responsibleName: 'Operador de Teste',
+      storageType: 'REFRIGERADO', storageTemp: '4°C',
+    };
+    const postLabel = (body: object) => request(app).post('/api/labels')
+      .set('Authorization', `Bearer ${accessToken}`).send(body);
+
+    const future = await postLabel({ ...payload, openedAt: daysFromToday(1) });
+    expect(future.status).toBe(422);
+    expect(future.body.error.message).toContain('futura');
+
+    const expired = await postLabel({ ...payload, openedAt: daysFromToday(-10) });
+    expect(expired.status).toBe(422);
+    expect(expired.body.error.message).toContain('vencida');
+
+    const lastValidDay = await postLabel({ ...payload, openedAt: daysFromToday(-1) });
+    expect(lastValidDay.status).toBe(201);
+    expect(lastValidDay.body.data.discardAt.slice(0, 10)).toBe(today());
   });
 
   it('applies temperature limits from a product-specific rule', async () => {
@@ -137,7 +179,7 @@ describe('API integration flow', () => {
     ruleIds.push(rule.id);
 
     const payload = {
-      productId: product.body.data.id, openedAt: new Date().toISOString().slice(0, 10),
+      productId: product.body.data.id, openedAt: today(),
       storageType: 'REFRIGERADO',
     };
     const outsideRange = await request(app).post('/api/labels/preview')
@@ -218,7 +260,7 @@ describe('API integration flow', () => {
 
     const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${token}`).send({
       productId: productIds[0], lot: 'LOT-OPERADOR', responsibleName: 'Operador criado',
-      openedAt: new Date().toISOString().slice(0, 10), storageType: 'REFRIGERADO', storageTemp: '4°C',
+      openedAt: today(), storageType: 'REFRIGERADO', storageTemp: '4°C',
     });
     expect(label.status).toBe(201);
 
@@ -253,6 +295,48 @@ describe('API integration flow', () => {
     expect(oldLogin.status).toBe(401);
     const newLogin = await request(app).post('/api/auth/login').send({ email: resetEmail, password: 'NewTestPassword456!' });
     expect(newLogin.status).toBe(200);
+  });
+
+  it('renews the session and answers 401 for an invalid refresh token', async () => {
+    const renewed = await request(app).post('/api/auth/refresh').send({ refreshToken });
+    expect(renewed.status).toBe(200);
+    expect(renewed.body.data.accessToken).toBeTruthy();
+
+    const invalid = await request(app).post('/api/auth/refresh').send({ refreshToken: 'token-invalido' });
+    expect(invalid.status).toBe(401);
+  });
+
+  it('counts only failed logins, separately for each client address', async () => {
+    const loginFrom = (ip: string) => request(app).post('/api/auth/login').set('X-Forwarded-For', ip);
+
+    for (let attempt = 0; attempt < 11; attempt++) {
+      expect((await loginFrom('203.0.113.10').send({ email, password: 'TestPassword123!' })).status).toBe(200);
+    }
+
+    const badLogin = { email: `ninguem-${suffix}@example.test`, password: 'WrongPassword123!' };
+    for (let attempt = 0; attempt < 10; attempt++) {
+      expect((await loginFrom('203.0.113.20').send(badLogin)).status).toBe(401);
+    }
+    const blocked = await loginFrom('203.0.113.20').send(badLogin);
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error.code).toBe('RATE_LIMITED');
+
+    expect((await loginFrom('203.0.113.30').send(badLogin)).status).toBe(401);
+  }, 30_000);
+
+  it('does not count server errors against the login limit', async () => {
+    const loginFrom = () => request(app).post('/api/auth/login').set('X-Forwarded-For', '203.0.113.40')
+      .send({ email, password: 'TestPassword123!' });
+
+    const outage = vi.spyOn(AuthService, 'login').mockRejectedValue(new Error('banco indisponível'));
+    try {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        expect((await loginFrom()).status).toBe(500);
+      }
+    } finally {
+      outage.mockRestore();
+    }
+    expect((await loginFrom()).status).toBe(200);
   });
 
   it('unlocks admin actions only with administrator credentials', async () => {

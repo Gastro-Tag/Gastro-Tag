@@ -22,7 +22,7 @@ Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. C
 | Lote | Último lote usado para o produto neste totem; senão `L` + data (ex.: `L20261023`); editável |
 | Responsável | Escolhido uma vez por turno (expira em 10 h); nomes recentes em um toque |
 
-As memórias ficam no `localStorage` do navegador do totem. A **regra sanitária, o teto pela validade do fabricante e a data de descarte continuam sendo calculados no backend** (`POST /api/labels/preview` e `POST /api/labels`).
+As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade do fabricante e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do tablet não define a data da etiqueta.
 
 ## Salvaguardas
 

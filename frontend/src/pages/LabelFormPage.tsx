@@ -8,7 +8,7 @@ import { productApi, labelApi } from '@/services';
 import type { LabelPreview, Product, StorageType } from '@/types';
 import { useToastContext } from '@/components/ui/Toast';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
-import { formatBR, todayISO } from '@/utils/date';
+import { formatBR } from '@/utils/date';
 import { extractError } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
@@ -26,8 +26,10 @@ export function LabelFormPage() {
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
+  // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
+  const [dateFilled, setDateFilled] = useState(false);
   const [form, setForm] = useState({
-    lot: '', responsibleName: '', openedAt: todayISO(), storageType: '' as StorageType | '', storageTemp: '',
+    lot: '', responsibleName: '', openedAt: '', storageType: '' as StorageType | '', storageTemp: '',
   });
 
   useEffect(() => {
@@ -54,7 +56,7 @@ export function LabelFormPage() {
   const requestKey = useMemo(() => JSON.stringify([
     productId, form.openedAt, form.storageType, form.storageTemp.trim(),
   ]), [productId, form.openedAt, form.storageType, form.storageTemp]);
-  const previewReady = Boolean(form.storageType && form.storageTemp.trim());
+  const previewReady = Boolean(form.storageType && form.storageTemp.trim() && (form.openedAt || !dateFilled));
   const previewMatchesForm = preview?.requestKey === requestKey;
 
   useEffect(() => {
@@ -70,11 +72,17 @@ export function LabelFormPage() {
       setPreviewError('');
       try {
         const { data } = await labelApi.preview({
-          productId, openedAt: form.openedAt,
+          productId, openedAt: form.openedAt || undefined,
           storageType: form.storageType as StorageType,
           storageTemp: form.storageTemp.trim(),
         });
-        if (active) setPreview({ ...data.data, requestKey });
+        if (active) {
+          setPreview({ ...data.data, requestKey });
+          if (!dateFilled) {
+            setDateFilled(true);
+            setForm((value) => ({ ...value, openedAt: data.data.openedAt.slice(0, 10) }));
+          }
+        }
       } catch (error) {
         if (active) { setPreview(null); setPreviewError(extractError(error)); }
       } finally {
@@ -82,7 +90,7 @@ export function LabelFormPage() {
       }
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [product, productId, form.openedAt, form.storageType, form.storageTemp, previewReady, requestKey]);
+  }, [product, productId, form.openedAt, form.storageType, form.storageTemp, previewReady, requestKey, dateFilled]);
 
   function setField(field: 'lot' | 'responsibleName' | 'openedAt' | 'storageType' | 'storageTemp', value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -157,7 +165,7 @@ export function LabelFormPage() {
           <ArrowLeft className="w-4 h-4" />
           <span>Voltar para Produtos</span>
         </button>
-        <h1 className="page-title">Gerar Etiqueta Sanitária</h1>
+        <h1 className="page-title">Gerar Etiqueta</h1>
         <p className="page-subtitle">
           Alimento: <strong className="text-charcoal-800">{product.name}</strong> • Marca: {product.brand}
         </p>
@@ -330,7 +338,7 @@ export function LabelFormPage() {
             ) : (
               <>
                 <Printer className="h-4 w-4" />
-                <span>Gerar e Imprimir Etiqueta Sanitária</span>
+                <span>Gerar e Imprimir Etiqueta</span>
               </>
             )}
           </button>
@@ -345,7 +353,7 @@ export function LabelFormPage() {
             {preview && (
               <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md">
                 <CheckCircle2 className="w-3 h-3" />
-                <span>Cálculo Sanitário Ativo</span>
+                <span>Data calculada</span>
               </span>
             )}
           </div>
@@ -374,7 +382,7 @@ export function LabelFormPage() {
             <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-xs text-amber-900">
               <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
               <span>
-                <strong>Regra de Teto Sanitário:</strong> O prazo calculado foi limitado pela data de validade original do fabricante ({formatBR(preview.originalExpiryDate)}).
+                <strong>Limite pela validade original:</strong> O prazo calculado foi limitado pela data de validade original do fabricante ({formatBR(preview.originalExpiryDate)}).
               </span>
             </div>
           )}
@@ -404,7 +412,7 @@ function LabelPreviewCard({
       <div className="bg-charcoal-800 px-4 py-2.5 text-white flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <Tag className="w-3.5 h-3.5 text-brand-400" />
-          <span className="text-[11px] font-extrabold uppercase tracking-wider">Identificação Sanitária</span>
+          <span className="text-[11px] font-extrabold uppercase tracking-wider">Identificação</span>
         </div>
         <span className="font-mono text-[9px] text-slate-300 font-bold bg-slate-700/60 px-1.5 py-0.5 rounded">
           PRÉVIA

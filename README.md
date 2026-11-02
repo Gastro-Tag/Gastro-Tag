@@ -142,7 +142,8 @@ A interface de totem para a bancada fica em `http://localhost/totem`: grade de p
 
 ## Escopo e limitações atuais
 
-- O cálculo usa os prazos cadastrados no produto. A matriz de regras sanitárias ainda não está centralizada como um catálogo normativo validado; os valores precisam ser confirmados pelo responsável técnico antes de uso operacional.
+- O cálculo usa os prazos cadastrados no produto ou, quando houver, uma regra de validade inserida diretamente no banco. Ainda não existe um catálogo normativo validado; os valores precisam ser confirmados pelo responsável técnico antes de uso operacional.
+- O dia da abertura conta como dia 1: um prazo de 3 dias com abertura em 01/09 vai até 03/09. O servidor recusa abertura futura e etiqueta que já nasceria vencida.
 - A impressão é feita pelo navegador. Integração direta com impressoras térmicas não faz parte do TCC atual.
 - O sistema está direcionado a uma cozinha/unidade; multiempresa, multiunidade e operação SaaS ficam para uma etapa futura.
 - O seed é opcional e cria dados demonstrativos com datas relativas à execução. A inicialização normal não exige executar o seed.

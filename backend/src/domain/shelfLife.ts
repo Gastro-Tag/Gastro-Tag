@@ -6,6 +6,8 @@ export interface CalculateDiscardInput {
   shelfLifeDays: number;
   originalExpiryDate?: string | Date | null;
   capToOriginalExpiry: boolean;
+  /** Data atual da cozinha. Quando informada, recusa abertura futura e etiqueta já vencida. */
+  today?: string | Date | null;
 }
 
 export interface CalculateDiscardResult {
@@ -47,20 +49,31 @@ export function calculateDiscard(input: CalculateDiscardInput): CalculateDiscard
   const originalExpiryDate = input.originalExpiryDate == null
     ? null
     : parseDateOnly(input.originalExpiryDate, 'Validade original');
+  const today = input.today == null ? null : parseDateOnly(input.today, 'Data atual');
+
+  if (today && openedAt.getTime() > today.getTime()) {
+    throw Errors.validation('A data de abertura não pode ser futura.');
+  }
 
   if (originalExpiryDate && openedAt.getTime() > originalExpiryDate.getTime()) {
     throw Errors.validation('A data de abertura não pode ser posterior à validade original.');
   }
 
-  const calculatedDiscardAt = addDays(openedAt, input.shelfLifeDays);
+  // O dia da abertura conta como dia 1: 3 dias a partir de 01/09 vão até 03/09.
+  const calculatedDiscardAt = addDays(openedAt, input.shelfLifeDays - 1);
   const cappedByOriginalExpiry = Boolean(
     input.capToOriginalExpiry &&
     originalExpiryDate &&
     calculatedDiscardAt.getTime() > originalExpiryDate.getTime()
   );
+  const discardAt = cappedByOriginalExpiry ? originalExpiryDate! : calculatedDiscardAt;
+
+  if (today && discardAt.getTime() < today.getTime()) {
+    throw Errors.validation('Esta etiqueta já nasceria vencida. Confira a data de abertura ou descarte o produto.');
+  }
 
   return {
-    discardAt: cappedByOriginalExpiry ? originalExpiryDate! : calculatedDiscardAt,
+    discardAt,
     shelfLifeDays: input.shelfLifeDays,
     cappedByOriginalExpiry,
   };

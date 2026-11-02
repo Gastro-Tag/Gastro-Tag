@@ -22,7 +22,7 @@ function TotemShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const logout = useAuthStore((state) => state.logout);
-  const { operator, openOperatorSheet } = useTotemStore();
+  const { operator, openOperatorSheet, syncOperator } = useTotemStore();
   const [adminMenu, setAdminMenu] = useState<'locked' | 'unlocked' | null>(null);
   const [now, setNow] = useState(() => new Date());
   const pressTimer = useRef(0);
@@ -43,9 +43,12 @@ function TotemShell() {
   }, []);
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 15_000);
+    const id = window.setInterval(() => {
+      setNow(new Date());
+      syncOperator();
+    }, 15_000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [syncOperator]);
 
   useIdle(IDLE_MS, () => {
     setAdminMenu(null); // o menu destravado nunca fica aberto em um totem sem ninguém

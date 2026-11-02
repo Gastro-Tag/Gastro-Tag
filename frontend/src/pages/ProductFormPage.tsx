@@ -178,7 +178,7 @@ export function ProductFormPage() {
               <Refrigerator className="w-4 h-4" />
             </div>
             <h2 className="text-sm font-bold text-charcoal-800 uppercase tracking-wider">
-              Regra Sanitária Pós-Abertura
+              Prazo Após a Abertura
             </h2>
           </div>
 

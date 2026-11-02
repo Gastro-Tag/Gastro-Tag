@@ -1,9 +1,9 @@
 import type { StorageType } from '@/types';
-import { parseDate, todayISO } from './date';
+import { parseDate } from './date';
 
 /**
  * Preferências do totem, guardadas só neste aparelho (localStorage).
- * Servem apenas para reduzir toques; a regra sanitária e o cálculo continuam no backend.
+ * Servem apenas para reduzir toques; as regras de validade e o cálculo continuam no backend.
  */
 const NS = 'gastrotag:totem:';
 const SHIFT_MS = 10 * 60 * 60 * 1000; // responsável expira após 10 h (troca de turno)
@@ -60,8 +60,9 @@ export function rememberOperator(name: string, now = Date.now()): void {
 }
 
 // ── Lote / armazenamento por produto ─────────────────────
-export function defaultLot(): string {
-  return `L${todayISO().replace(/-/g, '')}`;
+/** Recebe a data informada pelo servidor; o relógio do aparelho não entra na etiqueta. */
+export function defaultLot(openedAt: string): string {
+  return `L${openedAt.slice(0, 10).replace(/-/g, '')}`;
 }
 
 export function getLastLot(productId: string): string | null {

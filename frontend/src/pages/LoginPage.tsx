@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, Mail, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Spinner } from '@/components/ui/Spinner';
 
@@ -36,7 +36,7 @@ export function LoginPage() {
             <span className="text-brand-500">Tag</span>
           </h1>
           <p className="text-slate-500 text-sm mt-1 max-w-xs font-medium">
-            Controle sanitário, cálculo de validade e rotulagem para cozinhas profissionais
+            Controle de validade e etiquetas para cozinhas profissionais
           </p>
         </div>
 
@@ -104,11 +104,6 @@ export function LoginPage() {
               )}
             </button>
           </form>
-
-          <div className="mt-6 pt-5 border-t border-slate-100 flex items-center justify-center gap-2 text-[11px] text-slate-400 font-medium">
-            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-            <span>Ambiente seguro em conformidade sanitária</span>
-          </div>
         </div>
 
         <p className="text-center text-slate-400 text-xs mt-8">

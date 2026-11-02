@@ -79,7 +79,7 @@ export function LabelsPage() {
             Histórico de Etiquetas
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1 font-medium">
-            {meta.total} {meta.total === 1 ? 'etiqueta sanitária registrada' : 'etiquetas sanitárias registradas'}
+            {meta.total} {meta.total === 1 ? 'etiqueta registrada' : 'etiquetas registradas'}
           </p>
         </div>
         <button
@@ -160,7 +160,7 @@ export function LabelsPage() {
 
       {/* Label List */}
       {loading ? (
-        <InlineLoader text="Carregando etiquetas sanitárias…" />
+        <InlineLoader text="Carregando etiquetas…" />
       ) : labels.length === 0 ? (
         <EmptyState
           icon="🏷"

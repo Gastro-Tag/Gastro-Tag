@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Request, Response, Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { AuthController } from '../controllers/authController';
 import { ProductController } from '../controllers/productController';
@@ -8,7 +8,15 @@ import { UserController } from '../controllers/userController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
+
+// Só tentativa recusada conta: erro do servidor não pode bloquear a cozinha.
+const countOnlyRejected = {
+  skipSuccessfulRequests: true,
+  requestWasSuccessful: (_req: Request, res: Response) => res.statusCode < 400 || res.statusCode >= 500,
+};
+
 const loginRateLimit = rateLimit({
+  ...countOnlyRejected,
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: 'draft-8',
@@ -20,6 +28,7 @@ const loginRateLimit = rateLimit({
 });
 
 const verifyAdminRateLimit = rateLimit({
+  ...countOnlyRejected,
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: 'draft-8',
