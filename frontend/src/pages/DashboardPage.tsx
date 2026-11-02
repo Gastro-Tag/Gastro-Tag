@@ -16,12 +16,14 @@ import {
 import { dashboardApi } from '@/services';
 import type { DashboardStats } from '@/types';
 import { PageLoader } from '@/components/ui/Spinner';
+import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
 
 export function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const isAdmin = useAuthStore((state) => state.user?.role === 'ADMIN');
 
   useEffect(() => {
     dashboardApi.getStats()
@@ -55,13 +57,15 @@ export function DashboardPage() {
 
         {/* Quick Action Buttons */}
         <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => navigate('/products/new')}
-            className="btn btn-outline py-2.5 px-4 text-xs sm:text-sm"
-          >
-            <Plus className="w-4 h-4 text-slate-500" />
-            <span>Cadastrar Produto</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => navigate('/products/new')}
+              className="btn btn-outline py-2.5 px-4 text-xs sm:text-sm"
+            >
+              <Plus className="w-4 h-4 text-slate-500" />
+              <span>Cadastrar Produto</span>
+            </button>
+          )}
           <button
             onClick={() => navigate('/labels/new')}
             className="btn btn-accent py-2.5 px-4 text-xs sm:text-sm shadow-sm"
@@ -239,7 +243,7 @@ export function DashboardPage() {
                 <button
                   key={p.id}
                   type="button"
-                  onClick={() => navigate(`/products/${p.id}/edit`)}
+                  onClick={() => navigate(isAdmin ? `/products/${p.id}/edit` : `/labels/new?productId=${p.id}`)}
                   className="group flex w-full items-center justify-between gap-3 p-3.5 rounded-xl border border-slate-100 bg-white hover:bg-slate-50/80 hover:border-slate-200 transition-all text-left"
                 >
                   <div className="flex items-center gap-3.5 min-w-0">

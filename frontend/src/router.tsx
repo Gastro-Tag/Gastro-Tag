@@ -1,11 +1,13 @@
 import { createBrowserRouter, Link } from 'react-router-dom';
 import { ProtectedRoute }   from '@/components/layout/ProtectedRoute';
+import { AdminRoute }       from '@/components/layout/AdminRoute';
 import { LoginPage }        from '@/pages/LoginPage';
 import { DashboardPage }    from '@/pages/DashboardPage';
 import { ProductsPage }     from '@/pages/ProductsPage';
 import { ProductFormPage }  from '@/pages/ProductFormPage';
 import { LabelFormPage }    from '@/pages/LabelFormPage';
 import { LabelsPage }       from '@/pages/LabelsPage';
+import { UsersPage }        from '@/pages/UsersPage';
 import { TotemRoute }       from '@/components/totem/TotemShell';
 import { TotemLoginPage }   from '@/pages/totem/TotemLoginPage';
 import { TotemHomePage }    from '@/pages/totem/TotemHomePage';
@@ -29,10 +31,16 @@ export const router = createBrowserRouter([
     children: [
       { path: '/',                   element: <DashboardPage /> },
       { path: '/products',           element: <ProductsPage /> },
-      { path: '/products/new',       element: <ProductFormPage /> },
-      { path: '/products/:id/edit',  element: <ProductFormPage /> },
       { path: '/labels',             element: <LabelsPage /> },
       { path: '/labels/new',         element: <LabelFormPage /> },
+      {
+        element: <AdminRoute />,
+        children: [
+          { path: '/products/new',      element: <ProductFormPage /> },
+          { path: '/products/:id/edit', element: <ProductFormPage /> },
+          { path: '/users',             element: <UsersPage /> },
+        ],
+      },
     ],
   },
   {

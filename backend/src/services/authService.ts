@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../prisma/client';
 import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
-import { Errors } from '../utils/errors';
+import { AppError, Errors } from '../utils/errors';
 
 export const AuthService = {
   async login(email: string, password: string) {
@@ -30,6 +30,12 @@ export const AuthService = {
       accessToken:  signAccessToken(newPayload),
       refreshToken: signRefreshToken(newPayload),
     };
+  },
+
+  async verifyAdmin(email: string, password: string): Promise<void> {
+    const user = await prisma.user.findUnique({ where: { email } });
+    const valid = user?.active && user.role === 'ADMIN' && await bcrypt.compare(password, user.passwordHash);
+    if (!valid) throw new AppError('Credenciais de administrador inválidas.', 403, 'FORBIDDEN');
   },
 
   async hashPassword(plain: string): Promise<string> {

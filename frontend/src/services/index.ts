@@ -1,6 +1,6 @@
 import { api } from './api';
 import type {
-  ApiResponse, PaginatedResponse, AuthTokens, User,
+  ApiResponse, PaginatedResponse, AuthTokens, User, ManagedUser, CreateUserDTO,
   Product, CreateProductDTO, ProductFilters,
   Label, CreateLabelDTO, LabelPreview,
   DashboardStats,
@@ -14,8 +14,26 @@ export const authApi = {
   refresh: (refreshToken: string) =>
     api.post<ApiResponse<AuthTokens>>('/auth/refresh', { refreshToken }),
 
+  verifyAdmin: (email: string, password: string) =>
+    api.post<ApiResponse<{ valid: boolean }>>('/auth/verify-admin', { email, password }),
+
   me: () =>
     api.get<ApiResponse<User>>('/auth/me'),
+};
+
+// ── Users ───────────────────────────────────────────────
+export const userApi = {
+  list: () =>
+    api.get<ApiResponse<ManagedUser[]>>('/users'),
+
+  create: (data: CreateUserDTO) =>
+    api.post<ApiResponse<ManagedUser>>('/users', data),
+
+  update: (id: string, data: Partial<Omit<CreateUserDTO, 'password'>> & { active?: boolean }) =>
+    api.put<ApiResponse<ManagedUser>>(`/users/${id}`, data),
+
+  resetPassword: (id: string, password: string) =>
+    api.patch<ApiResponse<null>>(`/users/${id}/password`, { password }),
 };
 
 // ── Products ────────────────────────────────────────────

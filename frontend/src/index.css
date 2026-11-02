@@ -131,4 +131,5 @@ body.totem-mode {
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
 }
+body.totem-mode input { -webkit-user-select: text; user-select: text; }
 .totem-root button { touch-action: manipulation; }
