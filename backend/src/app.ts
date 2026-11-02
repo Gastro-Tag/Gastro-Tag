@@ -11,6 +11,14 @@ import { logger }       from './utils/logger';
 
 const app = express();
 
+// Quantos proxies confiáveis existem à frente da API. Sem isso, o limite de
+// tentativas vê todos os aparelhos como um só; valor maior permite forjar o IP.
+const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 0);
+if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0) {
+  throw new Error('TRUST_PROXY_HOPS deve ser um número inteiro maior ou igual a 0.');
+}
+app.set('trust proxy', trustProxyHops);
+
 // ── Security & parsing ────────────────────────────────────
 app.use(helmet());
 app.use(cors({

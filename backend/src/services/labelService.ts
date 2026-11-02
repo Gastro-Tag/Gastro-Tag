@@ -1,7 +1,7 @@
 ﻿import { Prisma, StorageType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
-import { generateShortCode } from '../utils/dateUtils';
+import { generateShortCode, kitchenToday } from '../utils/dateUtils';
 import { calculateDiscard, parseDateOnly } from '../domain/shelfLife';
 
 const capToOriginalExpiry = process.env.CAP_DISCARD_TO_ORIGINAL_EXPIRY !== 'false';
@@ -11,7 +11,8 @@ export interface LabelInput {
   userId: string;
   lot: string;
   responsibleName: string;
-  openedAt: string;
+  /** Sem valor, vale a data atual da cozinha, não o relógio do aparelho. */
+  openedAt?: string;
   storageType: 'REFRIGERADO' | 'CONGELADO';
   storageTemp: string;
 }
@@ -46,16 +47,19 @@ export const LabelService = {
       }
     }
 
+    const today = kitchenToday();
+    const openedAt = data.openedAt ?? today;
     const calculation = calculateDiscard({
-      openedAt: data.openedAt,
+      openedAt,
       shelfLifeDays,
       originalExpiryDate: product.originalExpiryDate,
       capToOriginalExpiry,
+      today,
     });
     return {
       product: { id: product.id, name: product.name, brand: product.brand },
       storageType: data.storageType,
-      openedAt: parseDateOnly(data.openedAt),
+      openedAt: parseDateOnly(openedAt),
       discardAt: calculation.discardAt,
       rule: rule ? {
         id: rule.id, shelfLifeDays: rule.shelfLifeDays, source: rule.source,

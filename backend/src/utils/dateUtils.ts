@@ -14,11 +14,6 @@ export function addDays(date: Date, days: number): Date {
   return result;
 }
 
-/** Calcula data de descarte com base na data de abertura e dias de validade */
-export function calcDiscardDate(openedAt: Date, days: number): Date {
-  return addDays(openedAt, days);
-}
-
 /** Retorna número de dias até a data (negativo = vencido) */
 export function daysUntil(date: Date): number {
   const now = kitchenToday();

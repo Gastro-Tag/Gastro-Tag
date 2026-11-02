@@ -11,7 +11,7 @@ const createSchema = z.object({
   productId:   z.string().uuid(),
   lot:         z.string().min(1).max(60),
   responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
-  openedAt:    dateSchema,
+  openedAt:    dateSchema.optional(),
   storageType: z.enum(['REFRIGERADO', 'CONGELADO']),
   storageTemp: z.string().min(1).max(40),
 });

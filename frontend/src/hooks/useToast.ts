@@ -8,11 +8,13 @@ export interface Toast {
   type:    ToastType;
 }
 
+let nextToastId = 0;
+
 export function useToast() {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const push = useCallback((message: string, type: ToastType = 'info') => {
-    const id = crypto.randomUUID();
+    const id = String(++nextToastId);
     setToasts((prev) => [...prev, { id, message, type }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
   }, []);

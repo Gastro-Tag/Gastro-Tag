@@ -3,15 +3,20 @@ import { AppError } from '../src/utils/errors';
 import { calculateDiscard, parseDateOnly } from '../src/domain/shelfLife';
 
 describe('calculateDiscard', () => {
-  it('soma o prazo à data de abertura', () => {
+  it('conta o dia da abertura como dia 1', () => {
     const result = calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 3, capToOriginalExpiry: false });
-    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-04');
+    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-03');
     expect(result.cappedByOriginalExpiry).toBe(false);
   });
 
+  it('com prazo de 1 dia, o descarte é no próprio dia da abertura', () => {
+    const result = calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 1, capToOriginalExpiry: false });
+    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-01');
+  });
+
   it('mantém a data calculada quando ela coincide com a validade original', () => {
-    const result = calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 3, originalExpiryDate: '2026-09-04', capToOriginalExpiry: true });
-    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-04');
+    const result = calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 3, originalExpiryDate: '2026-09-03', capToOriginalExpiry: true });
+    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-03');
     expect(result.cappedByOriginalExpiry).toBe(false);
   });
 
@@ -23,8 +28,28 @@ describe('calculateDiscard', () => {
 
   it('não trunca se a política está desativada', () => {
     const result = calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 7, originalExpiryDate: '2026-09-05', capToOriginalExpiry: false });
-    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-08');
+    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-07');
     expect(result.cappedByOriginalExpiry).toBe(false);
+  });
+
+  it('rejeita abertura futura em relação à data da cozinha', () => {
+    expect(() => calculateDiscard({ openedAt: '2026-09-02', shelfLifeDays: 3, capToOriginalExpiry: true, today: '2026-09-01' }))
+      .toThrowError('futura');
+  });
+
+  it('aceita etiqueta que vence no dia atual', () => {
+    const result = calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 3, capToOriginalExpiry: true, today: '2026-09-03' });
+    expect(result.discardAt.toISOString().slice(0, 10)).toBe('2026-09-03');
+  });
+
+  it('rejeita etiqueta que já nasceria vencida', () => {
+    expect(() => calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 3, capToOriginalExpiry: true, today: '2026-09-04' }))
+      .toThrowError('vencida');
+  });
+
+  it('rejeita etiqueta vencida também quando o teto da validade original é o limite', () => {
+    expect(() => calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays: 30, originalExpiryDate: '2026-09-02', capToOriginalExpiry: true, today: '2026-09-03' }))
+      .toThrowError('vencida');
   });
 
   it('rejeita abertura depois da validade original', () => {

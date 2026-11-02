@@ -29,7 +29,7 @@ export function printLabel(label: Label, logoUrl: string | null, copies = 1): vo
   const article = `
     <article class="print-label">
       <header class="print-header">
-        <span>Etiqueta de Identificação Sanitária</span>
+        <span>Etiqueta de Identificação</span>
         <span class="print-code">Cód: ${esc(label.shortCode)}</span>
       </header>
       <section class="print-content">

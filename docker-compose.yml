@@ -29,6 +29,7 @@ services:
       TZ: America/Manaus
       KITCHEN_TIME_ZONE: ${KITCHEN_TIME_ZONE:-America/Manaus}
       CAP_DISCARD_TO_ORIGINAL_EXPIRY: ${CAP_DISCARD_TO_ORIGINAL_EXPIRY:-true}
+      TRUST_PROXY_HOPS: 1
       DATABASE_URL: postgresql://${POSTGRES_USER:-gastrotag}:${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}@db:5432/${POSTGRES_DB:-gastrotag}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Defina JWT_ACCESS_SECRET no arquivo .env}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?Defina JWT_REFRESH_SECRET no arquivo .env}

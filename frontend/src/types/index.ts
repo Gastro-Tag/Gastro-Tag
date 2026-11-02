@@ -130,7 +130,8 @@ export interface CreateLabelDTO {
   productId:   string;
   lot:         string;
   responsibleName: string;
-  openedAt:    string;
+  /** Sem valor, o servidor usa a data atual da cozinha. */
+  openedAt?:   string;
   storageType: StorageType;
   storageTemp: string;
 }

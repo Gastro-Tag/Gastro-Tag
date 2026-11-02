@@ -42,7 +42,9 @@ api.interceptors.response.use(
           return accessToken;
         })
         .catch((refreshError) => {
-          logout();
+          // Só o servidor recusando o token encerra a sessão; queda de rede não desconecta.
+          const status = axios.isAxiosError(refreshError) ? refreshError.response?.status : undefined;
+          if (status === 401 || status === 403) logout();
           throw refreshError;
         })
         .finally(() => { refreshPromise = null; });
@@ -52,8 +54,8 @@ api.interceptors.response.use(
       const accessToken = await refreshPromise;
       original.headers.Authorization = `Bearer ${accessToken}`;
       return api(original);
-    } catch {
-      return Promise.reject(error);
+    } catch (refreshError) {
+      return Promise.reject(refreshError);
     }
   },
 );
@@ -61,12 +63,16 @@ api.interceptors.response.use(
 function logout() {
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
-  window.location.href = '/login';
+  localStorage.removeItem('gastrotag-auth');
+  window.location.href = window.location.pathname.startsWith('/totem') ? '/totem/login' : '/login';
 }
 
 export function extractError(err: unknown): string {
   if (axios.isAxiosError(err)) {
-    return (err.response?.data as any)?.error?.message ?? err.message;
+    if (!err.response) return 'Sem conexão com o servidor. Verifique a rede e tente novamente.';
+    const message = (err.response.data as any)?.error?.message;
+    if (message) return message;
+    return err.response.status >= 500 ? 'Servidor indisponível. Tente novamente em instantes.' : err.message;
   }
   return 'Erro desconhecido.';
 }
