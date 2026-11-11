@@ -678,6 +678,26 @@ describe('API integration flow', () => {
       await login(user.email, 'NewTestPassword456!');
     });
 
+    it('answers unknown e-mail, deactivated account and wrong password the same way', async () => {
+      const user = await newUser('enum');
+      await request(app).put(`/api/users/${user.id}`)
+        .set('Authorization', `Bearer ${accessToken}`).send({ active: false }).expect(200);
+      // IP próprio para não somar falhas ao limite dos outros testes de login.
+      const attempt = (body: object) => request(app).post('/api/auth/login')
+        .set('X-Forwarded-For', '203.0.113.77').send(body);
+
+      const answers = [
+        await attempt({ email: `inexistente-${suffix}@example.test`, password: 'TestPassword123!' }),
+        await attempt({ email: user.email, password: 'TestPassword123!' }),
+        await attempt({ email, password: 'WrongPassword123!' }),
+      ];
+      for (const res of answers) {
+        expect(res.status).toBe(401);
+        expect(res.body.success).toBe(false);
+        expect(res.body.error).toEqual({ message: 'E-mail ou senha incorretos.', code: 'INVALID_CREDENTIALS' });
+      }
+    });
+
     it('returns the same label when the same request is sent again', async () => {
       const send = (productId: string, requestId?: string) => request(app).post('/api/labels')
         .set('Authorization', `Bearer ${accessToken}`).send({

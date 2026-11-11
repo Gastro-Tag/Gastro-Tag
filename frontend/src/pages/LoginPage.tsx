@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Spinner } from '@/components/ui/Spinner';
+import { PasswordInput } from '@/components/ui/PasswordInput';
+import { ForgotPasswordHelp } from '@/components/ui/ForgotPasswordHelp';
 
 export function LoginPage() {
+  const passwordId = useId();
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
   const { login, isLoading, error, clearError } = useAuthStore();
@@ -73,20 +76,22 @@ export function LoginPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+              <label htmlFor={passwordId} className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
                 Senha de acesso
               </label>
               <div className="relative">
-                <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                <input
-                  type="password"
+                <Lock className="pointer-events-none absolute z-10 left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <PasswordInput
+                  id={passwordId}
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="input pl-10"
                   placeholder="••••••••"
                 />
               </div>
+              <ForgotPasswordHelp highlight={!!error} />
             </div>
 
             <button

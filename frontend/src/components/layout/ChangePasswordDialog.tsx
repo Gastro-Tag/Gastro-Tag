@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { authApi } from '@/services';
 import { extractError } from '@/services/api';
 import { Spinner } from '@/components/ui/Spinner';
+import { PasswordInput } from '@/components/ui/PasswordInput';
 import { useToastContext } from '@/components/ui/Toast';
 
 export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
@@ -27,6 +28,7 @@ export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const ids = { current: useId(), next: useId(), confirm: useId() };
   const field = 'block text-xs font-bold uppercase tracking-wider text-slate-500';
 
   return (
@@ -38,18 +40,18 @@ export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
           <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{error}</p>
         )}
 
-        <label className={field}>
-          Senha atual
-          <input type="password" required maxLength={72} autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="input mt-1.5" />
-        </label>
-        <label className={field}>
-          Nova senha (mínimo 12 caracteres)
-          <input type="password" required minLength={12} maxLength={72} autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="input mt-1.5" />
-        </label>
-        <label className={field}>
-          Confirme a nova senha
-          <input type="password" required minLength={12} maxLength={72} autoComplete="new-password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} className="input mt-1.5" />
-        </label>
+        <div>
+          <label htmlFor={ids.current} className={field}>Senha atual</label>
+          <PasswordInput id={ids.current} required maxLength={72} autoComplete="current-password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="input mt-1.5" />
+        </div>
+        <div>
+          <label htmlFor={ids.next} className={field}>Nova senha (mínimo 12 caracteres)</label>
+          <PasswordInput id={ids.next} required minLength={12} maxLength={72} autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="input mt-1.5" />
+        </div>
+        <div>
+          <label htmlFor={ids.confirm} className={field}>Confirme a nova senha</label>
+          <PasswordInput id={ids.confirm} required minLength={12} maxLength={72} autoComplete="new-password" value={confirmation} onChange={(e) => setConfirmation(e.target.value)} className="input mt-1.5" />
+        </div>
 
         <p className="text-xs text-slate-500">Este aparelho continua conectado; os outros precisarão entrar de novo.</p>
 

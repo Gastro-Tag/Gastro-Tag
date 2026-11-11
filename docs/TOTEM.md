@@ -1,6 +1,6 @@
 # Modo Totem — etiqueta em 2 toques
 
-Rota: `http://<servidor>/totem` (mesmo frontend e mesma API do painel).
+Rota: `http://<servidor>/totem` (mesmo frontend e mesma API do painel). A tela se adapta a celular (retrato e paisagem), tablet e telas grandes.
 
 ## Fluxo
 
@@ -24,7 +24,7 @@ Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. C
 | Lote | O lote cadastrado escolhido. Em outra embalagem, o teclado pede o lote impresso; se não estiver legível, registra `NÃO INFORMADO` |
 | Responsável | Escolhido uma vez por turno (expira em 10 h); nomes recentes em um toque |
 
-As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade da embalagem e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do tablet não define a data da etiqueta.
+As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade da embalagem e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do aparelho não define a data da etiqueta.
 
 ## Salvaguardas
 
@@ -41,7 +41,7 @@ As memórias ficam no `localStorage` do navegador do totem. A **data de abertura
 ## Instalação do totem
 
 1. No painel, em **Usuários**, crie uma conta OPERATOR só para o totem. Abra `http://<servidor>/totem` e faça o login **uma vez** com essa conta (não use uma conta ADMIN: ela daria poderes de gestão a quem está na bancada). A sessão se renova sozinha enquanto o totem for usado pelo menos 1 vez a cada 7 dias. Redefinir a senha, desativar a conta ou mudar o perfil dela desconecta o totem na hora, e ele volta para a tela de login.
-2. Defina a impressora de etiquetas como **padrão** do sistema e ajuste o tamanho do papel no driver.
+2. Defina a impressora de etiquetas como **padrão** do sistema e ajuste o tamanho do papel no driver. O totem imprime com o modelo de etiqueta salvo no aparelho (`localStorage`, chave `gastrotag_label_template`): escolha-o antes, no painel, na tela de gerar etiqueta, neste mesmo navegador. Modelos: folha A4 / comum (9 cm) e térmica 100×60 mm (todas as informações), térmica 60×40 mm (resumida) e 50×30 mm (mínima), que omitem informações; a descrição de cada um aparece na tela de gerar etiqueta. Na térmica o `@page` define o tamanho; o papel do driver deve ser do mesmo tamanho.
 3. Abra o navegador em modo quiosque com impressão direta (sem diálogo), exemplo no Windows:
 
 ```
@@ -57,6 +57,6 @@ Sem `--kiosk-printing` o Chrome mostra o diálogo de impressão e exige um toque
 - O responsável é um **nome digitado**, não uma conta: não há PIN por operador. Recomendado para o MVP (usuários + PIN).
 - A temperatura da etiqueta é a de armazenamento padrão/informada, não uma leitura de sensor.
 - A data de abertura é sempre a do dia; para outra data, use o painel administrativo.
-- O login do totem e a confirmação do administrador usam o teclado do sistema operacional.
-- Impressão pelo navegador; integração direta com impressora térmica continua fora do escopo do TCC.
+- O login do totem e a confirmação do administrador usam o teclado do sistema operacional; os campos de senha têm botão de olho e "Esqueci minha senha" (sem e-mail: a redefinição é feita por um administrador em Usuários → Senha).
+- Impressão pelo navegador; integração direta com impressora térmica continua fora do escopo do TCC. O modelo térmico ainda não foi testado em impressora física.
 - A etiqueta com "Quantidade" > 1 imprime cópias do mesmo registro (mesmo código), não registros separados.

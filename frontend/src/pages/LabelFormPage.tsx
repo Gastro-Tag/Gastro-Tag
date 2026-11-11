@@ -13,6 +13,9 @@ import { extractError } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
 import { createRequestKeeper } from '@/utils/requestId';
+import {
+  LABEL_TEMPLATES, getLabelTemplate, loadLabelTemplateId, saveLabelTemplateId, type LabelTemplateId,
+} from '@/utils/labelTemplates';
 
 const PACKAGE = 'embalagem';
 
@@ -30,6 +33,7 @@ export function LabelFormPage() {
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
+  const [templateId, setTemplateId] = useState<LabelTemplateId>(loadLabelTemplateId);
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
   const [dateFilled, setDateFilled] = useState(false);
   const [form, setForm] = useState({
@@ -170,6 +174,11 @@ export function LabelFormPage() {
   function removeLogo() {
     setLogoUrl(null);
     localStorage.removeItem('gastrotag_logo');
+  }
+
+  function chooseTemplate(id: LabelTemplateId) {
+    setTemplateId(id);
+    saveLabelTemplateId(id);
   }
 
   if (loading) return <PageLoader />;
@@ -389,6 +398,49 @@ export function LabelFormPage() {
                 <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handleLogoUpload} />
               </label>
             )}
+          </div>
+
+          {/* Modelo de etiqueta (por aparelho) */}
+          <div className="card p-5">
+            <p className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100 mb-3">
+              Modelo da Etiqueta
+            </p>
+            <div role="radiogroup" aria-label="Modelo da etiqueta" className="space-y-2">
+              {LABEL_TEMPLATES.map((template) => {
+                const selected = template.id === templateId;
+                const ratio = template.widthMm && template.heightMm ? template.widthMm / template.heightMm : 0.75;
+                return (
+                  <button
+                    key={template.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => chooseTemplate(template.id)}
+                    className={cn(
+                      'flex w-full min-h-[3.25rem] items-center gap-3 rounded-xl border p-3 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+                      selected ? 'border-brand-500 bg-orange-50/50' : 'border-slate-200 hover:border-slate-300'
+                    )}
+                  >
+                    <span className="flex h-12 w-16 shrink-0 items-center justify-center" aria-hidden="true">
+                      <span
+                        className={cn('block border-2 bg-white', selected ? 'border-brand-500' : 'border-slate-300')}
+                        style={ratio >= 1.2
+                          ? { width: '100%', aspectRatio: String(ratio), maxHeight: '100%' }
+                          : { height: '100%', aspectRatio: String(ratio) }}
+                      />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-xs font-bold text-slate-700">{template.name}</span>
+                      <span className="block text-[11px] text-slate-400">{template.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-[11px] text-slate-400">
+              Vale só para este aparelho, na impressão pelo painel e pelo totem. Em etiqueta térmica, escolha o mesmo
+              tamanho de papel na impressora ({getLabelTemplate(templateId).name}).
+            </p>
           </div>
 
           <button

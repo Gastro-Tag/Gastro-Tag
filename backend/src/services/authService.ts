@@ -4,13 +4,16 @@ import { AppError, Errors } from '../utils/errors';
 import { verifyRefreshToken } from '../utils/jwt';
 import { SessionService } from './sessionService';
 
+// Mesma mensagem para e-mail inexistente, conta desativada e senha errada: não revela quais contas existem.
+const invalidCredentials = () => new AppError('E-mail ou senha incorretos.', 401, 'INVALID_CREDENTIALS');
+
 export const AuthService = {
   async login(email: string, password: string) {
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !user.active) throw Errors.unauthorized();
+    if (!user || !user.active) throw invalidCredentials();
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) throw Errors.unauthorized();
+    if (!valid) throw invalidCredentials();
 
     const tokens = await SessionService.start(user);
     return {
