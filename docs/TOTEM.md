@@ -1,14 +1,16 @@
 # Modo Totem — etiqueta em 2 toques
 
-Rota: `http://<servidor>/totem` (mesmo frontend, mesma API, nenhum campo novo no banco).
+Rota: `http://<servidor>/totem` (mesmo frontend e mesma API do painel).
 
 ## Fluxo
 
 | Toque | Tela | O que acontece |
 |---|---|---|
 | 1 | Início | Toca no produto (mais usados primeiro; busca e categorias disponíveis) |
-| 2 | Etiqueta | Confere a data de descarte (já calculada pelo servidor) e toca **IMPRIMIR ETIQUETA** |
+| 2 | Etiqueta | Confere a embalagem e a data de descarte (calculada pelo servidor) e toca **IMPRIMIR ETIQUETA** |
 | — | Pronto | Confirmação + Reimprimir / Concluir; volta sozinho ao início em 10 s |
+
+Os 2 toques valem para produto com um único lote em uso. Se houver mais de um lote, nada vem marcado: o operador toca no lote da embalagem em mãos. Sem lote, ou com outra embalagem, toca em **Outra embalagem** e digita a validade impressa.
 
 Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. Cada cartão já mostra a data de descarte daquele armazenamento.
 
@@ -19,15 +21,17 @@ Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. C
 | Data de abertura | Hoje |
 | Armazenamento | Último usado para o produto neste totem; senão o primeiro disponível |
 | Temperatura | 4 °C (refrigerado) / -18 °C (congelado); editável por teclado numérico |
-| Lote | Último lote usado para o produto neste totem; senão `L` + data (ex.: `L20261023`); editável |
+| Lote | O lote cadastrado escolhido. Em outra embalagem, o teclado pede o lote impresso; se não estiver legível, registra `NÃO INFORMADO` |
 | Responsável | Escolhido uma vez por turno (expira em 10 h); nomes recentes em um toque |
 
-As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade do fabricante e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do tablet não define a data da etiqueta.
+As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade da embalagem e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do tablet não define a data da etiqueta.
 
 ## Salvaguardas
 
-- Produto **vencido** aparece em vermelho, no fim da lista, e não gera etiqueta.
-- Se a data for limitada pela validade do fabricante, o aviso aparece na tela antes de imprimir.
+- Lote **vencido** gera alerta, não aparece como opção e o produto só vai para o fim da lista se não tiver outro lote em uso.
+- Lote `SEM-LOTE`, criado na migração com a validade antiga do produto, nunca vem marcado: o operador confere a embalagem.
+- Validade digitada já vencida é recusada pelo servidor.
+- Se a data for limitada pela validade da embalagem, o aviso aparece na tela antes de imprimir.
 - Se a regra recusar a temperatura, a mensagem aparece no cartão do armazenamento.
 - O botão trava durante a geração (sem etiqueta duplicada por toque duplo).
 - Após 60 s sem toque, volta ao início (e limpa busca/filtros).

@@ -1,6 +1,6 @@
 import { cn } from '@/utils/cn';
 
-export type ProductStatus = 'valid' | 'expiring' | 'expired' | 'recent';
+export type ProductStatus = 'valid' | 'expiring' | 'expired' | 'recent' | 'no_lot';
 
 interface StatusBadgeProps {
   status: ProductStatus;
@@ -13,6 +13,7 @@ const config: Record<ProductStatus, { cls: string; dot: string; default: string 
   expiring: { cls: 'badge-expiring', dot: 'bg-amber-500',   default: 'Atenção' },
   expired:  { cls: 'badge-expired',  dot: 'bg-rose-500',    default: 'Crítico' },
   recent:   { cls: 'badge-recent',   dot: 'bg-sky-500',     default: 'Recente' },
+  no_lot:   { cls: 'bg-slate-100 text-slate-600', dot: 'bg-slate-400', default: 'Sem lote' },
 };
 
 export function StatusBadge({ status, label, className }: StatusBadgeProps) {

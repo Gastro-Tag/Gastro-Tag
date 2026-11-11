@@ -55,6 +55,11 @@ export function calculateDiscard(input: CalculateDiscardInput): CalculateDiscard
     throw Errors.validation('A data de abertura não pode ser futura.');
   }
 
+  // Vale mesmo com o teto desligado: embalagem vencida não gera etiqueta nova.
+  if (today && originalExpiryDate && originalExpiryDate.getTime() < today.getTime()) {
+    throw Errors.validation('Esta embalagem está vencida. Não use: descarte o produto.');
+  }
+
   if (originalExpiryDate && openedAt.getTime() > originalExpiryDate.getTime()) {
     throw Errors.validation('A data de abertura não pode ser posterior à validade original.');
   }

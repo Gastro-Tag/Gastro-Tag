@@ -37,11 +37,11 @@ async function seedAdmin(): Promise<void> {
 
 async function seedProducts(): Promise<void> {
   const products = [
-    { name: 'Leite Integral', brand: 'Nestlé', category: 'Laticínios', daysValidRefrigerated: 3, daysValidFrozen: 0, unit: 'L', originalExpiryDate: daysFromToday(45) },
-    { name: 'Frango Inteiro', brand: 'Sadia', category: 'Proteínas', daysValidRefrigerated: 2, daysValidFrozen: 90, unit: 'kg', originalExpiryDate: daysFromToday(60) },
-    { name: 'Molho de Tomate', brand: 'Heinz', category: 'Condimentos', daysValidRefrigerated: 7, daysValidFrozen: 60, unit: 'L', originalExpiryDate: daysFromToday(120) },
-    { name: 'Creme de Leite', brand: 'Piracanjuba', category: 'Laticínios', daysValidRefrigerated: 5, daysValidFrozen: 30, unit: 'L', originalExpiryDate: daysFromToday(90) },
-    { name: 'Manteiga sem Sal', brand: 'Aviação', category: 'Laticínios', daysValidRefrigerated: 30, daysValidFrozen: 120, unit: 'kg', originalExpiryDate: daysFromToday(180) },
+    { name: 'Leite Integral', brand: 'Nestlé', category: 'Laticínios', daysValidRefrigerated: 3, daysValidFrozen: 0, unit: 'L', lotExpiry: daysFromToday(45) },
+    { name: 'Frango Inteiro', brand: 'Sadia', category: 'Proteínas', daysValidRefrigerated: 2, daysValidFrozen: 90, unit: 'kg', lotExpiry: daysFromToday(60) },
+    { name: 'Molho de Tomate', brand: 'Heinz', category: 'Condimentos', daysValidRefrigerated: 7, daysValidFrozen: 60, unit: 'L', lotExpiry: daysFromToday(120) },
+    { name: 'Creme de Leite', brand: 'Piracanjuba', category: 'Laticínios', daysValidRefrigerated: 5, daysValidFrozen: 30, unit: 'L', lotExpiry: daysFromToday(90) },
+    { name: 'Manteiga sem Sal', brand: 'Aviação', category: 'Laticínios', daysValidRefrigerated: 30, daysValidFrozen: 120, unit: 'kg', lotExpiry: daysFromToday(180) },
   ];
 
   let created = 0;
@@ -51,7 +51,10 @@ async function seedProducts(): Promise<void> {
       select: { id: true },
     });
     if (existing) continue;
-    await prisma.product.create({ data: product });
+    const { lotExpiry, ...data } = product;
+    await prisma.product.create({
+      data: { ...data, lots: { create: { code: 'EXEMPLO-01', expiryDate: lotExpiry } } },
+    });
     created++;
   }
   console.info(`${created} produto(s) de exemplo criado(s); registros existentes preservados.`);

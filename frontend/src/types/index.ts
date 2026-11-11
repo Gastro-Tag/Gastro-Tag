@@ -46,15 +46,25 @@ export interface AuthTokens {
 }
 
 // ── Product ─────────────────────────────────────────────
-export type ProductStatus = 'all' | 'valid' | 'expiring' | 'expired' | 'recent';
+export type ProductStatus = 'all' | 'valid' | 'expiring' | 'expired' | 'recent' | 'no_lot';
 export type StorageType   = 'REFRIGERADO' | 'CONGELADO';
+
+export interface ProductLot {
+  id:              string;
+  productId:       string;
+  code:            string;
+  expiryDate:      string;  // ISO date string
+  daysUntilExpiry: number;
+  computedStatus:  'valid' | 'expiring' | 'expired';
+  /** Lote criado na migração: a validade antiga ainda precisa ser conferida. */
+  needsReview:     boolean;
+}
 
 export interface Product {
   id:                     string;
   name:                   string;
   brand:                  string;
   category?:              string;
-  originalExpiryDate:     string;  // ISO date string
   daysValidRefrigerated:  number;
   daysValidFrozen:        number;
   unit?:                  string;
@@ -63,16 +73,20 @@ export interface Product {
   createdAt:              string;
   updatedAt:              string;
   // computed
-  daysUntilExpiry:        number;
+  nextExpiryDate:         string | null;
+  daysUntilExpiry:        number | null;
+  expiredLotCount:        number;
+  pendingLotCount:        number;
   labelCount:             number;
-  computedStatus:         'valid' | 'expiring' | 'expired';
+  computedStatus:         'valid' | 'expiring' | 'expired' | 'no_lot';
+  /** Lotes ativos, do mais próximo de vencer ao mais distante. Só em `getById`. */
+  lots?:                  ProductLot[];
 }
 
 export interface CreateProductDTO {
   name:                   string;
   brand:                  string;
   category?:              string;
-  originalExpiryDate:     string;
   daysValidRefrigerated:  number;
   daysValidFrozen:        number;
   unit?:                  string;
@@ -101,6 +115,7 @@ export interface Label {
   discardAt:   string;
   storageType: StorageType;
   storageTemp: string;
+  lotId?: string | null;
   ruleId?: string | null;
   shelfLifeDays?: number;
   originalExpiryDate?: string;
@@ -119,6 +134,7 @@ export interface Label {
 export interface LabelPreview {
   product: Pick<Product, 'id' | 'name' | 'brand'>;
   storageType: StorageType;
+  lot: { id: string; code: string } | null;
   openedAt: string;
   discardAt: string;
   rule: { id: string | null; shelfLifeDays: number; source: string; observation?: string | null };
@@ -126,15 +142,24 @@ export interface LabelPreview {
   cappedByOriginalExpiry: boolean;
 }
 
-export interface CreateLabelDTO {
+/** A validade vem de um lote cadastrado ou da embalagem em mãos. */
+export type ExpirySource =
+  | { lotId: string; originalExpiryDate?: undefined }
+  | { lotId?: undefined; originalExpiryDate: string };
+
+export type LabelPreviewDTO = ExpirySource & {
   productId:   string;
-  lot:         string;
-  responsibleName: string;
   /** Sem valor, o servidor usa a data atual da cozinha. */
   openedAt?:   string;
   storageType: StorageType;
   storageTemp: string;
-}
+};
+
+export type CreateLabelDTO = LabelPreviewDTO & {
+  /** Só para embalagem avulsa: lote cadastrado já traz o código. */
+  lot?:        string;
+  responsibleName: string;
+};
 
 // ── Dashboard ───────────────────────────────────────────
 export interface DashboardStats {

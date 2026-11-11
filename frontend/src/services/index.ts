@@ -1,8 +1,8 @@
 import { api } from './api';
 import type {
   ApiResponse, PaginatedResponse, AuthTokens, User, ManagedUser, CreateUserDTO,
-  Product, CreateProductDTO, ProductFilters,
-  Label, CreateLabelDTO, LabelPreview,
+  Product, ProductLot, CreateProductDTO, ProductFilters,
+  Label, CreateLabelDTO, LabelPreview, LabelPreviewDTO,
   DashboardStats,
 } from '@/types';
 
@@ -57,6 +57,18 @@ export const productApi = {
     api.get<ApiResponse<string[]>>('/products/categories'),
 };
 
+// ── Lots ────────────────────────────────────────────────
+export const lotApi = {
+  create: (productId: string, data: { code: string; expiryDate: string }) =>
+    api.post<ApiResponse<ProductLot>>(`/products/${productId}/lots`, data),
+
+  update: (productId: string, lotId: string, data: { code?: string; expiryDate?: string }) =>
+    api.put<ApiResponse<ProductLot>>(`/products/${productId}/lots/${lotId}`, data),
+
+  remove: (productId: string, lotId: string) =>
+    api.delete<ApiResponse<ProductLot>>(`/products/${productId}/lots/${lotId}`),
+};
+
 // ── Labels ──────────────────────────────────────────────
 export const labelApi = {
   list: (params?: {
@@ -65,7 +77,7 @@ export const labelApi = {
   }) =>
     api.get<PaginatedResponse<Label>>('/labels', { params }),
 
-  preview: (data: Omit<CreateLabelDTO, 'lot' | 'responsibleName'>) =>
+  preview: (data: LabelPreviewDTO) =>
     api.post<ApiResponse<LabelPreview>>('/labels/preview', data),
 
   getById: (id: string) =>

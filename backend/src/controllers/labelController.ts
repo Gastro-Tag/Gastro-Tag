@@ -7,16 +7,29 @@ const dateSchema = z.string().refine((value) => {
   try { parseDateOnly(value); return true; } catch { return false; }
 }, 'Informe uma data real no formato YYYY-MM-DD.');
 
-const createSchema = z.object({
+const labelFields = z.object({
   productId:   z.string().uuid(),
-  lot:         z.string().min(1).max(60),
-  responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
+  lotId:       z.string().uuid().optional(),
+  originalExpiryDate: dateSchema.optional(),
   openedAt:    dateSchema.optional(),
   storageType: z.enum(['REFRIGERADO', 'CONGELADO']),
   storageTemp: z.string().min(1).max(40),
 });
 
-const previewSchema = createSchema.omit({ lot: true, responsibleName: true });
+// A validade vem de um lote cadastrado ou da embalagem em mãos, nunca dos dois.
+const oneExpirySource = (data: { lotId?: string; originalExpiryDate?: string }) =>
+  Boolean(data.lotId) !== Boolean(data.originalExpiryDate);
+const expirySourceError = { message: 'Escolha um lote ou informe a validade da embalagem.' };
+
+const previewSchema = labelFields.refine(oneExpirySource, expirySourceError);
+
+const createSchema = labelFields.extend({
+  lot: z.string().trim().min(1).max(60).refine((value) => !value.includes('\u0000'), 'Lote inválido.').optional(),
+  responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
+}).refine(oneExpirySource, expirySourceError)
+  .refine((data) => (data.lotId ? !data.lot : Boolean(data.lot)), {
+    message: 'Informe o lote da embalagem.',
+  });
 const listSchema = z.object({
   productId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),

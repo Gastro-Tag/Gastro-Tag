@@ -2,6 +2,7 @@ import { Request, Response, Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { AuthController } from '../controllers/authController';
 import { ProductController } from '../controllers/productController';
+import { LotController } from '../controllers/lotController';
 import { LabelController } from '../controllers/labelController';
 import { DashboardController } from '../controllers/dashboardController';
 import { UserController } from '../controllers/userController';
@@ -55,6 +56,9 @@ router.get('/products/:id', authenticate, ProductController.getById);
 router.post('/products', authenticate, requireAdmin, ProductController.create);
 router.put('/products/:id', authenticate, requireAdmin, ProductController.update);
 router.delete('/products/:id', authenticate, requireAdmin, ProductController.remove);
+router.post('/products/:id/lots', authenticate, requireAdmin, LotController.create);
+router.put('/products/:id/lots/:lotId', authenticate, requireAdmin, LotController.update);
+router.delete('/products/:id/lots/:lotId', authenticate, requireAdmin, LotController.remove);
 
 router.get('/labels', authenticate, LabelController.list);
 router.get('/labels/:id', authenticate, LabelController.getById);

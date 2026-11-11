@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus, Search, Filter, RefreshCw, Trash2, Tag,
   Package, ChevronDown, Utensils, Refrigerator, Snowflake, Calendar,
-  Edit2
+  Edit2, Boxes
 } from 'lucide-react';
 import { productApi } from '@/services';
 import type { Product, ProductFilters, ProductStatus } from '@/types';
@@ -14,7 +14,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { InlineLoader } from '@/components/ui/Spinner';
 import { useToastContext } from '@/components/ui/Toast';
 import { useDebounce }   from '@/hooks/useDebounce';
-import { formatBR, daysUntilLabel } from '@/utils/date';
+import { formatBR, productStatusLabel } from '@/utils/date';
 import { cn } from '@/utils/cn';
 import { extractError } from '@/services/api';
 import { useAuthStore } from '@/store/authStore';
@@ -25,6 +25,7 @@ const statusTabs: { value: ProductStatus; label: string }[] = [
   { value: 'valid',    label: 'Válidos (OK)' },
   { value: 'expiring', label: 'Próx. Vencimento' },
   { value: 'expired',  label: 'Vencidos / Crítico' },
+  { value: 'no_lot',   label: 'Sem Lote' },
   { value: 'recent',   label: 'Recentes' },
 ];
 
@@ -260,6 +261,7 @@ export function ProductsPage() {
                 product={p}
                 onLabel={() => navigate(`/labels/new?productId=${p.id}`)}
                 onEdit={() => navigate(`/products/${p.id}/edit`)}
+                onLots={() => navigate(`/products/${p.id}/lots`)}
                 onDelete={() => setToDelete(p)}
               />
             ))}
@@ -283,10 +285,11 @@ export function ProductsPage() {
 }
 
 // ── Product Card Component (Matching Reference) ─────────
-function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
+function ProductCard({ product: p, onLabel, onEdit, onLots, onDelete }: {
   product:  Product;
   onLabel:  () => void;
   onEdit:   () => void;
+  onLots:   () => void;
   onDelete: () => void;
 }) {
   const isAdmin = useAuthStore((state) => state.user?.role === 'ADMIN');
@@ -295,6 +298,7 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
   const iconStyle =
     p.computedStatus === 'expired'  ? 'bg-rose-50 text-rose-600 border border-rose-100' :
     p.computedStatus === 'expiring' ? 'bg-amber-50 text-amber-600 border border-amber-100' :
+    p.computedStatus === 'no_lot'   ? 'bg-slate-100 text-slate-500 border border-slate-200' :
     'bg-emerald-50 text-emerald-600 border border-emerald-100';
 
   return (
@@ -313,7 +317,7 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
             </h3>
             <StatusBadge
               status={p.computedStatus}
-              label={daysUntilLabel(p.daysUntilExpiry)}
+              label={productStatusLabel(p)}
             />
           </div>
 
@@ -326,7 +330,9 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
           <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
             <span className="inline-flex items-center gap-1.5">
               <Calendar className="w-3.5 h-3.5 text-slate-400" />
-              <span>Val. Original: <strong className="text-charcoal-800">{formatBR(p.originalExpiryDate)}</strong></span>
+              {p.nextExpiryDate
+                ? <span>Próx. validade: <strong className="text-charcoal-800">{formatBR(p.nextExpiryDate)}</strong></span>
+                : <span>{p.computedStatus === 'no_lot' ? 'Nenhum lote em uso' : 'Todos os lotes vencidos'}</span>}
             </span>
 
             {p.daysValidRefrigerated > 0 && (
@@ -340,6 +346,12 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
               <span className="inline-flex items-center gap-1 text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md text-[11px] font-semibold border border-indigo-100">
                 <Snowflake className="w-3 h-3" />
                 <span>Cong.: {p.daysValidFrozen}d</span>
+              </span>
+            )}
+
+            {p.pendingLotCount > 0 && (
+              <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md text-[11px] font-semibold border border-amber-200">
+                Lote a revisar
               </span>
             )}
 
@@ -359,6 +371,17 @@ function ProductCard({ product: p, onLabel, onEdit, onDelete }: {
           <Tag className="w-3.5 h-3.5" />
           <span>Etiquetar</span>
         </button>
+
+        {isAdmin && (
+          <button
+            onClick={onLots}
+            className="btn btn-outline btn-sm px-3 text-slate-600"
+            title="Lotes do produto"
+          >
+            <Boxes className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Lotes</span>
+          </button>
+        )}
 
         {isAdmin && (
           <button

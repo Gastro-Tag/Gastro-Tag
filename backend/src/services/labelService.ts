@@ -3,13 +3,17 @@ import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import { generateShortCode, kitchenToday } from '../utils/dateUtils';
 import { calculateDiscard, parseDateOnly } from '../domain/shelfLife';
+import { LotService } from './lotService';
 
 const capToOriginalExpiry = process.env.CAP_DISCARD_TO_ORIGINAL_EXPIRY !== 'false';
 
 export interface LabelInput {
   productId: string;
   userId: string;
-  lot: string;
+  /** Lote cadastrado. Sem ele, valem `lot` e `originalExpiryDate` da embalagem em mãos. */
+  lotId?: string;
+  lot?: string;
+  originalExpiryDate?: string;
   responsibleName: string;
   /** Sem valor, vale a data atual da cozinha, não o relógio do aparelho. */
   openedAt?: string;
@@ -21,6 +25,11 @@ export const LabelService = {
   async preview(data: Omit<LabelInput, 'userId' | 'lot' | 'responsibleName'>) {
     const product = await prisma.product.findUnique({ where: { id: data.productId, active: true } });
     if (!product) throw Errors.notFound('Produto');
+
+    const lot = data.lotId ? await LotService.findActiveLot(product.id, data.lotId) : null;
+    const expiry = lot?.expiryDate ?? data.originalExpiryDate;
+    if (!expiry) throw Errors.validation('Escolha um lote ou informe a validade da embalagem.');
+    const originalExpiryDate = parseDateOnly(expiry, 'Validade original');
 
     const rule = await prisma.shelfLifeRule.findFirst({
       where: { active: true, productId: product.id, storageType: data.storageType as StorageType },
@@ -52,26 +61,29 @@ export const LabelService = {
     const calculation = calculateDiscard({
       openedAt,
       shelfLifeDays,
-      originalExpiryDate: product.originalExpiryDate,
+      originalExpiryDate,
       capToOriginalExpiry,
       today,
     });
     return {
       product: { id: product.id, name: product.name, brand: product.brand },
       storageType: data.storageType,
+      lot: lot ? { id: lot.id, code: lot.code } : null,
       openedAt: parseDateOnly(openedAt),
       discardAt: calculation.discardAt,
       rule: rule ? {
         id: rule.id, shelfLifeDays: rule.shelfLifeDays, source: rule.source,
         observation: rule.observation, minTemperature: rule.minTemperature, maxTemperature: rule.maxTemperature,
       } : { id: null, shelfLifeDays, source: 'Prazo cadastrado no produto', observation: null },
-      originalExpiryDate: product.originalExpiryDate,
+      originalExpiryDate,
       cappedByOriginalExpiry: calculation.cappedByOriginalExpiry,
     };
   },
 
   async create(data: LabelInput) {
     const preview = await LabelService.preview(data);
+    const lot = preview.lot?.code ?? data.lot;
+    if (!lot) throw Errors.validation('Informe o lote da embalagem.');
     let shortCode = '';
     for (let attempt = 0; attempt < 10; attempt++) {
       shortCode = generateShortCode();
@@ -80,7 +92,7 @@ export const LabelService = {
     }
     return prisma.label.create({
       data: {
-        shortCode, productId: data.productId, userId: data.userId, lot: data.lot,
+        shortCode, productId: data.productId, userId: data.userId, lot, lotId: preview.lot?.id,
         openedAt: preview.openedAt, discardAt: preview.discardAt,
         storageType: data.storageType as StorageType, storageTemp: data.storageTemp,
         ruleId: preview.rule.id, shelfLifeDays: preview.rule.shelfLifeDays,

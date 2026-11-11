@@ -57,6 +57,11 @@ describe('calculateDiscard', () => {
       .toThrowError(AppError);
   });
 
+  it.each([true, false])('recusa embalagem vencida com o teto %s', (capToOriginalExpiry) => {
+    expect(() => calculateDiscard({ openedAt: '2026-08-25', shelfLifeDays: 30, originalExpiryDate: '2026-08-30', capToOriginalExpiry, today: '2026-09-02' }))
+      .toThrowError('vencida');
+  });
+
   it.each([0, -1, 1.5])('rejeita prazo inválido: %s', (shelfLifeDays) => {
     expect(() => calculateDiscard({ openedAt: '2026-09-01', shelfLifeDays, capToOriginalExpiry: true }))
       .toThrowError(AppError);

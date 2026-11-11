@@ -5,6 +5,7 @@ import { LoginPage }        from '@/pages/LoginPage';
 import { DashboardPage }    from '@/pages/DashboardPage';
 import { ProductsPage }     from '@/pages/ProductsPage';
 import { ProductFormPage }  from '@/pages/ProductFormPage';
+import { ProductLotsPage }  from '@/pages/ProductLotsPage';
 import { LabelFormPage }    from '@/pages/LabelFormPage';
 import { LabelsPage }       from '@/pages/LabelsPage';
 import { UsersPage }        from '@/pages/UsersPage';
@@ -38,6 +39,7 @@ export const router = createBrowserRouter([
         children: [
           { path: '/products/new',      element: <ProductFormPage /> },
           { path: '/products/:id/edit', element: <ProductFormPage /> },
+          { path: '/products/:id/lots', element: <ProductLotsPage /> },
           { path: '/users',             element: <UsersPage /> },
         ],
       },

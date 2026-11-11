@@ -12,6 +12,8 @@ interface KeyboardSheetProps {
   required?: boolean;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Como mostrar o texto digitado (ex.: barras em uma data). */
+  displayValue?: (value: string) => string;
   /** Chamado a cada toque (ex.: filtrar a lista enquanto digita). */
   onLiveChange?: (value: string) => void;
   onCancel: () => void;
@@ -22,7 +24,7 @@ interface KeyboardSheetProps {
 export function KeyboardSheet({
   title, hint, placeholder, initialValue = '', layout = 'text', capitalize = 'none',
   maxLength = 60, required = true, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar',
-  onLiveChange, onCancel, onConfirm,
+  displayValue, onLiveChange, onCancel, onConfirm,
 }: KeyboardSheetProps) {
   const [draft, setDraft] = useState(initialValue);
   const [error, setError] = useState('');
@@ -49,7 +51,7 @@ export function KeyboardSheet({
         </div>
 
         <div className="mb-3 min-h-[72px] break-all rounded-2xl border-2 border-brand-500 bg-white px-5 py-3 text-3xl font-extrabold text-charcoal-800">
-          {draft || <span className="font-semibold text-slate-300">{placeholder}</span>}
+          {draft ? (displayValue?.(draft) ?? draft) : <span className="font-semibold text-slate-300">{placeholder}</span>}
           <span className="ml-0.5 inline-block h-8 w-0.5 animate-pulse bg-brand-500 align-middle" />
         </div>
 

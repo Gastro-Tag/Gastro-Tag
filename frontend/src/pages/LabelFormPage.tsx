@@ -5,13 +5,15 @@ import {
   Refrigerator, Snowflake, CheckCircle2, User, Hash, Calendar, Thermometer
 } from 'lucide-react';
 import { productApi, labelApi } from '@/services';
-import type { LabelPreview, Product, StorageType } from '@/types';
+import type { ExpirySource, LabelPreview, Product, ProductLot, StorageType } from '@/types';
 import { useToastContext } from '@/components/ui/Toast';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
 import { formatBR } from '@/utils/date';
 import { extractError } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
+
+const PACKAGE = 'embalagem';
 
 export function LabelFormPage() {
   const [searchParams] = useSearchParams();
@@ -29,7 +31,8 @@ export function LabelFormPage() {
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
   const [dateFilled, setDateFilled] = useState(false);
   const [form, setForm] = useState({
-    lot: '', responsibleName: '', openedAt: '', storageType: '' as StorageType | '', storageTemp: '',
+    source: '', lot: '', originalExpiryDate: '',
+    responsibleName: '', openedAt: '', storageType: '' as StorageType | '', storageTemp: '',
   });
 
   useEffect(() => {
@@ -40,6 +43,11 @@ export function LabelFormPage() {
         if (!active) return;
         const nextProduct = data.data;
         setProduct(nextProduct);
+        // Com mais de um lote, quem está com a embalagem na mão escolhe.
+        const usable = usableLots(nextProduct);
+        const single = usable.length === 1 && !usable[0].needsReview;
+        const source = single ? usable[0].id : usable.length === 0 ? PACKAGE : '';
+        setForm((value) => ({ ...value, source }));
         if (nextProduct.daysValidRefrigerated > 0) {
           setForm((value) => ({ ...value, storageType: 'REFRIGERADO', storageTemp: '4 °C' }));
         } else if (nextProduct.daysValidFrozen > 0) {
@@ -53,10 +61,18 @@ export function LabelFormPage() {
     return () => { active = false; };
   }, [productId, navigate, toast]);
 
+  const isPackage = form.source === PACKAGE;
+  const lots = useMemo(() => (product ? usableLots(product) : []), [product]);
+  const expiredLots = useMemo(() => (product?.lots ?? []).filter((lot) => lot.computedStatus === 'expired' && !lot.needsReview), [product]);
+  const selectedLot = lots.find((lot) => lot.id === form.source);
+
   const requestKey = useMemo(() => JSON.stringify([
-    productId, form.openedAt, form.storageType, form.storageTemp.trim(),
-  ]), [productId, form.openedAt, form.storageType, form.storageTemp]);
-  const previewReady = Boolean(form.storageType && form.storageTemp.trim() && (form.openedAt || !dateFilled));
+    productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, form.storageTemp.trim(),
+  ]), [productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, form.storageTemp]);
+  const previewReady = Boolean(
+    form.source && (!isPackage || form.originalExpiryDate)
+    && form.storageType && form.storageTemp.trim() && (form.openedAt || !dateFilled),
+  );
   const previewMatchesForm = preview?.requestKey === requestKey;
 
   useEffect(() => {
@@ -72,6 +88,7 @@ export function LabelFormPage() {
       setPreviewError('');
       try {
         const { data } = await labelApi.preview({
+          ...expirySource(form.source, form.originalExpiryDate),
           productId, openedAt: form.openedAt || undefined,
           storageType: form.storageType as StorageType,
           storageTemp: form.storageTemp.trim(),
@@ -90,9 +107,9 @@ export function LabelFormPage() {
       }
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [product, productId, form.openedAt, form.storageType, form.storageTemp, previewReady, requestKey, dateFilled]);
+  }, [product, productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, form.storageTemp, previewReady, requestKey, dateFilled]);
 
-  function setField(field: 'lot' | 'responsibleName' | 'openedAt' | 'storageType' | 'storageTemp', value: string) {
+  function setField(field: 'source' | 'lot' | 'originalExpiryDate' | 'responsibleName' | 'openedAt' | 'storageType' | 'storageTemp', value: string) {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
@@ -103,8 +120,9 @@ export function LabelFormPage() {
     let createdLabel: import('@/types').Label | null = null;
     try {
       const { data } = await labelApi.create({
+        ...expirySource(form.source, form.originalExpiryDate),
         productId,
-        lot: form.lot.trim(),
+        lot: isPackage ? form.lot.trim() : undefined,
         responsibleName: form.responsibleName.trim(),
         openedAt: form.openedAt,
         storageType: form.storageType,
@@ -185,35 +203,78 @@ export function LabelFormPage() {
               </h2>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label="Número do Lote" required>
-                <div className="relative">
-                  <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input
-                    value={form.lot}
-                    onChange={(e) => setField('lot', e.target.value)}
-                    className="input pl-10"
-                    placeholder="Ex: LOTE-2026-10"
-                    required
-                    maxLength={60}
-                  />
-                </div>
-              </Field>
+            {expiredLots.length > 0 && (
+              <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-rose-200 bg-rose-50 text-xs font-medium text-rose-800">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>
+                  {expiredLots.map((lot) => `Lote ${lot.code} venceu em ${formatBR(lot.expiryDate)}`).join('; ')}. Não use: descarte.
+                </span>
+              </div>
+            )}
 
-              <Field label="Responsável pela Manipulação" required>
-                <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <input
-                    value={form.responsibleName}
-                    onChange={(e) => setField('responsibleName', e.target.value)}
-                    className="input pl-10"
-                    placeholder="Nome completo do manipulador"
-                    required
-                    maxLength={100}
-                  />
-                </div>
-              </Field>
-            </div>
+            <Field label="Embalagem em Mãos" required>
+              <select
+                value={form.source}
+                onChange={(e) => setField('source', e.target.value)}
+                className="input"
+                required
+              >
+                {lots.length > 0 && !(lots.length === 1 && !lots[0].needsReview) && (
+                  <option value="">Selecione o lote da embalagem</option>
+                )}
+                {lots.map((lot) => (
+                  <option key={lot.id} value={lot.id}>
+                    Lote {lot.code} — validade {formatBR(lot.expiryDate)}{lot.needsReview ? ' (confira na embalagem)' : ''}
+                  </option>
+                ))}
+                <option value={PACKAGE}>Outra embalagem: informar validade</option>
+              </select>
+            </Field>
+
+            {isPackage && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Field label="Número do Lote" required>
+                  <div className="relative">
+                    <Hash className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      value={form.lot}
+                      onChange={(e) => setField('lot', e.target.value)}
+                      className="input pl-10"
+                      placeholder="Ex: LOTE-2026-10"
+                      required
+                      maxLength={60}
+                    />
+                  </div>
+                </Field>
+
+                <Field label="Validade Impressa na Embalagem" required>
+                  <div className="relative">
+                    <Calendar className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <input
+                      type="date"
+                      value={form.originalExpiryDate}
+                      onChange={(e) => setField('originalExpiryDate', e.target.value)}
+                      className="input pl-10"
+                      required
+                    />
+                  </div>
+                </Field>
+              </div>
+            )}
+
+            <Field label="Responsável pela Manipulação" required>
+              <div className="relative">
+                <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                <input
+                  value={form.responsibleName}
+                  onChange={(e) => setField('responsibleName', e.target.value)}
+                  className="input pl-10"
+                  placeholder="Nome completo do manipulador"
+                  required
+                  maxLength={100}
+                />
+              </div>
+            </Field>
 
             <Field label="Data de Abertura / Preparo" required>
               <div className="relative max-w-sm">
@@ -367,7 +428,7 @@ export function LabelFormPage() {
           <div className="p-6 rounded-3xl border-2 border-dashed border-slate-200 bg-slate-100/60 flex justify-center">
             <LabelPreviewCard
               product={product}
-              lot={form.lot}
+              lot={selectedLot?.code ?? form.lot}
               responsibleName={form.responsibleName}
               openedAt={form.openedAt}
               storageType={form.storageType}
@@ -390,6 +451,14 @@ export function LabelFormPage() {
       </div>
     </div>
   );
+}
+
+function usableLots(product: Product): ProductLot[] {
+  return (product.lots ?? []).filter((lot) => lot.computedStatus !== 'expired');
+}
+
+function expirySource(source: string, originalExpiryDate: string): ExpirySource {
+  return source === PACKAGE ? { originalExpiryDate } : { lotId: source };
 }
 
 // ── Preview Card Component ─────────────────────────────
