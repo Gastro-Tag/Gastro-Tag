@@ -159,6 +159,8 @@ export type CreateLabelDTO = LabelPreviewDTO & {
   /** Só para embalagem avulsa: lote cadastrado já traz o código. */
   lot?:        string;
   responsibleName: string;
+  /** Igual em cada reenvio do mesmo pedido: o servidor devolve a etiqueta já criada. */
+  requestId?:  string;
 };
 
 // ── Dashboard ───────────────────────────────────────────

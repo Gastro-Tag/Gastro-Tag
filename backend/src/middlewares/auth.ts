@@ -16,13 +16,21 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
   if (!auth?.startsWith('Bearer ')) throw Errors.unauthorized();
 
   const payload = verifyAccessToken(auth.slice(7));
-  const user = await prisma.user.findUnique({
-    where: { id: payload.sub },
-    select: { id: true, name: true, role: true, active: true },
+  // Sessão encerrada (saída, troca de senha, conta desativada) derruba o token na hora.
+  const session = await prisma.userSession.findUnique({
+    where: { id: payload.sid },
+    select: {
+      revokedAt: true, expiresAt: true,
+      user: { select: { id: true, name: true, role: true, active: true } },
+    },
   });
-  if (!user?.active) throw Errors.unauthorized();
+  if (!session || session.revokedAt || session.expiresAt <= new Date()
+    || session.user.id !== payload.sub || !session.user.active) {
+    throw Errors.unauthorized();
+  }
 
-  req.user = { sub: user.id, name: user.name, role: user.role, type: 'access' };
+  const { user } = session;
+  req.user = { sub: user.id, name: user.name, role: user.role, sid: payload.sid, type: 'access' };
   next();
 }
 

@@ -56,7 +56,8 @@ export function ProductsPage() {
 
   // ── Load categories once ───────────────────────────────
   useEffect(() => {
-    productApi.getCategories().then((r) => setCategories(r.data.data));
+    // Sem categorias o filtro só fica vazio; sessão encerrada já leva ao login.
+    productApi.getCategories().then((r) => setCategories(r.data.data)).catch(() => undefined);
   }, []);
 
   // ── Fetch ──────────────────────────────────────────────
@@ -85,10 +86,12 @@ export function ProductsPage() {
       const res = await productApi.list(filters);
       setProducts(res.data.data);
       setMeta({ total: res.data.meta.total, totalPages: res.data.meta.totalPages, page: res.data.meta.page });
+    } catch (err) {
+      toast(extractError(err), 'error');
     } finally {
       setLoading(false);
     }
-  }, [debouncedSearch, status, storage, category, sort, order, page, setParams]);
+  }, [debouncedSearch, status, storage, category, sort, order, page, setParams, toast]);
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
 

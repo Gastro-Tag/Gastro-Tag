@@ -80,7 +80,9 @@ O frontend usa `/api` como URL base. No desenvolvimento, o Vite encaminha `/api`
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/auth/login` | Entrar |
-| POST | `/api/auth/refresh` | Renovar tokens |
+| POST | `/api/auth/refresh` | Renovar tokens (cada renovação troca o refresh token) |
+| POST | `/api/auth/logout` | Encerrar a sessão deste aparelho (recebe o refresh token) |
+| PATCH | `/api/auth/password` | Trocar a própria senha e encerrar as outras sessões |
 | GET | `/api/auth/me` | Consultar usuário autenticado |
 | POST | `/api/auth/verify-admin` | Confirmar credenciais de administrador (usada pelo totem) |
 | GET | `/api/users` | Listar usuários (ADMIN) |
@@ -95,7 +97,7 @@ O frontend usa `/api` como URL base. No desenvolvimento, o Vite encaminha `/api`
 | DELETE | `/api/products/:id` | Desativar produto (ADMIN) |
 | GET | `/api/labels` | Consultar histórico |
 | POST | `/api/labels/preview` | Pré-visualizar o cálculo de descarte |
-| POST | `/api/labels` | Gerar etiqueta |
+| POST | `/api/labels` | Gerar etiqueta (`requestId` opcional: reenviar o mesmo pedido devolve a mesma etiqueta) |
 | GET | `/api/labels/:id` | Consultar etiqueta |
 | PATCH | `/api/labels/:id/print` | Registrar impressão |
 | GET | `/api/dashboard/stats` | Consultar indicadores |

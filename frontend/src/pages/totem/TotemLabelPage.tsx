@@ -17,6 +17,7 @@ import {
   getLastStorage, getOperator, parseDateDraft, rememberChoices, temperatureDraft, weekdayShort,
 } from '@/utils/totem';
 import { cn } from '@/utils/cn';
+import { createRequestKeeper } from '@/utils/requestId';
 
 const ALL_STORAGES: StorageType[] = ['REFRIGERADO', 'CONGELADO'];
 const SUCCESS_SECONDS = 10;
@@ -55,6 +56,7 @@ export function TotemLabelPage() {
   const [done, setDone] = useState<Done | null>(null);
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
+  const [requests] = useState(createRequestKeeper);
 
   // Produto + armazenamento do último uso. Com mais de um lote, quem está com a embalagem escolhe.
   useEffect(() => {
@@ -139,16 +141,18 @@ export function TotemLabelPage() {
     setSubmitError('');
     let created: Label | null = null;
     try {
-      const { data } = await labelApi.create({
+      const payload = {
         ...source,
         productId: product.id,
         lot: isPackage ? lot.trim() : undefined,
         responsibleName: responsible,
         storageType: storage,
         storageTemp: temps[storage],
-      });
+      };
+      const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
       const label: Label = data.data;
       created = label;
+      requests.reset(); // a próxima etiqueta, mesmo igual, é outro pedido
       rememberChoices(product.id, storage);
       printLabel(label, logo(), copies);
       await registerPrints(label, copies);

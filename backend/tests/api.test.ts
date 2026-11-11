@@ -595,4 +595,111 @@ describe('API integration flow', () => {
     const anonymous = await request(app).post('/api/auth/verify-admin').send({ email, password: 'TestPassword123!' });
     expect(anonymous.status).toBe(401);
   });
+
+  describe('sessions', () => {
+    const newUser = async (label: string) => {
+      const userEmail = `api-${label}-${suffix}@example.test`;
+      const created = await request(app).post('/api/users').set('Authorization', `Bearer ${accessToken}`).send({
+        name: `Sessão ${label}`, email: userEmail, password: 'TestPassword123!', role: 'OPERATOR',
+      }).expect(201);
+      createdUserIds.push(created.body.data.id);
+      return { id: created.body.data.id as string, email: userEmail };
+    };
+    const login = async (userEmail: string, password = 'TestPassword123!') => {
+      const res = await request(app).post('/api/auth/login').send({ email: userEmail, password }).expect(200);
+      return res.body.data as { accessToken: string; refreshToken: string };
+    };
+    const me = (token: string) => request(app).get('/api/auth/me').set('Authorization', `Bearer ${token}`);
+    const refresh = (token: string) => request(app).post('/api/auth/refresh').send({ refreshToken: token });
+
+    it('logs out only the device that asked', async () => {
+      const user = await newUser('logout');
+      const tablet = await login(user.email);
+      const panel = await login(user.email);
+
+      // Só o refresh token: a saída vale mesmo depois que o token de acesso venceu.
+      await request(app).post('/api/auth/logout').send({ refreshToken: tablet.refreshToken }).expect(200);
+      expect((await me(tablet.accessToken)).status).toBe(401);
+      expect((await refresh(tablet.refreshToken)).status).toBe(401);
+      expect((await me(panel.accessToken)).status).toBe(200);
+      expect((await request(app).post('/api/auth/logout').send({ refreshToken: 'token-invalido' })).status).toBe(401);
+    });
+
+    it('rotates the refresh token and ends the session when an old token comes back', async () => {
+      const user = await newUser('rotate');
+      const first = await login(user.email);
+
+      // Duas abas renovando juntas com o mesmo token: as duas seguem logadas.
+      const [tabA, tabB] = await Promise.all([refresh(first.refreshToken), refresh(first.refreshToken)]);
+      expect([tabA.status, tabB.status]).toEqual([200, 200]);
+      const latest = await refresh(tabB.body.data.refreshToken as string);
+      expect(latest.status).toBe(200);
+      expect(latest.body.data.refreshToken).not.toBe(first.refreshToken);
+
+      // Passada a tolerância, o token antigo indica cópia: a sessão inteira cai.
+      await prisma.userSession.updateMany({ where: { userId: user.id }, data: { rotatedAt: new Date(Date.now() - 60_000) } });
+      expect((await refresh(first.refreshToken)).status).toBe(401);
+      expect((await refresh(latest.body.data.refreshToken as string)).status).toBe(401);
+      expect((await me(latest.body.data.accessToken as string)).status).toBe(401);
+    });
+
+    it('ends every session when an admin resets the password or changes the role', async () => {
+      const user = await newUser('revoke');
+      const before = await login(user.email);
+      await request(app).patch(`/api/users/${user.id}/password`)
+        .set('Authorization', `Bearer ${accessToken}`).send({ password: 'NewTestPassword456!' }).expect(200);
+      expect((await me(before.accessToken)).status).toBe(401);
+      expect((await refresh(before.refreshToken)).status).toBe(401);
+
+      const afterReset = await login(user.email, 'NewTestPassword456!');
+      await request(app).put(`/api/users/${user.id}`)
+        .set('Authorization', `Bearer ${accessToken}`).send({ name: 'Só o nome muda' }).expect(200);
+      expect((await me(afterReset.accessToken)).status).toBe(200);
+      await request(app).put(`/api/users/${user.id}`)
+        .set('Authorization', `Bearer ${accessToken}`).send({ role: 'ADMIN' }).expect(200);
+      expect((await me(afterReset.accessToken)).status).toBe(401);
+    });
+
+    it('lets users change their own password and ends their other sessions', async () => {
+      const user = await newUser('own');
+      const current = await login(user.email);
+      const other = await login(user.email);
+      const change = (body: object) => request(app).patch('/api/auth/password')
+        .set('Authorization', `Bearer ${current.accessToken}`).send(body);
+
+      expect((await change({ currentPassword: 'Errada123456!', newPassword: 'NewTestPassword456!' })).status).toBe(422);
+      expect((await change({ currentPassword: 'TestPassword123!', newPassword: 'TestPassword123!' })).status).toBe(422);
+      expect((await change({ currentPassword: 'TestPassword123!', newPassword: 'curta' })).status).toBe(422);
+      await change({ currentPassword: 'TestPassword123!', newPassword: 'NewTestPassword456!' }).expect(200);
+
+      expect((await me(current.accessToken)).status).toBe(200);
+      expect((await me(other.accessToken)).status).toBe(401);
+      expect((await request(app).post('/api/auth/login').send({ email: user.email, password: 'TestPassword123!' })).status).toBe(401);
+      await login(user.email, 'NewTestPassword456!');
+    });
+
+    it('returns the same label when the same request is sent again', async () => {
+      const send = (productId: string, requestId?: string) => request(app).post('/api/labels')
+        .set('Authorization', `Bearer ${accessToken}`).send({
+          productId, lot: 'LOT-REENVIO', originalExpiryDate: daysFromToday(30), responsibleName: 'Reenvio',
+          storageType: 'REFRIGERADO', storageTemp: '4°C', requestId,
+        });
+      const requestId = randomUUID();
+      const first = await send(productIds[0], requestId);
+      expect(first.status).toBe(201);
+      const again = await send(productIds[0], requestId);
+      expect(again.status).toBe(200);
+      expect(again.body.data.id).toBe(first.body.data.id);
+      expect(await prisma.label.count({ where: { requestId } })).toBe(1);
+
+      const otherProduct = productIds.find((id) => id !== productIds[0])!;
+      expect((await send(otherProduct, requestId)).status).toBe(409);
+
+      // Sem chave, cada envio é uma etiqueta nova, como antes.
+      const plainA = await send(productIds[0]);
+      const plainB = await send(productIds[0]);
+      expect([plainA.status, plainB.status]).toEqual([201, 201]);
+      expect(plainA.body.data.id).not.toBe(plainB.body.data.id);
+    });
+  });
 });

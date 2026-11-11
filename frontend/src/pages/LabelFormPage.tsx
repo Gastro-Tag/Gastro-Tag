@@ -12,6 +12,7 @@ import { formatBR } from '@/utils/date';
 import { extractError } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
+import { createRequestKeeper } from '@/utils/requestId';
 
 const PACKAGE = 'embalagem';
 
@@ -24,6 +25,7 @@ export function LabelFormPage() {
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [requests] = useState(createRequestKeeper);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
@@ -119,7 +121,7 @@ export function LabelFormPage() {
     setSubmitting(true);
     let createdLabel: import('@/types').Label | null = null;
     try {
-      const { data } = await labelApi.create({
+      const payload = {
         ...expirySource(form.source, form.originalExpiryDate),
         productId,
         lot: isPackage ? form.lot.trim() : undefined,
@@ -127,7 +129,8 @@ export function LabelFormPage() {
         openedAt: form.openedAt,
         storageType: form.storageType,
         storageTemp: form.storageTemp.trim(),
-      });
+      };
+      const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
       createdLabel = data.data;
       printLabel(createdLabel, logoUrl);
       try {

@@ -34,12 +34,13 @@ As memórias ficam no `localStorage` do navegador do totem. A **data de abertura
 - Se a data for limitada pela validade da embalagem, o aviso aparece na tela antes de imprimir.
 - Se a regra recusar a temperatura, a mensagem aparece no cartão do armazenamento.
 - O botão trava durante a geração (sem etiqueta duplicada por toque duplo).
+- Se a rede cair depois que o servidor gravou, tocar de novo em imprimir devolve a mesma etiqueta, sem criar outra.
 - Após 60 s sem toque, volta ao início (e limpa busca/filtros).
 - Etiqueta criada com falha de impressão fica salva; a tela oferece "Tentar imprimir".
 
 ## Instalação do totem
 
-1. No painel, em **Usuários**, crie uma conta OPERATOR só para o totem. Abra `http://<servidor>/totem` e faça o login **uma vez** com essa conta (não use uma conta ADMIN: ela daria poderes de gestão a quem está na bancada). A sessão se renova sozinha enquanto o totem for usado pelo menos 1 vez a cada 7 dias.
+1. No painel, em **Usuários**, crie uma conta OPERATOR só para o totem. Abra `http://<servidor>/totem` e faça o login **uma vez** com essa conta (não use uma conta ADMIN: ela daria poderes de gestão a quem está na bancada). A sessão se renova sozinha enquanto o totem for usado pelo menos 1 vez a cada 7 dias. Redefinir a senha, desativar a conta ou mudar o perfil dela desconecta o totem na hora, e ele volta para a tela de login.
 2. Defina a impressora de etiquetas como **padrão** do sistema e ajuste o tamanho do papel no driver.
 3. Abra o navegador em modo quiosque com impressão direta (sem diálogo), exemplo no Windows:
 

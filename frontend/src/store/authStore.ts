@@ -40,6 +40,9 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: () => {
+        // Encerra a sessão no servidor sem esperar: sem rede, a saída local continua valendo.
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (refreshToken) void authApi.logout(refreshToken).catch(() => undefined);
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
         set({ user: null, accessToken: null, refreshToken: null });

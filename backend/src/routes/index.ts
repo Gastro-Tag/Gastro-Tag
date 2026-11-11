@@ -40,8 +40,22 @@ const verifyAdminRateLimit = rateLimit({
   },
 });
 
+const changePasswordRateLimit = rateLimit({
+  ...countOnlyRejected,
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: { message: 'Muitas tentativas. Tente novamente em 15 minutos.', code: 'RATE_LIMITED' },
+  },
+});
+
 router.post('/auth/login', loginRateLimit, AuthController.login);
 router.post('/auth/refresh', AuthController.refresh);
+router.post('/auth/logout', AuthController.logout);
+router.patch('/auth/password', authenticate, changePasswordRateLimit, AuthController.changePassword);
 router.post('/auth/verify-admin', authenticate, verifyAdminRateLimit, AuthController.verifyAdmin);
 router.get('/auth/me', authenticate, AuthController.me);
 

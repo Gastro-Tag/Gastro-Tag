@@ -19,7 +19,7 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? '';
-    const isAuthRequest = url.includes('/auth/login') || url.includes('/auth/refresh');
+    const isAuthRequest = ['/auth/login', '/auth/refresh', '/auth/logout'].some((path) => url.includes(path));
 
     if (error.response?.status !== 401 || !original || original._retry || isAuthRequest) {
       return Promise.reject(error);
