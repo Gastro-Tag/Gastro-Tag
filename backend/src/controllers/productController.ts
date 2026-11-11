@@ -3,15 +3,11 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 
 import { ProductService, ProductFilters } from '../services/productService';
-import { parseDateOnly } from '../domain/shelfLife';
 
 const productFields = z.object({
   name: z.string().min(2).max(120),
   brand: z.string().min(1).max(120),
   category: z.string().max(60).optional(),
-  originalExpiryDate: z.string().refine((value) => {
-    try { parseDateOnly(value); return true; } catch { return false; }
-  }, 'Informe uma data real no formato YYYY-MM-DD.'),
   daysValidRefrigerated: z.number().int().min(0).max(365),
   daysValidFrozen: z.number().int().min(0).max(1095),
   unit: z.string().max(20).optional(),
@@ -30,7 +26,7 @@ const updateSchema = productFields.partial();
 const listQuerySchema = z.object({
   search: z.string().optional(),
   status: z
-    .enum(['all', 'valid', 'expiring', 'expired', 'recent'])
+    .enum(['all', 'valid', 'expiring', 'expired', 'recent', 'no_lot'])
     .optional(),
   storage: z.enum(['refrigerado', 'congelado']).optional(),
   category: z.string().optional(),

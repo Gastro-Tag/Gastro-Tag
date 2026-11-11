@@ -46,11 +46,37 @@ export function kitchenDayStartInstant(date = kitchenToday()): Date {
   return new Date(guess.getTime() + guess.getTime() - displayedAsUtc);
 }
 
-export function getProductStatus(date: Date): 'valid' | 'expiring' | 'expired' {
+export function getExpiryStatus(date: Date): 'valid' | 'expiring' | 'expired' {
   const days = daysUntil(date);
   if (days < 0) return 'expired';
   if (days <= 7) return 'expiring';
   return 'valid';
+}
+
+export type ProductLotStatus = ReturnType<typeof getExpiryStatus> | 'no_lot';
+
+/** Lote criado pela migration com a validade antiga do produto: falta conferir com o estoque real. */
+export const PENDING_LOT_CODE = 'SEM-LOTE';
+
+/** Resume os lotes ativos. Lote vencido tem prioridade: ainda há algo para descartar. */
+export function summarizeLots(lots: { code: string; expiryDate: Date }[]) {
+  const statuses = lots.map((lot) => ({ date: lot.expiryDate, status: getExpiryStatus(lot.expiryDate) }));
+  const usable = statuses
+    .filter((lot) => lot.status !== 'expired')
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
+  const expiredLotCount = statuses.length - usable.length;
+  const next = usable[0] ?? null;
+  const computedStatus: ProductLotStatus = statuses.length === 0
+    ? 'no_lot'
+    : expiredLotCount > 0 ? 'expired' : next!.status;
+
+  return {
+    nextExpiryDate: next?.date ?? null,
+    daysUntilExpiry: next ? daysUntil(next.date) : null,
+    expiredLotCount,
+    pendingLotCount: lots.filter((lot) => lot.code === PENDING_LOT_CODE).length,
+    computedStatus,
+  };
 }
 
 export function kitchenWeekAgo(): Date {

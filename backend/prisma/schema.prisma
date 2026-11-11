@@ -35,7 +35,6 @@ model Product {
   name                    String
   brand                   String
   category                String?
-  originalExpiryDate      DateTime @map("original_expiry_date") @db.Date
   daysValidRefrigerated   Int      @default(0) @map("days_valid_refrigerated")
   daysValidFrozen         Int      @default(0) @map("days_valid_frozen")
   unit                    String?                                             // kg, L, un, etc.
@@ -45,13 +44,30 @@ model Product {
   updatedAt               DateTime @updatedAt @map("updated_at")
 
   labels Label[]
+  lots   ProductLot[]
   shelfLifeRules ShelfLifeRule[]
 
   @@index([name])
   @@index([brand])
   @@index([createdAt])
-  @@index([originalExpiryDate])
   @@map("products")
+}
+
+// ── Lote recebido: guarda a validade do fabricante ───────
+model ProductLot {
+  id         String   @id @default(uuid())
+  productId  String   @map("product_id")
+  code       String
+  expiryDate DateTime @map("expiry_date") @db.Date
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  product Product @relation(fields: [productId], references: [id])
+  labels  Label[]
+
+  @@index([productId, active, expiryDate])
+  @@map("product_lots")
 }
 
 // ── Etiqueta gerada ──────────────────────────────────────
@@ -61,6 +77,7 @@ model Label {
   productId        String          @map("product_id")
   userId           String          @map("user_id")
   lot              String
+  lotId            String?         @map("lot_id")                    // nulo: validade informada na hora
   openedAt         DateTime        @map("opened_at") @db.Date
   discardAt        DateTime        @map("discard_at") @db.Date
   storageType      StorageType     @map("storage_type")
@@ -79,12 +96,14 @@ model Label {
   product Product @relation(fields: [productId], references: [id])
   user    User    @relation(fields: [userId], references: [id])
   rule    ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  productLot ProductLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
 
   @@index([productId])
   @@index([userId])
   @@index([discardAt])
   @@index([createdAt])
   @@index([ruleId])
+  @@index([lotId])
   @@map("labels")
 }
 

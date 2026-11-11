@@ -67,13 +67,13 @@ export function TotemHomePage() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  // Mais usados neste totem primeiro; depois mais etiquetados; vencidos por último.
+  // Mais usados neste totem primeiro; depois mais etiquetados; só com lote vencido por último.
   const ordered = useMemo(() => {
     const usage = getUsage();
     return [...products].sort((a, b) => {
-      const expiredA = a.computedStatus === 'expired' ? 1 : 0;
-      const expiredB = b.computedStatus === 'expired' ? 1 : 0;
-      if (expiredA !== expiredB) return expiredA - expiredB;
+      const onlyExpiredA = onlyExpired(a) ? 1 : 0;
+      const onlyExpiredB = onlyExpired(b) ? 1 : 0;
+      if (onlyExpiredA !== onlyExpiredB) return onlyExpiredA - onlyExpiredB;
       const usedA = usage[a.id] ?? 0;
       const usedB = usage[b.id] ?? 0;
       if (usedA !== usedB) return usedB - usedA;
@@ -96,17 +96,6 @@ export function TotemHomePage() {
       return normalizeText(`${p.name} ${p.brand}`).includes(term);
     });
   }, [ordered, search, category]);
-
-  function openProduct(product: Product) {
-    if (product.computedStatus === 'expired') {
-      setNotice({
-        tone: 'error',
-        text: `${product.name} está VENCIDO. Não use o produto e não gere etiqueta: descarte.`,
-      });
-      return;
-    }
-    navigate(`/totem/etiqueta/${product.id}`);
-  }
 
   return (
     <div className="flex min-h-full flex-col">
@@ -205,7 +194,7 @@ export function TotemHomePage() {
           ) : (
             <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
               {visible.map((product) => (
-                <ProductTile key={product.id} product={product} onPress={() => openProduct(product)} />
+                <ProductTile key={product.id} product={product} onPress={() => navigate(`/totem/etiqueta/${product.id}`)} />
               ))}
             </div>
           )
@@ -267,6 +256,10 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
+function onlyExpired(product: Product): boolean {
+  return product.computedStatus === 'expired' && product.nextExpiryDate === null;
+}
+
 function ProductTile({ product, onPress }: { product: Product; onPress: () => void }) {
   const expired = product.computedStatus === 'expired';
   const expiring = product.computedStatus === 'expiring';
@@ -292,7 +285,7 @@ function ProductTile({ product, onPress }: { product: Product; onPress: () => vo
           {product.daysValidRefrigerated > 0 && <Refrigerator className="h-6 w-6 text-sky-600" aria-label="Refrigerado" />}
           {product.daysValidFrozen > 0 && <Snowflake className="h-6 w-6 text-indigo-600" aria-label="Congelado" />}
         </div>
-        {expired && <span className="rounded-full bg-rose-600 px-3 py-1 text-sm font-extrabold uppercase text-white">Vencido</span>}
+        {expired && <span className="rounded-full bg-rose-600 px-3 py-1 text-sm font-extrabold text-white">Lote vencido</span>}
         {expiring && (
           <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-extrabold text-amber-800">
             Vence em {product.daysUntilExpiry}d

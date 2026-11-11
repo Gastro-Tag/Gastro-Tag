@@ -134,8 +134,8 @@ A interface de totem para a bancada fica em `http://localhost/totem`: grade de p
 ## Roteiro da demonstração
 
 1. Entrar com a conta ADMIN configurada no `.env`.
-2. Cadastrar ou localizar um produto.
-3. Abrir a criação de etiqueta e informar lote, responsável, armazenamento e temperatura.
+2. Cadastrar ou localizar um produto e, em **Lotes**, registrar o lote recebido com a validade do fabricante.
+3. Abrir a criação de etiqueta, escolher o lote ou informar a validade da embalagem, e preencher responsável, armazenamento e temperatura.
 4. Conferir a prévia, o prazo aplicado e a data de descarte.
 5. Gerar e imprimir a etiqueta pelo navegador.
 6. Conferir o registro no histórico e os indicadores no dashboard.

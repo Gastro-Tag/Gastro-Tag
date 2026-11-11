@@ -5,7 +5,6 @@ import { productApi } from '@/services';
 import { useToastContext } from '@/components/ui/Toast';
 import { Spinner, PageLoader } from '@/components/ui/Spinner';
 import { extractError } from '@/services/api';
-import { todayISO } from '@/utils/date';
 
 export function ProductFormPage() {
   const { id }   = useParams<{ id: string }>();
@@ -20,7 +19,6 @@ export function ProductFormPage() {
     name:                  '',
     brand:                 '',
     category:              '',
-    originalExpiryDate:    todayISO(),
     daysValidRefrigerated: '',
     daysValidFrozen:       '',
     unit:                  '',
@@ -36,7 +34,6 @@ export function ProductFormPage() {
         name:                  p.name,
         brand:                 p.brand,
         category:              p.category ?? '',
-        originalExpiryDate:    p.originalExpiryDate.split('T')[0],
         daysValidRefrigerated: String(p.daysValidRefrigerated),
         daysValidFrozen:       String(p.daysValidFrozen),
         unit:                  p.unit ?? '',
@@ -63,7 +60,6 @@ export function ProductFormPage() {
       name:                  form.name,
       brand:                 form.brand,
       category:              form.category || undefined,
-      originalExpiryDate:    form.originalExpiryDate,
       daysValidRefrigerated: ref,
       daysValidFrozen:       cong,
       unit:                  form.unit || undefined,
@@ -76,8 +72,10 @@ export function ProductFormPage() {
         await productApi.update(id, payload);
         toast('Produto atualizado com sucesso!', 'success');
       } else {
-        await productApi.create(payload);
-        toast('Produto cadastrado com sucesso!', 'success');
+        const { data } = await productApi.create(payload);
+        toast('Produto cadastrado. Agora informe o lote recebido.', 'success');
+        navigate(`/products/${data.data.id}/lots`);
+        return;
       }
       navigate('/products');
     } catch (err) {
@@ -156,19 +154,6 @@ export function ProductFormPage() {
               />
             </Field>
           </div>
-
-          <Field label="Validade Original da Embalagem Fechada" required>
-            <input
-              type="date"
-              value={form.originalExpiryDate}
-              onChange={(e) => set('originalExpiryDate', e.target.value)}
-              className="input max-w-sm"
-              required
-            />
-            <p className="text-xs text-slate-400 mt-1 font-medium">
-              Data de validade impressa na embalagem pelo fabricante industrial.
-            </p>
-          </Field>
         </div>
 
         {/* Storage Rule */}

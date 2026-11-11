@@ -23,12 +23,6 @@ export function formatDateTimeBR(iso?: string | null): string {
   }).format(date);
 }
 
-/** Today as YYYY-MM-DD (local time, no timezone shift) */
-export function todayISO(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
 /** Days between today and a future/past date (negative = past) */
 export function daysUntil(iso: string): number {
   const today = new Date();
@@ -42,6 +36,17 @@ export function daysUntilLabel(days: number): string {
   if (days < 0)  return `Vencido há ${Math.abs(days)} dia${Math.abs(days) !== 1 ? 's' : ''}`;
   if (days === 0) return 'Vence hoje!';
   return `${days} dia${days !== 1 ? 's' : ''} restante${days !== 1 ? 's' : ''}`;
+}
+
+/** Resumo dos lotes ativos para os selos de status do produto. */
+export function productStatusLabel(product: {
+  computedStatus: string; daysUntilExpiry: number | null; expiredLotCount: number;
+}): string {
+  if (product.computedStatus === 'no_lot') return 'Sem lote';
+  if (product.expiredLotCount > 0) {
+    return `${product.expiredLotCount} lote${product.expiredLotCount !== 1 ? 's' : ''} vencido${product.expiredLotCount !== 1 ? 's' : ''}`;
+  }
+  return daysUntilLabel(product.daysUntilExpiry ?? 0);
 }
 
 export function statusFromDays(days: number): 'valid' | 'expiring' | 'expired' {

@@ -1,20 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  AlertTriangle, ArrowLeft, Check, CheckCircle2, Hash, Minus, Plus,
+  AlertTriangle, ArrowLeft, CalendarDays, Check, CheckCircle2, Hash, Minus, Plus,
   Printer, Refrigerator, Snowflake, Thermometer, User,
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
 import { extractError } from '@/services/api';
-import type { Label, LabelPreview, Product, StorageType } from '@/types';
+import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { useTotemStore } from '@/store/totemStore';
 import { formatBR } from '@/utils/date';
 import { printLabel } from '@/utils/printLabel';
 import {
-  DEFAULT_TEMP, STORAGE_LABEL, defaultLot, formatTemperature, getLastLot,
-  getLastStorage, getOperator, rememberChoices, temperatureDraft, weekdayShort,
+  DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft, formatTemperature,
+  getLastStorage, getOperator, parseDateDraft, rememberChoices, temperatureDraft, weekdayShort,
 } from '@/utils/totem';
 import { cn } from '@/utils/cn';
 
@@ -27,7 +27,7 @@ type PreviewState =
   | { status: 'ok'; data: LabelPreview }
   | { status: 'error'; message: string };
 
-type Sheet = 'lot' | 'temp' | null;
+type Sheet = 'lot' | 'temp' | 'expiry' | null;
 type Done = { label: Label; printed: boolean };
 
 function logo(): string | null {
@@ -43,6 +43,9 @@ export function TotemLabelPage() {
   const [loadError, setLoadError] = useState('');
   const [storage, setStorage] = useState<StorageType | null>(null);
   const [temps, setTemps] = useState<Record<StorageType, string>>({ ...DEFAULT_TEMP });
+  // Lote cadastrado ou validade digitada a partir da embalagem em mãos.
+  const [source, setSource] = useState<ExpirySource | null>(null);
+  const [packageExpiry, setPackageExpiry] = useState('');
   const [lot, setLot] = useState('');
   const [copies, setCopies] = useState(1);
   const [previews, setPreviews] = useState<Partial<Record<StorageType, PreviewState>>>({});
@@ -53,7 +56,7 @@ export function TotemLabelPage() {
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
 
-  // Produto + atalhos memorizados (lote e armazenamento do último uso).
+  // Produto + armazenamento do último uso. Com mais de um lote, quem está com a embalagem escolhe.
   useEffect(() => {
     let active = true;
     productApi.getById(productId)
@@ -61,7 +64,8 @@ export function TotemLabelPage() {
         if (!active) return;
         const loaded = data.data;
         setProduct(loaded);
-        setLot(getLastLot(loaded.id) ?? '');
+        const lots = usableLots(loaded);
+        setSource(lots.length === 1 && !lots[0].needsReview ? { lotId: lots[0].id } : null);
         const options = storagesOf(loaded);
         const last = getLastStorage(loaded.id);
         setStorage(last && options.includes(last) ? last : options[0]);
@@ -77,24 +81,27 @@ export function TotemLabelPage() {
 
   const options = useMemo(() => (product ? storagesOf(product) : []), [product]);
 
+  const lots = useMemo(() => (product ? usableLots(product) : []), [product]);
+  const expiredLots = useMemo(() => (product?.lots ?? []).filter((item) => item.computedStatus === 'expired' && !item.needsReview), [product]);
+
   // Pré-cálculo de cada armazenamento. A regra, o teto e a data de hoje são do servidor.
   useEffect(() => {
     if (!product) return;
+    if (!source) { setPreviews({}); return; }
     let active = true;
     for (const type of options) {
       setPreviews((current) => ({ ...current, [type]: { status: 'loading' } }));
-      labelApi.preview({ productId: product.id, storageType: type, storageTemp: temps[type] })
+      labelApi.preview({ ...source, productId: product.id, storageType: type, storageTemp: temps[type] })
         .then(({ data }) => {
           if (!active) return;
           setPreviews((current) => ({ ...current, [type]: { status: 'ok', data: data.data } }));
-          setLot((current) => current || defaultLot(data.data.openedAt));
         })
         .catch((err) => {
           if (active) setPreviews((current) => ({ ...current, [type]: { status: 'error', message: extractError(err) } }));
         });
     }
     return () => { active = false; };
-  }, [product, options, temps.REFRIGERADO, temps.CONGELADO]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [product, options, source, temps.REFRIGERADO, temps.CONGELADO]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Contagem regressiva para voltar ao início depois de imprimir.
   useEffect(() => {
@@ -108,7 +115,9 @@ export function TotemLabelPage() {
   }, [done, seconds, navigate]);
 
   const selectedPreview = storage ? previews[storage] : undefined;
-  const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lot.trim() && !submitting);
+  const isPackage = Boolean(source?.originalExpiryDate);
+  const lotReady = !isPackage || Boolean(lot.trim());
+  const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lotReady && !submitting);
 
   async function registerPrints(label: Label, count: number) {
     try {
@@ -123,7 +132,7 @@ export function TotemLabelPage() {
     // Lê de novo no toque: o turno pode ter expirado desde a última sincronização.
     const responsible = getOperator();
     if (!responsible) { syncOperator(); openOperatorSheet(); return; }
-    if (selectedPreview?.status !== 'ok' || !lot.trim()) return;
+    if (!source || selectedPreview?.status !== 'ok' || !lotReady) return;
 
     lock.current = true;
     setSubmitting(true);
@@ -131,15 +140,16 @@ export function TotemLabelPage() {
     let created: Label | null = null;
     try {
       const { data } = await labelApi.create({
+        ...source,
         productId: product.id,
-        lot: lot.trim(),
+        lot: isPackage ? lot.trim() : undefined,
         responsibleName: responsible,
         storageType: storage,
         storageTemp: temps[storage],
       });
       const label: Label = data.data;
       created = label;
-      rememberChoices(product.id, lot.trim(), storage);
+      rememberChoices(product.id, storage);
       printLabel(label, logo(), copies);
       await registerPrints(label, copies);
       setSeconds(SUCCESS_SECONDS);
@@ -190,21 +200,6 @@ export function TotemLabelPage() {
 
   if (!product || !storage) {
     return <div className="flex h-full min-h-[50vh] items-center justify-center"><Spinner size="lg" /></div>;
-  }
-
-  if (product.computedStatus === 'expired') {
-    return (
-      <Centered>
-        <AlertTriangle className="h-20 w-20 text-rose-600" />
-        <h1 className="text-4xl font-extrabold text-rose-700">Produto vencido</h1>
-        <p className="max-w-lg text-2xl font-semibold text-slate-600">
-          {product.name} venceu em {formatBR(product.originalExpiryDate)}. Não use e não gere etiqueta: descarte.
-        </p>
-        <button type="button" className="btn btn-primary h-20 px-12 text-2xl" onClick={() => navigate('/totem', { replace: true })}>
-          Voltar ao início
-        </button>
-      </Centered>
-    );
   }
 
   if (done) {
@@ -271,6 +266,37 @@ export function TotemLabelPage() {
         </div>
       </div>
 
+      {expiredLots.length > 0 && (
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-rose-300 bg-rose-50 p-4 text-lg font-bold text-rose-800">
+          <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0" />
+          <span>
+            {expiredLots.map((item) => `Lote ${item.code} venceu em ${formatBR(item.expiryDate)}`).join('; ')}. Não use: descarte.
+          </span>
+        </div>
+      )}
+
+      {/* A validade é a da embalagem em mãos: com vários lotes, nada vem marcado. */}
+      <section className="rounded-3xl border-2 border-slate-200 bg-white p-4">
+        <h2 className="mb-3 text-xl font-extrabold text-slate-600">Qual embalagem está em mãos?</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          {lots.map((item) => (
+            <SourceButton
+              key={item.id}
+              selected={source?.lotId === item.id}
+              title={`Validade ${formatBR(item.expiryDate)}`}
+              subtitle={item.needsReview ? 'Confira na embalagem' : `Lote ${item.code}`}
+              onClick={() => { setSource({ lotId: item.id }); setSubmitError(''); }}
+            />
+          ))}
+          <SourceButton
+            selected={isPackage}
+            title={isPackage ? `Validade ${formatBR(packageExpiry)}` : 'Outra embalagem'}
+            subtitle={isPackage ? 'Informada agora · toque para mudar' : 'Informar a validade impressa'}
+            onClick={() => setSheet('expiry')}
+          />
+        </div>
+      </section>
+
       {/* Armazenamento: cada cartão já mostra a data de descarte calculada. */}
       <div className={cn('grid gap-4', options.length > 1 ? 'md:grid-cols-2' : 'grid-cols-1')}>
         {options.map((type) => (
@@ -280,6 +306,7 @@ export function TotemLabelPage() {
             temp={temps[type]}
             selected={storage === type}
             state={previews[type]}
+            waiting={!source}
             onSelect={() => { setStorage(type); setSubmitError(''); }}
           />
         ))}
@@ -295,8 +322,8 @@ export function TotemLabelPage() {
       )}
 
       {/* Dados já preenchidos: tocar só se precisar mudar. */}
-      <div className="grid gap-3 md:grid-cols-3">
-        <FieldButton icon={<Hash className="h-6 w-6" />} label="Lote" value={lot || '—'} onClick={() => setSheet('lot')} />
+      <div className={cn('grid gap-3', isPackage ? 'md:grid-cols-3' : 'md:grid-cols-2')}>
+        {isPackage && <FieldButton icon={<Hash className="h-6 w-6" />} label="Lote" value={lot || 'Informar'} onClick={() => setSheet('lot')} warn={!lot.trim()} />}
         <FieldButton icon={<Thermometer className="h-6 w-6" />} label="Temperatura" value={temps[storage]} onClick={() => setSheet('temp')} />
         <FieldButton icon={<User className="h-6 w-6" />} label="Responsável" value={operator || 'Informar'} onClick={openOperatorSheet} warn={!operator} />
       </div>
@@ -350,18 +377,42 @@ export function TotemLabelPage() {
       {sheet === 'lot' && (
         <KeyboardSheet
           title="Número do lote"
-          hint="Use o lote da embalagem. Fica memorizado para este produto."
+          hint="Use o lote impresso na embalagem. Se não houver lote legível, toque em Sem lote legível."
           placeholder="Ex.: L20261023"
           initialValue={lot}
           capitalize="upper"
           maxLength={60}
           confirmLabel="Salvar lote"
-          onCancel={() => setSheet(null)}
+          cancelLabel={lot ? 'Cancelar' : 'Sem lote legível'}
+          onCancel={() => { setLot((current) => current || UNREADABLE_LOT); setSheet(null); }}
           onConfirm={(value) => {
             const clean = value.trim();
             if (!clean) return 'Informe o lote.';
             setLot(clean);
             setSheet(null);
+          }}
+        />
+      )}
+
+      {sheet === 'expiry' && (
+        <KeyboardSheet
+          title="Validade da embalagem"
+          hint="Digite dia, mês e ano impressos na embalagem. Ex.: 25122026"
+          placeholder="DD/MM/AAAA"
+          initialValue={packageExpiry ? dateDraft(packageExpiry) : ''}
+          layout="date"
+          maxLength={8}
+          displayValue={formatDateDraft}
+          confirmLabel="Usar esta validade"
+          onCancel={() => setSheet(null)}
+          onConfirm={(value) => {
+            const expiry = parseDateDraft(value);
+            if (!expiry) return 'Digite uma data real: dia, mês e ano.';
+            setPackageExpiry(expiry);
+            setSource({ originalExpiryDate: expiry });
+            setSubmitError('');
+            // Sem lote cadastrado, o código também vem da embalagem: pede logo em seguida.
+            setSheet(lot.trim() ? null : 'lot');
           }}
         />
       )}
@@ -389,6 +440,10 @@ export function TotemLabelPage() {
 }
 
 // ── Peças ─────────────────────────────────────────────────
+function usableLots(product: Product): ProductLot[] {
+  return (product.lots ?? []).filter((item) => item.computedStatus !== 'expired');
+}
+
 function storagesOf(product: Product): StorageType[] {
   const available = ALL_STORAGES.filter((type) =>
     (type === 'REFRIGERADO' ? product.daysValidRefrigerated : product.daysValidFrozen) > 0);
@@ -404,8 +459,30 @@ function Centered({ children }: { children: React.ReactNode }) {
   );
 }
 
-function StorageCard({ type, temp, selected, state, onSelect }: {
-  type: StorageType; temp: string; selected: boolean; state?: PreviewState; onSelect: () => void;
+function SourceButton({ selected, title, subtitle, onClick }: {
+  selected: boolean; title: string; subtitle: string; onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={cn(
+        'flex min-h-[88px] touch-manipulation items-center gap-4 rounded-2xl border-4 px-5 py-3 text-left active:scale-[0.98]',
+        selected ? 'border-brand-500 bg-orange-50/50' : 'border-slate-200 bg-white',
+      )}
+    >
+      <CalendarDays className={cn('h-8 w-8 shrink-0', selected ? 'text-brand-600' : 'text-slate-400')} />
+      <span className="min-w-0">
+        <span className="block truncate text-2xl font-extrabold">{title}</span>
+        <span className="block truncate text-lg font-semibold text-slate-500">{subtitle}</span>
+      </span>
+    </button>
+  );
+}
+
+function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
+  type: StorageType; temp: string; selected: boolean; state?: PreviewState; waiting: boolean; onSelect: () => void;
 }) {
   const Icon = type === 'REFRIGERADO' ? Refrigerator : Snowflake;
   const iconColor = type === 'REFRIGERADO' ? 'text-sky-600' : 'text-indigo-600';
@@ -435,7 +512,9 @@ function StorageCard({ type, temp, selected, state, onSelect }: {
       </div>
 
       <div className="mt-4">
-        {state?.status === 'error' ? (
+        {waiting ? (
+          <p className="text-lg font-bold leading-snug text-slate-400">Escolha a embalagem para calcular o descarte.</p>
+        ) : state?.status === 'error' ? (
           <p className="text-lg font-bold leading-snug text-rose-700">{state.message}</p>
         ) : ok ? (
           <>

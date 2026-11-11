@@ -1,13 +1,11 @@
 import { prisma } from '../prisma/client';
 import { kitchenDayStartInstant, kitchenToday, kitchenWeekAgo } from '../utils/dateUtils';
+import { lotStatusWhere } from './productService';
 
 export const DashboardService = {
   async getStats() {
     const now = kitchenToday();
     const todayStart = kitchenDayStartInstant(now);
-
-    const in7Days = new Date(now);
-    in7Days.setUTCDate(in7Days.getUTCDate() + 7);
 
     const sevenDaysAgo = kitchenWeekAgo();
 
@@ -26,15 +24,15 @@ export const DashboardService = {
       prisma.product.count({ where: { active: true } }),
 
       prisma.product.count({
-        where: { active: true, originalExpiryDate: { lt: now } },
+        where: { active: true, ...lotStatusWhere('expired', now) },
       }),
 
       prisma.product.count({
-        where: { active: true, originalExpiryDate: { gte: now, lte: in7Days } },
+        where: { active: true, ...lotStatusWhere('expiring', now) },
       }),
 
       prisma.product.count({
-        where: { active: true, originalExpiryDate: { gt: in7Days } },
+        where: { active: true, ...lotStatusWhere('valid', now) },
       }),
 
       prisma.product.count({

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Delete } from 'lucide-react';
 import { cn } from '@/utils/cn';
 
-export type KeyboardLayout = 'text' | 'numeric';
+export type KeyboardLayout = 'text' | 'numeric' | 'date';
 export type Capitalize = 'words' | 'upper' | 'none';
 
 interface TouchKeyboardProps {
@@ -61,7 +61,7 @@ export function TouchKeyboard({
 
   const backspace = () => onChange(value.slice(0, -1));
 
-  if (layout === 'numeric') {
+  if (layout === 'numeric' || layout === 'date') {
     const toggleSign = () => onChange(value.startsWith('-') ? value.slice(1) : `-${value}`);
     const keyClass = 'h-20 text-3xl';
     return (
@@ -74,9 +74,9 @@ export function TouchKeyboard({
           </div>
         ))}
         <div className="flex gap-2">
-          <Key className={keyClass} label="Alternar sinal negativo" onPress={toggleSign}>±</Key>
+          {layout === 'numeric' && <Key className={keyClass} label="Alternar sinal negativo" onPress={toggleSign}>±</Key>}
           <Key className={keyClass} onPress={() => press('0')}>0</Key>
-          <Key className={keyClass} label="Vírgula" onPress={() => press(',')}>,</Key>
+          {layout === 'numeric' && <Key className={keyClass} label="Vírgula" onPress={() => press(',')}>,</Key>}
         </div>
         <Key className="h-16 flex-none gap-2 bg-slate-100 text-lg" label="Apagar" onPress={backspace}>
           <Delete className="h-6 w-6" /> Apagar

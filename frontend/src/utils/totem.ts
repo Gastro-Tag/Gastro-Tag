@@ -60,21 +60,14 @@ export function rememberOperator(name: string, now = Date.now()): void {
 }
 
 // ── Lote / armazenamento por produto ─────────────────────
-/** Recebe a data informada pelo servidor; o relógio do aparelho não entra na etiqueta. */
-export function defaultLot(openedAt: string): string {
-  return `L${openedAt.slice(0, 10).replace(/-/g, '')}`;
-}
-
-export function getLastLot(productId: string): string | null {
-  return read<Record<string, string>>('lots', {})[productId] ?? null;
-}
+/** Registrado quando a embalagem não mostra o lote, para não inventar um código. */
+export const UNREADABLE_LOT = 'NÃO INFORMADO';
 
 export function getLastStorage(productId: string): StorageType | null {
   return read<Record<string, StorageType>>('storage', {})[productId] ?? null;
 }
 
-export function rememberChoices(productId: string, lot: string, storage: StorageType): void {
-  write('lots', { ...read<Record<string, string>>('lots', {}), [productId]: lot });
+export function rememberChoices(productId: string, storage: StorageType): void {
   write('storage', { ...read<Record<string, StorageType>>('storage', {}), [productId]: storage });
   write('usage', { ...read<Record<string, number>>('usage', {}), [productId]: Date.now() });
 }
@@ -102,6 +95,29 @@ export function formatTemperature(raw: string): string | null {
   const value = Number(text);
   if (!Number.isFinite(value) || value < -60 || value > 100) return null;
   return `${String(value).replace('.', ',')} °C`;
+}
+
+/** "2512", "25122026" → "25/12", "25/12/2026" (dígitos digitados no teclado de data) */
+export function formatDateDraft(digits: string): string {
+  return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4)].filter(Boolean).join('/');
+}
+
+/** "25122026" ou "251226" → "2026-12-25". Retorna null se a data não existir. */
+export function parseDateDraft(digits: string): string | null {
+  const match = /^(\d{2})(\d{2})(\d{2}|\d{4})$/.exec(digits);
+  if (!match) return null;
+  const [, day, month, yearText] = match;
+  const year = Number(yearText.length === 2 ? `20${yearText}` : yearText);
+  const date = new Date(Date.UTC(year, Number(month) - 1, Number(day)));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== Number(month) - 1 || date.getUTCDate() !== Number(day)) {
+    return null;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+/** "2026-12-25" → "25122026" (valor inicial do teclado de data) */
+export function dateDraft(iso: string): string {
+  return iso.split('-').reverse().join('');
 }
 
 /** "4 °C" → "4" (valor inicial do teclado numérico) */
