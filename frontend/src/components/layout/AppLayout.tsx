@@ -13,9 +13,11 @@ import {
   Sparkles,
   Tablet,
   Users,
+  KeyRound,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
+import { ChangePasswordDialog } from './ChangePasswordDialog';
 
 const navItems = [
   { to: '/',         label: 'Dashboard',  icon: LayoutDashboard },
@@ -30,6 +32,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
 
   function handleLogout() {
     logout();
@@ -146,6 +149,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </div>
           </div>
           <button
+            onClick={() => setChangingPassword(true)}
+            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-xl text-xs font-semibold
+                       text-slate-500 hover:text-charcoal-800 hover:bg-slate-100 transition-colors"
+          >
+            <KeyRound className="w-3.5 h-3.5" />
+            <span>Trocar minha senha</span>
+          </button>
+          <button
             onClick={handleLogout}
             className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-xl text-xs font-semibold
                        text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
@@ -155,6 +166,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
       </aside>
+
+      {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
 
       {/* Mobile overlay */}
       {mobileOpen && (

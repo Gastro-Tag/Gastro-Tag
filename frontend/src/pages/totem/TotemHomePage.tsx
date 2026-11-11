@@ -100,23 +100,25 @@ export function TotemHomePage() {
   return (
     <div className="flex min-h-full flex-col">
       {/* Abas */}
-      <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#F3F4F6]/95 px-5 pb-3 pt-4 backdrop-blur">
-        <div className="grid grid-cols-2 gap-3">
-          <TabButton active={tab === 'nova'} icon={<Tag className="h-6 w-6" />} onClick={() => setTab('nova')}>
+      {/* Fixo no topo só quando a tela tem altura de sobra; em telas baixas rola junto com a lista. */}
+      <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#F3F4F6]/95 px-3 pb-3 pt-3 backdrop-blur sm:px-5 sm:pt-4 [@media(max-height:700px)]:static">
+        <div className="mx-auto w-full max-w-[1600px]">
+        <div className="grid grid-cols-2 gap-2 sm:gap-3">
+          <TabButton active={tab === 'nova'} icon={<Tag className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />} onClick={() => setTab('nova')}>
             Nova etiqueta
           </TabButton>
-          <TabButton active={tab === 'ultimas'} icon={<History className="h-6 w-6" />} onClick={() => setTab('ultimas')}>
+          <TabButton active={tab === 'ultimas'} icon={<History className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />} onClick={() => setTab('ultimas')}>
             Últimas etiquetas
           </TabButton>
         </div>
 
         {tab === 'nova' && (
-          <div className="mt-3 space-y-3">
-            <div className="flex gap-3">
+          <div className="mt-2 space-y-2 sm:mt-3 sm:space-y-3">
+            <div className="flex gap-2 sm:gap-3">
               <button
                 type="button"
                 onClick={() => setSearchOpen(true)}
-                className="flex h-16 min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-2xl border-2 border-slate-200 bg-white px-5 text-left text-xl font-semibold active:scale-[0.99]"
+                className="flex h-14 min-w-0 flex-1 touch-manipulation items-center gap-3 rounded-2xl border-2 border-slate-200 bg-white px-4 text-left text-lg font-semibold active:scale-[0.99] sm:h-16 sm:px-5 sm:text-xl"
               >
                 <Search className="h-6 w-6 shrink-0 text-slate-400" />
                 <span className={cn('truncate', search ? 'text-charcoal-800' : 'text-slate-400')}>
@@ -126,21 +128,21 @@ export function TotemHomePage() {
               {search && (
                 <button
                   type="button" aria-label="Limpar busca" onClick={() => setSearch('')}
-                  className="flex h-16 w-16 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-200 bg-white active:scale-95"
+                  className="flex h-14 w-14 shrink-0 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-200 bg-white active:scale-95 sm:h-16 sm:w-16"
                 >
                   <X className="h-7 w-7" />
                 </button>
               )}
               <button
                 type="button" aria-label="Atualizar lista" onClick={() => void load()}
-                className="flex h-16 w-16 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-200 bg-white active:scale-95"
+                className="flex h-14 w-14 shrink-0 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-200 bg-white active:scale-95 sm:h-16 sm:w-16"
               >
                 <RefreshCw className={cn('h-6 w-6', loading && 'animate-spin')} />
               </button>
             </div>
 
             {categories.length > 0 && (
-              <div className="-mx-5 flex gap-2 overflow-x-auto px-5 pb-1">
+              <div className="-mx-3 flex gap-2 overflow-x-auto px-3 pb-1 sm:-mx-5 sm:px-5">
                 <Chip active={category === ''} onClick={() => setCategory('')}>Todos</Chip>
                 {categories.map((name) => (
                   <Chip key={name} active={category === name} onClick={() => setCategory(name)}>{name}</Chip>
@@ -149,27 +151,28 @@ export function TotemHomePage() {
             )}
           </div>
         )}
+        </div>
       </div>
 
       {notice && (
         <div
           role="status"
           className={cn(
-            'mx-5 mt-4 flex items-start gap-3 rounded-2xl border-2 p-4 text-lg font-bold',
+            'mx-3 mt-3 flex items-start gap-3 rounded-2xl border-2 p-3 text-base font-bold sm:mx-5 sm:mt-4 sm:p-4 sm:text-lg',
             notice.tone === 'ok'
               ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
               : 'border-rose-300 bg-rose-50 text-rose-800',
           )}
         >
           {notice.tone === 'ok' ? <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0" /> : <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0" />}
-          <span className="flex-1">{notice.text}</span>
+          <span className="min-w-0 flex-1">{notice.text}</span>
           <button type="button" aria-label="Fechar aviso" onClick={() => setNotice(null)} className="p-1">
             <X className="h-6 w-6" />
           </button>
         </div>
       )}
 
-      <div className="flex-1 p-5">
+      <div className="mx-auto w-full max-w-[1600px] flex-1 p-3 sm:p-5">
         {tab === 'nova' ? (
           loading ? (
             <div className="flex h-64 items-center justify-center"><Spinner size="lg" /></div>
@@ -192,7 +195,7 @@ export function TotemHomePage() {
               ) : undefined}
             />
           ) : (
-            <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
+            <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 260px), 1fr))' }}>
               {visible.map((product) => (
                 <ProductTile key={product.id} product={product} onPress={() => navigate(`/totem/etiqueta/${product.id}`)} />
               ))}
@@ -231,7 +234,7 @@ function TabButton({ active, icon, onClick, children }: {
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'flex h-16 touch-manipulation items-center justify-center gap-3 rounded-2xl text-xl font-extrabold transition-colors active:scale-[0.99]',
+        'flex h-14 min-w-0 touch-manipulation items-center justify-center gap-2 rounded-2xl px-2 text-base font-extrabold leading-tight transition-colors active:scale-[0.99] sm:h-16 sm:gap-3 sm:text-xl',
         active ? 'bg-charcoal-800 text-white shadow' : 'border-2 border-slate-200 bg-white text-slate-600',
       )}
     >
@@ -247,7 +250,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'h-14 shrink-0 touch-manipulation whitespace-nowrap rounded-full px-6 text-lg font-bold active:scale-95',
+        'h-12 shrink-0 touch-manipulation whitespace-nowrap rounded-full px-5 text-base font-bold active:scale-95 sm:h-14 sm:px-6 sm:text-lg',
         active ? 'bg-brand-600 text-white shadow' : 'border-2 border-slate-200 bg-white text-slate-600',
       )}
     >
@@ -268,19 +271,19 @@ function ProductTile({ product, onPress }: { product: Product; onPress: () => vo
       type="button"
       onClick={onPress}
       className={cn(
-        'flex min-h-[148px] touch-manipulation flex-col justify-between rounded-3xl border-2 bg-white p-5 text-left shadow-card transition-transform active:scale-[0.97]',
+        'flex min-h-[120px] min-w-0 touch-manipulation flex-col justify-between rounded-3xl border-2 bg-white p-4 text-left shadow-card transition-transform active:scale-[0.97] sm:min-h-[148px] sm:p-5',
         expired ? 'border-rose-300 bg-rose-50/60' : expiring ? 'border-amber-300' : 'border-slate-200',
       )}
     >
       <div>
-        <div className={cn('line-clamp-2 text-2xl font-extrabold leading-tight', expired && 'text-rose-700')}>
+        <div className={cn('line-clamp-3 break-words text-xl font-extrabold leading-tight sm:text-2xl', expired && 'text-rose-700')}>
           {product.name}
         </div>
-        <div className="mt-1 truncate text-base font-medium text-slate-500">
+        <div className="mt-1 line-clamp-2 break-words text-base font-medium text-slate-500">
           {product.brand}{product.category ? ` · ${product.category}` : ''}
         </div>
       </div>
-      <div className="mt-3 flex items-center justify-between gap-2">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-2 text-slate-400">
           {product.daysValidRefrigerated > 0 && <Refrigerator className="h-6 w-6 text-sky-600" aria-label="Refrigerado" />}
           {product.daysValidFrozen > 0 && <Snowflake className="h-6 w-6 text-indigo-600" aria-label="Congelado" />}
@@ -300,7 +303,7 @@ function EmptyBlock({ icon, title, text, action }: {
   icon: React.ReactNode; title: string; text: string; action?: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-slate-200 bg-white px-6 py-16 text-center">
+    <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-slate-200 bg-white px-5 py-10 text-center sm:px-6 sm:py-16">
       {icon}
       <h2 className="text-2xl font-extrabold">{title}</h2>
       <p className="max-w-md text-lg text-slate-500">{text}</p>
@@ -368,11 +371,11 @@ function RecentLabels({ onNotice }: { onNotice: (notice: Notice) => void }) {
   }
 
   return (
-    <div className="space-y-3">
+    <div className="mx-auto max-w-4xl space-y-3">
       {labels.map((label) => (
-        <div key={label.id} className="flex items-center gap-4 rounded-3xl border-2 border-slate-200 bg-white p-4 shadow-card">
+        <div key={label.id} className="flex flex-col gap-3 rounded-3xl border-2 border-slate-200 bg-white p-4 shadow-card sm:flex-row sm:items-center sm:gap-4">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-2xl font-extrabold">{label.productName ?? label.product?.name ?? '—'}</div>
+            <div className="line-clamp-2 break-words text-xl font-extrabold sm:text-2xl">{label.productName ?? label.product?.name ?? '—'}</div>
             <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1 text-base font-medium text-slate-500">
               <span>Lote <strong className="text-charcoal-800">{label.lot}</strong></span>
               <span>{label.storageType === 'REFRIGERADO' ? 'Refrigerado' : 'Congelado'}</span>
@@ -384,7 +387,7 @@ function RecentLabels({ onNotice }: { onNotice: (notice: Notice) => void }) {
             type="button"
             disabled={busyId !== null}
             onClick={() => void reprint(label)}
-            className="btn btn-primary h-16 shrink-0 gap-2 px-6 text-lg font-extrabold"
+            className="btn btn-primary h-14 w-full shrink-0 gap-2 px-6 text-lg font-extrabold sm:h-16 sm:w-auto"
           >
             {busyId === label.id ? <Spinner size="sm" className="text-white" /> : <Printer className="h-6 w-6" />}
             Reimprimir

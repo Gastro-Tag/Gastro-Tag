@@ -80,7 +80,9 @@ O frontend usa `/api` como URL base. No desenvolvimento, o Vite encaminha `/api`
 | Método | Rota | Descrição |
 |---|---|---|
 | POST | `/api/auth/login` | Entrar |
-| POST | `/api/auth/refresh` | Renovar tokens |
+| POST | `/api/auth/refresh` | Renovar tokens (cada renovação troca o refresh token) |
+| POST | `/api/auth/logout` | Encerrar a sessão deste aparelho (recebe o refresh token) |
+| PATCH | `/api/auth/password` | Trocar a própria senha e encerrar as outras sessões |
 | GET | `/api/auth/me` | Consultar usuário autenticado |
 | POST | `/api/auth/verify-admin` | Confirmar credenciais de administrador (usada pelo totem) |
 | GET | `/api/users` | Listar usuários (ADMIN) |
@@ -95,7 +97,7 @@ O frontend usa `/api` como URL base. No desenvolvimento, o Vite encaminha `/api`
 | DELETE | `/api/products/:id` | Desativar produto (ADMIN) |
 | GET | `/api/labels` | Consultar histórico |
 | POST | `/api/labels/preview` | Pré-visualizar o cálculo de descarte |
-| POST | `/api/labels` | Gerar etiqueta |
+| POST | `/api/labels` | Gerar etiqueta (`requestId` opcional: reenviar o mesmo pedido devolve a mesma etiqueta) |
 | GET | `/api/labels/:id` | Consultar etiqueta |
 | PATCH | `/api/labels/:id/print` | Registrar impressão |
 | GET | `/api/dashboard/stats` | Consultar indicadores |
@@ -144,6 +146,7 @@ A interface de totem para a bancada fica em `http://localhost/totem`: grade de p
 
 - O cálculo usa os prazos cadastrados no produto ou, quando houver, uma regra de validade inserida diretamente no banco. Ainda não existe um catálogo normativo validado; os valores precisam ser confirmados pelo responsável técnico antes de uso operacional.
 - O dia da abertura conta como dia 1: um prazo de 3 dias com abertura em 01/09 vai até 03/09. O servidor recusa abertura futura e etiqueta que já nasceria vencida.
-- A impressão é feita pelo navegador. Integração direta com impressoras térmicas não faz parte do TCC atual.
+- A impressão é feita pelo navegador, com quatro modelos de etiqueta: folha A4 / papel comum (9 cm de largura) e 100×60 mm, ambos com todas as informações; térmica 60×40 mm, resumida (sem logo, marca, prazo/fonte, aviso do fabricante e assinatura); e térmica 50×30 mm, mínima (produto, descarte, abertura, lote, responsável e código; armazenamento e temperatura só se couberem). Nas térmicas a fonte diminui sozinha (nunca abaixo de 6 pt) e, se mesmo assim não couber, o texto continua na etiqueta seguinte, sem cortar nada. O modelo é escolhido por aparelho na tela de gerar etiqueta (guardado em `localStorage`, chave `gastrotag_label_template`) e o totem usa o modelo salvo no aparelho. Na térmica, o `@page` define o tamanho; o papel configurado no driver da impressora deve ter o mesmo tamanho. **Ainda não houve teste em impressora térmica física**; o modelo térmico não foi validado em papel. Integração direta com impressoras térmicas não faz parte do TCC atual.
+- O sistema não envia e-mail: o "Esqueci minha senha" dos logins do painel e do totem apenas orienta que a senha seja redefinida por um administrador em **Usuários → Senha**. A senha da conta de `ADMIN_EMAIL` é sincronizada pelo servidor na inicialização. Os campos de senha têm botão de olho para mostrar o que foi digitado.
 - O sistema está direcionado a uma cozinha/unidade; multiempresa, multiunidade e operação SaaS ficam para uma etapa futura.
 - O seed é opcional e cria dados demonstrativos com datas relativas à execução. A inicialização normal não exige executar o seed.

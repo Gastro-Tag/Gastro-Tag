@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { KeyRound, Pencil, Plus, Power, ShieldCheck, User as UserIcon } from 'lucide-react';
 import { userApi } from '@/services';
 import { extractError } from '@/services/api';
@@ -6,6 +6,7 @@ import type { ManagedUser, UserRole } from '@/types';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { InlineLoader, Spinner } from '@/components/ui/Spinner';
+import { PasswordInput } from '@/components/ui/PasswordInput';
 import { useToastContext } from '@/components/ui/Toast';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
@@ -146,6 +147,7 @@ function UserDialog({ dialog, isSelf, onClose, onSaved }: {
   const [email, setEmail] = useState(existing?.email ?? '');
   const [role, setRole] = useState<UserRole>(existing?.role ?? 'OPERATOR');
   const [password, setPassword] = useState('');
+  const passwordId = useId();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -205,10 +207,10 @@ function UserDialog({ dialog, isSelf, onClose, onSaved }: {
         )}
 
         {showPassword && (
-          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500">
-            Senha (mínimo 12 caracteres)
-            <input type="password" required minLength={12} maxLength={72} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input mt-1.5" />
-          </label>
+          <div>
+            <label htmlFor={passwordId} className="block text-xs font-bold uppercase tracking-wider text-slate-500">Senha (mínimo 12 caracteres)</label>
+            <PasswordInput id={passwordId} required minLength={12} maxLength={72} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input mt-1.5" />
+          </div>
         )}
 
         <div className="flex justify-end gap-2 pt-2">

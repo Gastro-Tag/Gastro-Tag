@@ -19,9 +19,28 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  labels Label[]
+  labels   Label[]
+  sessions UserSession[]
 
   @@map("users")
+}
+
+// Uma sessão por aparelho. Guarda só o hash do refresh token; o anterior vale por alguns segundos
+// para duas abas que renovam juntas.
+model UserSession {
+  id           String    @id @default(uuid())
+  userId       String    @map("user_id")
+  tokenHash    String    @map("token_hash")
+  previousHash String?   @map("previous_hash")
+  rotatedAt    DateTime? @map("rotated_at")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("user_sessions")
 }
 
 enum UserRole {
@@ -89,6 +108,7 @@ model Label {
   productName      String          @map("product_name")
   productBrand     String          @map("product_brand")
   responsibleName  String?         @map("responsible_name")
+  requestId        String?         @map("request_id")                // repetir o envio devolve a mesma etiqueta
   printedAt        DateTime?       @map("printed_at")
   printCount       Int             @default(0) @map("print_count")
   createdAt        DateTime        @default(now()) @map("created_at")
@@ -98,6 +118,7 @@ model Label {
   rule    ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
   productLot ProductLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
 
+  @@unique([userId, requestId])
   @@index([productId])
   @@index([userId])
   @@index([discardAt])

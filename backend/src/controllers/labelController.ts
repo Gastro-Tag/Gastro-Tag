@@ -26,6 +26,7 @@ const previewSchema = labelFields.refine(oneExpirySource, expirySourceError);
 const createSchema = labelFields.extend({
   lot: z.string().trim().min(1).max(60).refine((value) => !value.includes('\u0000'), 'Lote inválido.').optional(),
   responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
+  requestId: z.string().uuid().optional(),
 }).refine(oneExpirySource, expirySourceError)
   .refine((data) => (data.lotId ? !data.lot : Boolean(data.lot)), {
     message: 'Informe o lote da embalagem.',
@@ -57,8 +58,8 @@ export const LabelController = {
 
   async create(req: Request, res: Response) {
     const data  = createSchema.parse(req.body);
-    const label = await LabelService.create({ ...data, userId: req.user!.sub });
-    res.status(201).json({ success: true, data: label });
+    const { label, replayed } = await LabelService.create({ ...data, userId: req.user!.sub });
+    res.status(replayed ? 200 : 201).json({ success: true, data: label });
   },
 
   async preview(req: Request, res: Response) {

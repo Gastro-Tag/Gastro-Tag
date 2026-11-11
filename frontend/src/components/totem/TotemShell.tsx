@@ -67,20 +67,20 @@ function TotemShell() {
 
   return (
     <div className="totem-root flex h-[100dvh] flex-col bg-[#F3F4F6] text-charcoal-800">
-      <header className="flex h-20 shrink-0 items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 shadow-sm">
+      <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 shadow-sm sm:h-20 sm:gap-4 sm:px-5 [@media(max-height:500px)]:h-14">
         <div
-          className="flex select-none items-center gap-3"
+          className="flex shrink-0 select-none items-center gap-2 sm:gap-3"
           onPointerDown={startPress}
           onPointerUp={cancelPress}
           onPointerLeave={cancelPress}
           onPointerCancel={cancelPress}
         >
-          <img src="/logo.png" alt="GastroTag" className="h-12 w-12 object-contain" draggable={false} />
+          <img src="/logo.png" alt="GastroTag" className="h-10 w-10 object-contain sm:h-12 sm:w-12" draggable={false} />
           <div className="leading-none">
-            <div className="text-2xl font-extrabold tracking-tight">
+            <div className="text-xl font-extrabold tracking-tight sm:text-2xl">
               Gastro<span className="text-brand-500">Tag</span>
             </div>
-            <div className="mt-1 text-[11px] font-bold uppercase tracking-widest text-slate-400">Totem de etiquetas</div>
+            <div className="mt-1 hidden text-[11px] font-bold uppercase tracking-widest text-slate-400 min-[400px]:block">Totem de etiquetas</div>
           </div>
         </div>
 
@@ -93,13 +93,13 @@ function TotemShell() {
           type="button"
           onClick={openOperatorSheet}
           className={cn(
-            'flex h-14 max-w-[45%] touch-manipulation items-center gap-3 rounded-2xl border-2 px-5 text-lg font-bold active:scale-95',
+            'flex h-12 min-w-0 max-w-[55%] touch-manipulation items-center gap-2 rounded-2xl border-2 px-3 text-base font-bold active:scale-95 sm:h-14 sm:max-w-[45%] sm:gap-3 sm:px-5 sm:text-lg',
             operator
               ? 'border-slate-200 bg-slate-50 text-charcoal-800'
               : 'animate-pulse border-brand-500 bg-brand-50 text-brand-700',
           )}
         >
-          <User className="h-6 w-6 shrink-0" />
+          <User className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />
           <span className="truncate">{operator || 'Informar responsável'}</span>
         </button>
       </header>
@@ -115,26 +115,26 @@ function TotemShell() {
       )}
 
       {adminMenu === 'unlocked' && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-6" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 p-3 sm:p-6" role="dialog" aria-modal="true">
+          <div className="max-h-full w-full max-w-md overflow-y-auto rounded-3xl bg-white p-4 shadow-2xl sm:p-6">
             <h2 className="text-2xl font-extrabold">Opções do totem</h2>
             <p className="mb-5 mt-1 text-base text-slate-500">Área do administrador.</p>
             <div className="flex flex-col gap-3">
               <button
                 type="button"
-                className="btn btn-primary h-16 text-lg"
+                className="btn btn-primary h-14 text-lg sm:h-16"
                 onClick={() => { setAdminMenu(null); navigate('/'); }}
               >
                 <LayoutDashboard className="h-5 w-5" /> Abrir painel administrativo
               </button>
               <button
                 type="button"
-                className="btn btn-outline h-16 text-lg text-rose-600"
+                className="btn btn-outline h-14 text-lg text-rose-600 sm:h-16"
                 onClick={() => { logout(); navigate('/totem/login', { replace: true }); }}
               >
                 <LogOut className="h-5 w-5" /> Encerrar sessão do totem
               </button>
-              <button type="button" className="btn btn-ghost h-16 text-lg" onClick={() => setAdminMenu(null)}>
+              <button type="button" className="btn btn-ghost h-14 text-lg sm:h-16" onClick={() => setAdminMenu(null)}>
                 Voltar ao totem
               </button>
             </div>

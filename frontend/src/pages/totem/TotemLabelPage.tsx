@@ -17,6 +17,7 @@ import {
   getLastStorage, getOperator, parseDateDraft, rememberChoices, temperatureDraft, weekdayShort,
 } from '@/utils/totem';
 import { cn } from '@/utils/cn';
+import { createRequestKeeper } from '@/utils/requestId';
 
 const ALL_STORAGES: StorageType[] = ['REFRIGERADO', 'CONGELADO'];
 const SUCCESS_SECONDS = 10;
@@ -55,6 +56,7 @@ export function TotemLabelPage() {
   const [done, setDone] = useState<Done | null>(null);
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
+  const [requests] = useState(createRequestKeeper);
 
   // Produto + armazenamento do último uso. Com mais de um lote, quem está com a embalagem escolhe.
   useEffect(() => {
@@ -139,16 +141,18 @@ export function TotemLabelPage() {
     setSubmitError('');
     let created: Label | null = null;
     try {
-      const { data } = await labelApi.create({
+      const payload = {
         ...source,
         productId: product.id,
         lot: isPackage ? lot.trim() : undefined,
         responsibleName: responsible,
         storageType: storage,
         storageTemp: temps[storage],
-      });
+      };
+      const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
       const label: Label = data.data;
       created = label;
+      requests.reset(); // a próxima etiqueta, mesmo igual, é outro pedido
       rememberChoices(product.id, storage);
       printLabel(label, logo(), copies);
       await registerPrints(label, copies);
@@ -189,8 +193,8 @@ export function TotemLabelPage() {
     return (
       <Centered>
         <AlertTriangle className="h-16 w-16 text-rose-500" />
-        <h1 className="text-3xl font-extrabold">Produto indisponível</h1>
-        <p className="max-w-md text-xl text-slate-500">{loadError}</p>
+        <h1 className="text-2xl font-extrabold sm:text-3xl">Produto indisponível</h1>
+        <p className="max-w-md text-lg text-slate-500 sm:text-xl">{loadError}</p>
         <button type="button" className="btn btn-primary h-16 px-10 text-xl" onClick={() => navigate('/totem', { replace: true })}>
           Voltar ao início
         </button>
@@ -207,35 +211,35 @@ export function TotemLabelPage() {
     return (
       <Centered>
         {printed ? (
-          <CheckCircle2 className="h-24 w-24 text-emerald-500" />
+          <CheckCircle2 className="h-16 w-16 text-emerald-500 sm:h-24 sm:w-24 [@media(max-height:500px)]:h-12 [@media(max-height:500px)]:w-12" />
         ) : (
-          <AlertTriangle className="h-24 w-24 text-amber-500" />
+          <AlertTriangle className="h-16 w-16 text-amber-500 sm:h-24 sm:w-24 [@media(max-height:500px)]:h-12 [@media(max-height:500px)]:w-12" />
         )}
-        <h1 className="text-4xl font-extrabold">
+        <h1 className="text-2xl font-extrabold sm:text-4xl">
           {printed ? 'Etiqueta enviada para impressão' : 'Etiqueta salva, mas a impressão falhou'}
         </h1>
-        <div className="w-full max-w-xl rounded-3xl border-2 border-slate-200 bg-white p-6 text-left shadow-card">
-          <div className="text-2xl font-extrabold">{label.productName ?? product.name}</div>
-          <div className="mt-1 text-lg font-medium text-slate-500">
+        <div className="w-full max-w-xl rounded-3xl border-2 border-slate-200 bg-white p-4 text-left shadow-card sm:p-6">
+          <div className="break-words text-xl font-extrabold sm:text-2xl">{label.productName ?? product.name}</div>
+          <div className="mt-1 break-words text-base font-medium text-slate-500 sm:text-lg">
             {STORAGE_LABEL[label.storageType]} · Lote {label.lot} · Cód. {label.shortCode}
           </div>
-          <div className="mt-4 rounded-2xl bg-brand-600 px-5 py-4 text-white">
+          <div className="mt-3 rounded-2xl bg-brand-600 px-4 py-3 text-white sm:mt-4 sm:px-5 sm:py-4">
             <div className="text-sm font-bold uppercase tracking-wider opacity-90">Descartar em</div>
-            <div className="text-4xl font-extrabold">{formatBR(label.discardAt)}</div>
+            <div className="text-3xl font-extrabold sm:text-4xl">{formatBR(label.discardAt)}</div>
           </div>
         </div>
         {submitError && <p className="text-lg font-semibold text-rose-600">{submitError}</p>}
         <div className="flex w-full max-w-xl gap-3">
           <button
             type="button" disabled={submitting} onClick={() => void handleReprint()}
-            className="btn btn-outline h-20 flex-1 gap-2 text-xl font-extrabold"
+            className="btn btn-outline h-16 flex-1 gap-2 text-lg font-extrabold sm:h-20 sm:text-xl"
           >
             {submitting ? <Spinner size="sm" /> : <Printer className="h-6 w-6" />}
             {printed ? 'Reimprimir' : 'Tentar imprimir'}
           </button>
           <button
             type="button" onClick={() => navigate('/totem', { replace: true })}
-            className="btn btn-accent h-20 flex-1 text-xl font-extrabold"
+            className="btn btn-accent h-16 flex-1 text-lg font-extrabold sm:h-20 sm:text-xl"
           >
             Concluir
           </button>
@@ -250,35 +254,35 @@ export function TotemLabelPage() {
     : '';
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-5 p-5">
-      <div className="flex items-start gap-4">
+    <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col gap-3 p-3 sm:gap-5 sm:p-5">
+      <div className="flex items-start gap-3 sm:gap-4">
         <button
           type="button" aria-label="Voltar" onClick={() => navigate('/totem')}
-          className="flex h-20 w-20 shrink-0 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-200 bg-white active:scale-95"
+          className="flex h-14 w-14 shrink-0 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-200 bg-white active:scale-95 sm:h-20 sm:w-20"
         >
-          <ArrowLeft className="h-9 w-9" />
+          <ArrowLeft className="h-7 w-7 sm:h-9 sm:w-9" />
         </button>
-        <div className="min-w-0 pt-1">
-          <h1 className="line-clamp-2 text-4xl font-extrabold leading-tight">{product.name}</h1>
-          <p className="mt-1 truncate text-xl font-medium text-slate-500">
+        <div className="min-w-0 flex-1 pt-0.5 sm:pt-1">
+          <h1 className="line-clamp-4 break-words text-2xl font-extrabold leading-tight sm:line-clamp-3 sm:text-4xl">{product.name}</h1>
+          <p className="mt-1 line-clamp-2 break-words text-base font-medium text-slate-500 sm:text-xl">
             {product.brand}{product.category ? ` · ${product.category}` : ''}
           </p>
         </div>
       </div>
 
       {expiredLots.length > 0 && (
-        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-rose-300 bg-rose-50 p-4 text-lg font-bold text-rose-800">
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-rose-300 bg-rose-50 p-3 text-base font-bold text-rose-800 sm:p-4 sm:text-lg">
           <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0" />
-          <span>
+          <span className="min-w-0 break-words">
             {expiredLots.map((item) => `Lote ${item.code} venceu em ${formatBR(item.expiryDate)}`).join('; ')}. Não use: descarte.
           </span>
         </div>
       )}
 
       {/* A validade é a da embalagem em mãos: com vários lotes, nada vem marcado. */}
-      <section className="rounded-3xl border-2 border-slate-200 bg-white p-4">
-        <h2 className="mb-3 text-xl font-extrabold text-slate-600">Qual embalagem está em mãos?</h2>
-        <div className="grid gap-3 md:grid-cols-2">
+      <section className="rounded-3xl border-2 border-slate-200 bg-white p-3 sm:p-4">
+        <h2 className="mb-2 text-lg font-extrabold text-slate-600 sm:mb-3 sm:text-xl">Qual embalagem está em mãos?</h2>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-3">
           {lots.map((item) => (
             <SourceButton
               key={item.id}
@@ -298,7 +302,7 @@ export function TotemLabelPage() {
       </section>
 
       {/* Armazenamento: cada cartão já mostra a data de descarte calculada. */}
-      <div className={cn('grid gap-4', options.length > 1 ? 'md:grid-cols-2' : 'grid-cols-1')}>
+      <div className={cn('grid grid-cols-1 gap-3 sm:gap-4', options.length > 1 && 'sm:grid-cols-2')}>
         {options.map((type) => (
           <StorageCard
             key={type}
@@ -313,34 +317,34 @@ export function TotemLabelPage() {
       </div>
 
       {selectedPreview?.status === 'ok' && selectedPreview.data.cappedByOriginalExpiry && (
-        <div className="flex items-start gap-3 rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 text-lg font-semibold text-amber-900">
+        <div className="flex items-start gap-3 rounded-2xl border-2 border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-900 sm:p-4 sm:text-lg">
           <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-600" />
-          <span>
+          <span className="min-w-0">
             Data limitada pela validade original do fabricante ({formatBR(selectedPreview.data.originalExpiryDate)}).
           </span>
         </div>
       )}
 
       {/* Dados já preenchidos: tocar só se precisar mudar. */}
-      <div className={cn('grid gap-3', isPackage ? 'md:grid-cols-3' : 'md:grid-cols-2')}>
+      <div className={cn('grid grid-cols-1 gap-2 sm:gap-3', isPackage ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
         {isPackage && <FieldButton icon={<Hash className="h-6 w-6" />} label="Lote" value={lot || 'Informar'} onClick={() => setSheet('lot')} warn={!lot.trim()} />}
         <FieldButton icon={<Thermometer className="h-6 w-6" />} label="Temperatura" value={temps[storage]} onClick={() => setSheet('temp')} />
         <FieldButton icon={<User className="h-6 w-6" />} label="Responsável" value={operator || 'Informar'} onClick={openOperatorSheet} warn={!operator} />
       </div>
 
-      <div className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-5 py-3">
-        <span className="text-xl font-bold text-slate-600">Quantidade de etiquetas</span>
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between gap-3 rounded-2xl border-2 border-slate-200 bg-white px-4 py-2 sm:px-5 sm:py-3">
+        <span className="text-lg font-bold leading-tight text-slate-600 sm:text-xl">Quantidade de etiquetas</span>
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <button
             type="button" aria-label="Diminuir" disabled={copies <= 1} onClick={() => setCopies((n) => Math.max(1, n - 1))}
-            className="flex h-16 w-16 touch-manipulation items-center justify-center rounded-2xl bg-slate-100 active:scale-95 disabled:opacity-40"
+            className="flex h-14 w-14 touch-manipulation items-center justify-center rounded-2xl bg-slate-100 active:scale-95 disabled:opacity-40 sm:h-16 sm:w-16"
           >
             <Minus className="h-7 w-7" />
           </button>
-          <span className="w-12 text-center text-4xl font-extrabold tabular-nums">{copies}</span>
+          <span className="w-10 text-center text-3xl sm:w-12 sm:text-4xl font-extrabold tabular-nums">{copies}</span>
           <button
             type="button" aria-label="Aumentar" disabled={copies >= MAX_COPIES} onClick={() => setCopies((n) => Math.min(MAX_COPIES, n + 1))}
-            className="flex h-16 w-16 touch-manipulation items-center justify-center rounded-2xl bg-slate-100 active:scale-95 disabled:opacity-40"
+            className="flex h-14 w-14 touch-manipulation items-center justify-center rounded-2xl bg-slate-100 active:scale-95 disabled:opacity-40 sm:h-16 sm:w-16"
           >
             <Plus className="h-7 w-7" />
           </button>
@@ -348,25 +352,25 @@ export function TotemLabelPage() {
       </div>
 
       {submitError && (
-        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-rose-300 bg-rose-50 p-4 text-lg font-bold text-rose-800">
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-rose-300 bg-rose-50 p-3 text-base font-bold text-rose-800 sm:p-4 sm:text-lg">
           <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0" />
-          <span>{submitError}</span>
+          <span className="min-w-0 break-words">{submitError}</span>
         </div>
       )}
 
-      <div className="sticky bottom-0 -mx-5 mt-auto bg-gradient-to-t from-[#F3F4F6] via-[#F3F4F6] to-transparent px-5 pb-5 pt-4">
+      <div className="sticky bottom-0 -mx-3 mt-auto bg-gradient-to-t from-[#F3F4F6] via-[#F3F4F6] to-transparent px-3 pb-3 pt-3 sm:-mx-5 sm:px-5 sm:pb-5 sm:pt-4">
         <button
           type="button"
           disabled={!canPrint}
           onClick={() => void handlePrint()}
-          className="btn btn-accent flex h-28 w-full flex-col gap-0 rounded-3xl text-3xl font-extrabold shadow-lg"
+          className="btn btn-accent flex h-auto min-h-[84px] w-full flex-col gap-0 rounded-3xl px-3 py-2 text-xl font-extrabold shadow-lg sm:h-28 sm:text-3xl [@media(max-height:500px)]:h-auto [@media(max-height:500px)]:min-h-[64px] [@media(max-height:500px)]:text-xl"
         >
           {submitting ? (
             <Spinner size="md" className="text-white" />
           ) : (
             <>
-              <span className="flex items-center gap-3"><Printer className="h-8 w-8" /> IMPRIMIR ETIQUETA{copies > 1 ? ` (${copies})` : ''}</span>
-              <span className="mt-1 text-lg font-semibold opacity-90">
+              <span className="flex items-center gap-2 sm:gap-3"><Printer className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" /> IMPRIMIR ETIQUETA{copies > 1 ? ` (${copies})` : ''}</span>
+              <span className="mt-1 text-sm font-semibold opacity-90 sm:text-lg">
                 {STORAGE_LABEL[storage]}{discardText ? ` · descarte ${discardText}` : ''}
               </span>
             </>
@@ -453,7 +457,7 @@ function storagesOf(product: Product): StorageType[] {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center gap-5 p-6 text-center">
+    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center gap-3 p-4 text-center sm:gap-5 sm:p-6">
       {children}
     </div>
   );
@@ -468,14 +472,14 @@ function SourceButton({ selected, title, subtitle, onClick }: {
       onClick={onClick}
       aria-pressed={selected}
       className={cn(
-        'flex min-h-[88px] touch-manipulation items-center gap-4 rounded-2xl border-4 px-5 py-3 text-left active:scale-[0.98]',
+        'flex min-h-[72px] min-w-0 touch-manipulation items-center gap-3 rounded-2xl border-4 px-3 py-2 text-left active:scale-[0.98] sm:min-h-[88px] sm:gap-4 sm:px-5 sm:py-3',
         selected ? 'border-brand-500 bg-orange-50/50' : 'border-slate-200 bg-white',
       )}
     >
-      <CalendarDays className={cn('h-8 w-8 shrink-0', selected ? 'text-brand-600' : 'text-slate-400')} />
+      <CalendarDays className={cn('h-7 w-7 shrink-0 sm:h-8 sm:w-8', selected ? 'text-brand-600' : 'text-slate-400')} />
       <span className="min-w-0">
-        <span className="block truncate text-2xl font-extrabold">{title}</span>
-        <span className="block truncate text-lg font-semibold text-slate-500">{subtitle}</span>
+        <span className="block break-words text-xl font-extrabold leading-tight sm:text-2xl">{title}</span>
+        <span className="block break-words text-base font-semibold leading-tight text-slate-500 sm:text-lg">{subtitle}</span>
       </span>
     </button>
   );
@@ -494,24 +498,24 @@ function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        'relative flex min-h-[210px] touch-manipulation flex-col justify-between rounded-3xl border-4 bg-white p-6 text-left shadow-card transition-transform active:scale-[0.98]',
+        'relative flex min-h-[150px] min-w-0 touch-manipulation flex-col justify-between rounded-3xl border-4 bg-white p-4 text-left shadow-card transition-transform active:scale-[0.98] sm:min-h-[210px] sm:p-6',
         selected ? 'border-brand-500 bg-orange-50/50' : 'border-slate-200',
       )}
     >
       {selected && (
-        <span className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-brand-500 text-white">
+        <span className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-brand-500 text-white">
           <Check className="h-6 w-6" />
         </span>
       )}
       <div className="flex items-center gap-3">
-        <Icon className={cn('h-10 w-10', iconColor)} />
+        <Icon className={cn('h-8 w-8 sm:h-10 sm:w-10', iconColor)} />
         <div>
-          <div className="text-3xl font-extrabold">{STORAGE_LABEL[type]}</div>
+          <div className="text-2xl font-extrabold sm:text-3xl">{STORAGE_LABEL[type]}</div>
           <div className="text-lg font-semibold text-slate-500">{temp}</div>
         </div>
       </div>
 
-      <div className="mt-4">
+      <div className="mt-3 sm:mt-4">
         {waiting ? (
           <p className="text-lg font-bold leading-snug text-slate-400">Escolha a embalagem para calcular o descarte.</p>
         ) : state?.status === 'error' ? (
@@ -519,7 +523,7 @@ function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
         ) : ok ? (
           <>
             <div className="text-sm font-bold uppercase tracking-wider text-slate-400">Descartar em</div>
-            <div className="text-5xl font-extrabold leading-none text-charcoal-800">{formatBR(ok.discardAt)}</div>
+            <div className="text-4xl font-extrabold leading-none text-charcoal-800 sm:text-5xl">{formatBR(ok.discardAt)}</div>
             <div className="mt-2 text-lg font-semibold capitalize text-slate-500">
               {weekdayShort(ok.discardAt)} · {ok.rule.shelfLifeDays} dias
               {ok.cappedByOriginalExpiry ? ' · limitado pelo fabricante' : ''}
@@ -543,14 +547,14 @@ function FieldButton({ icon, label, value, onClick, warn }: {
       type="button"
       onClick={onClick}
       className={cn(
-        'flex min-h-[84px] touch-manipulation items-center gap-4 rounded-2xl border-2 bg-white px-5 py-3 text-left active:scale-[0.98]',
+        'flex min-h-[72px] min-w-0 touch-manipulation items-center gap-3 rounded-2xl border-2 bg-white px-4 py-2 text-left active:scale-[0.98] sm:min-h-[84px] sm:gap-4 sm:px-5 sm:py-3',
         warn ? 'border-brand-500 bg-brand-50' : 'border-slate-200',
       )}
     >
-      <span className="text-slate-400">{icon}</span>
-      <span className="min-w-0">
+      <span className="shrink-0 text-slate-400">{icon}</span>
+      <span className="min-w-0 flex-1">
         <span className="block text-sm font-bold uppercase tracking-wider text-slate-400">{label}</span>
-        <span className="block truncate text-2xl font-extrabold">{value}</span>
+        <span className="block truncate text-xl font-extrabold sm:text-2xl">{value}</span>
       </span>
     </button>
   );

@@ -14,6 +14,13 @@ export const authApi = {
   refresh: (refreshToken: string) =>
     api.post<ApiResponse<AuthTokens>>('/auth/refresh', { refreshToken }),
 
+  /** Usa o refresh token: encerra a sessão mesmo com o token de acesso vencido. */
+  logout: (refreshToken: string) =>
+    api.post<ApiResponse<null>>('/auth/logout', { refreshToken }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    api.patch<ApiResponse<null>>('/auth/password', { currentPassword, newPassword }),
+
   verifyAdmin: (email: string, password: string) =>
     api.post<ApiResponse<{ valid: boolean }>>('/auth/verify-admin', { email, password }),
 

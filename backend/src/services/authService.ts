@@ -1,35 +1,44 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../prisma/client';
-import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
 import { AppError, Errors } from '../utils/errors';
+import { verifyRefreshToken } from '../utils/jwt';
+import { SessionService } from './sessionService';
+
+// Mesma mensagem para e-mail inexistente, conta desativada e senha errada: não revela quais contas existem.
+const invalidCredentials = () => new AppError('E-mail ou senha incorretos.', 401, 'INVALID_CREDENTIALS');
 
 export const AuthService = {
   async login(email: string, password: string) {
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user || !user.active) throw Errors.unauthorized();
+    if (!user || !user.active) throw invalidCredentials();
 
     const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) throw Errors.unauthorized();
+    if (!valid) throw invalidCredentials();
 
-    const payload = { sub: user.id, name: user.name, role: user.role };
+    const tokens = await SessionService.start(user);
     return {
-      accessToken:  signAccessToken(payload),
-      refreshToken: signRefreshToken(payload),
+      ...tokens,
       user: { id: user.id, name: user.name, email: user.email, role: user.role },
     };
   },
 
   async refresh(refreshToken: string) {
-    const payload = verifyRefreshToken(refreshToken);
+    return SessionService.rotate(refreshToken);
+  },
 
-    const user = await prisma.user.findUnique({ where: { id: payload.sub } });
-    if (!user || !user.active) throw Errors.unauthorized();
+  async logout(refreshToken: string): Promise<void> {
+    await SessionService.revoke(verifyRefreshToken(refreshToken).sid);
+  },
 
-    const newPayload = { sub: user.id, name: user.name, role: user.role };
-    return {
-      accessToken:  signAccessToken(newPayload),
-      refreshToken: signRefreshToken(newPayload),
-    };
+  async changePassword(userId: string, sid: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw Errors.unauthorized();
+    // 422, e não 401: o frontend trataria 401 como sessão expirada e tentaria renovar.
+    if (!await bcrypt.compare(currentPassword, user.passwordHash)) throw Errors.validation('Senha atual incorreta.');
+    if (currentPassword === newPassword) throw Errors.validation('A nova senha precisa ser diferente da atual.');
+
+    await prisma.user.update({ where: { id: userId }, data: { passwordHash: await AuthService.hashPassword(newPassword) } });
+    await SessionService.revokeAll(userId, sid);
   },
 
   async verifyAdmin(email: string, password: string): Promise<void> {

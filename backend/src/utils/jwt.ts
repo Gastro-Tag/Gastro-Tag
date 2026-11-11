@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { AppError, Errors } from './errors';
 
 const ACCESS_SECRET = readSecret('JWT_ACCESS_SECRET');
 const REFRESH_SECRET = readSecret('JWT_REFRESH_SECRET');
 const ACCESS_EXPIRES = '8h';
-const REFRESH_EXPIRES = '7d';
+export const REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function readSecret(name: string): string {
   const secret = process.env[name];
@@ -18,6 +19,8 @@ export interface TokenPayload {
   sub: string;
   name: string;
   role: string;
+  /** Sessão do aparelho em `user_sessions`; encerrá-la invalida os dois tokens. */
+  sid: string;
   type: 'access' | 'refresh';
 }
 
@@ -26,7 +29,11 @@ export function signAccessToken(payload: Omit<TokenPayload, 'type'>): string {
 }
 
 export function signRefreshToken(payload: Omit<TokenPayload, 'type'>): string {
-  return jwt.sign({ ...payload, type: 'refresh' }, REFRESH_SECRET, { expiresIn: REFRESH_EXPIRES });
+  // jti deixa cada renovação única, mesmo duas no mesmo segundo.
+  return jwt.sign({ ...payload, type: 'refresh' }, REFRESH_SECRET, {
+    expiresIn: Math.floor(REFRESH_TTL_MS / 1000),
+    jwtid: randomUUID(),
+  });
 }
 
 function verifyToken(token: string, secret: string, expectedType: TokenPayload['type']): TokenPayload {
@@ -37,7 +44,8 @@ function verifyToken(token: string, secret: string, expectedType: TokenPayload['
       payload.type !== expectedType ||
       typeof payload.sub !== 'string' ||
       typeof payload.name !== 'string' ||
-      typeof payload.role !== 'string'
+      typeof payload.role !== 'string' ||
+      typeof payload.sid !== 'string'
     ) {
       throw Errors.unauthorized();
     }

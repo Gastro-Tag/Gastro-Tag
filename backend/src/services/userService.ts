@@ -2,6 +2,7 @@ import { UserRole } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import { AuthService } from './authService';
+import { SessionService } from './sessionService';
 
 const publicFields = {
   id: true, name: true, email: true, role: true, active: true, createdAt: true,
@@ -39,10 +40,13 @@ export const UserService = {
     if (id === actorId && (data.active === false || data.role === 'OPERATOR')) {
       throw Errors.validation('Você não pode desativar nem rebaixar a própria conta.');
     }
-    const user = await prisma.user.findUnique({ where: { id }, select: { id: true } });
+    const user = await prisma.user.findUnique({ where: { id }, select: { id: true, role: true } });
     if (!user) throw Errors.notFound('Usuário');
     if (data.email) await ensureEmailAvailable(data.email, id);
-    return prisma.user.update({ where: { id }, data, select: publicFields });
+    const updated = await prisma.user.update({ where: { id }, data, select: publicFields });
+    // Desativar ou trocar o perfil derruba as sessões abertas: quem volta entra com o acesso novo.
+    if (data.active === false || (data.role && data.role !== user.role)) await SessionService.revokeAll(id);
+    return updated;
   },
 
   async resetPassword(id: string, password: string) {
@@ -52,5 +56,6 @@ export const UserService = {
       where: { id },
       data: { passwordHash: await AuthService.hashPassword(password) },
     });
+    await SessionService.revokeAll(id);
   },
 };

@@ -19,6 +19,22 @@ export interface LabelInput {
   openedAt?: string;
   storageType: 'REFRIGERADO' | 'CONGELADO';
   storageTemp: string;
+  /** Gerado pelo aparelho a cada pedido: o reenvio do mesmo pedido devolve a etiqueta já criada. */
+  requestId?: string;
+}
+
+const labelInclude = { product: true, user: { select: { name: true } }, rule: true } as const;
+
+async function findReplay(data: LabelInput) {
+  if (!data.requestId) return null;
+  const existing = await prisma.label.findUnique({
+    where: { userId_requestId: { userId: data.userId, requestId: data.requestId } },
+    include: labelInclude,
+  });
+  if (existing && existing.productId !== data.productId) {
+    throw Errors.conflict('Este pedido já gerou uma etiqueta de outro produto.');
+  }
+  return existing;
 }
 
 export const LabelService = {
@@ -80,7 +96,11 @@ export const LabelService = {
     };
   },
 
+  /** `replayed`: o mesmo pedido já tinha gerado esta etiqueta (rede caiu, toque repetido). */
   async create(data: LabelInput) {
+    const replay = await findReplay(data);
+    if (replay) return { label: replay, replayed: true };
+
     const preview = await LabelService.preview(data);
     const lot = preview.lot?.code ?? data.lot;
     if (!lot) throw Errors.validation('Informe o lote da embalagem.');
@@ -90,19 +110,30 @@ export const LabelService = {
       if (!await prisma.label.findUnique({ where: { shortCode } })) break;
       if (attempt === 9) throw Errors.internal();
     }
-    return prisma.label.create({
-      data: {
-        shortCode, productId: data.productId, userId: data.userId, lot, lotId: preview.lot?.id,
-        openedAt: preview.openedAt, discardAt: preview.discardAt,
-        storageType: data.storageType as StorageType, storageTemp: data.storageTemp,
-        ruleId: preview.rule.id, shelfLifeDays: preview.rule.shelfLifeDays,
-        originalExpiryDate: preview.originalExpiryDate,
-        cappedByOriginalExpiry: preview.cappedByOriginalExpiry,
-        productName: preview.product.name, productBrand: preview.product.brand,
-        responsibleName: data.responsibleName.trim(),
-      },
-      include: { product: true, user: { select: { name: true } }, rule: true },
-    });
+    try {
+      const label = await prisma.label.create({
+        data: {
+          shortCode, productId: data.productId, userId: data.userId, lot, lotId: preview.lot?.id,
+          openedAt: preview.openedAt, discardAt: preview.discardAt,
+          storageType: data.storageType as StorageType, storageTemp: data.storageTemp,
+          ruleId: preview.rule.id, shelfLifeDays: preview.rule.shelfLifeDays,
+          originalExpiryDate: preview.originalExpiryDate,
+          cappedByOriginalExpiry: preview.cappedByOriginalExpiry,
+          productName: preview.product.name, productBrand: preview.product.brand,
+          responsibleName: data.responsibleName.trim(),
+          requestId: data.requestId,
+        },
+        include: labelInclude,
+      });
+      return { label, replayed: false };
+    } catch (error) {
+      // Dois envios simultâneos do mesmo pedido: o segundo perde na chave única e devolve o primeiro.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const raced = await findReplay(data);
+        if (raced) return { label: raced, replayed: true };
+      }
+      throw error;
+    }
   },
 
   async list(filters: {
