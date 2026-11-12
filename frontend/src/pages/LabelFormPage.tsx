@@ -14,6 +14,9 @@ import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
 import { createRequestKeeper } from '@/utils/requestId';
 import {
+  SUGGESTED_TEMPERATURE, TEMP_MAX, TEMP_MIN, formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft,
+} from '@/utils/temperature';
+import {
   LABEL_TEMPLATES, getLabelTemplate, loadLabelTemplateId, saveLabelTemplateId, type LabelTemplateId,
 } from '@/utils/labelTemplates';
 
@@ -54,10 +57,11 @@ export function LabelFormPage() {
         const single = usable.length === 1 && !usable[0].needsReview;
         const source = single ? usable[0].id : usable.length === 0 ? PACKAGE : '';
         setForm((value) => ({ ...value, source }));
+        // A temperatura NÃO é preenchida: a sugestão aparece ao lado do campo e o operador a digita ou confirma.
         if (nextProduct.daysValidRefrigerated > 0) {
-          setForm((value) => ({ ...value, storageType: 'REFRIGERADO', storageTemp: '4 °C' }));
+          setForm((value) => ({ ...value, storageType: 'REFRIGERADO' }));
         } else if (nextProduct.daysValidFrozen > 0) {
-          setForm((value) => ({ ...value, storageType: 'CONGELADO', storageTemp: '-18 °C' }));
+          setForm((value) => ({ ...value, storageType: 'CONGELADO' }));
         }
       })
       .catch(() => {
@@ -72,14 +76,20 @@ export function LabelFormPage() {
   const expiredLots = useMemo(() => (product?.lots ?? []).filter((lot) => lot.computedStatus === 'expired' && !lot.needsReview), [product]);
   const selectedLot = lots.find((lot) => lot.id === form.source);
 
+  // Só o número válido segue ao servidor; sem ele, o preview calcula a data e não valida a faixa da regra.
+  const temperature = parseTemperature(form.storageTemp);
+  const tempInvalid = form.storageTemp.trim() !== '' && temperature === null;
+  const suggested = form.storageType ? SUGGESTED_TEMPERATURE[form.storageType] : null;
+
   const requestKey = useMemo(() => JSON.stringify([
-    productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, form.storageTemp.trim(),
-  ]), [productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, form.storageTemp]);
+    productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, temperature,
+  ]), [productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, temperature]);
   const previewReady = Boolean(
     form.source && (!isPackage || form.originalExpiryDate)
-    && form.storageType && form.storageTemp.trim() && (form.openedAt || !dateFilled),
+    && form.storageType && (form.openedAt || !dateFilled),
   );
   const previewMatchesForm = preview?.requestKey === requestKey;
+  const rangeText = previewMatchesForm && preview ? formatTemperatureRange(preview.rule.minTemperature, preview.rule.maxTemperature) : null;
 
   useEffect(() => {
     if (!product || !previewReady) {
@@ -97,7 +107,7 @@ export function LabelFormPage() {
           ...expirySource(form.source, form.originalExpiryDate),
           productId, openedAt: form.openedAt || undefined,
           storageType: form.storageType as StorageType,
-          storageTemp: form.storageTemp.trim(),
+          storageTemperature: temperature ?? undefined,
         });
         if (active) {
           setPreview({ ...data.data, requestKey });
@@ -113,7 +123,7 @@ export function LabelFormPage() {
       }
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [product, productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, form.storageTemp, previewReady, requestKey, dateFilled]);
+  }, [product, productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, temperature, previewReady, requestKey, dateFilled]);
 
   function setField(field: 'source' | 'lot' | 'originalExpiryDate' | 'responsibleName' | 'openedAt' | 'storageType' | 'storageTemp', value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -121,7 +131,7 @@ export function LabelFormPage() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!form.storageType || !previewMatchesForm) return;
+    if (!form.storageType || !previewMatchesForm || temperature === null) return;
     setSubmitting(true);
     let createdLabel: import('@/types').Label | null = null;
     try {
@@ -132,7 +142,7 @@ export function LabelFormPage() {
         responsibleName: form.responsibleName.trim(),
         openedAt: form.openedAt,
         storageType: form.storageType,
-        storageTemp: form.storageTemp.trim(),
+        storageTemperature: temperature,
       };
       const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
       createdLabel = data.data;
@@ -314,16 +324,13 @@ export function LabelFormPage() {
                     name="storageType"
                     value="REFRIGERADO"
                     checked={form.storageType === 'REFRIGERADO'}
-                    onChange={() => {
-                      setField('storageType', 'REFRIGERADO');
-                      if (!form.storageTemp) setField('storageTemp', '4 °C');
-                    }}
+                    onChange={() => setField('storageType', 'REFRIGERADO')}
                     className="accent-brand-600"
                   />
                   <Refrigerator className="w-5 h-5 text-sky-600 shrink-0" />
                   <div>
                     <span className="text-xs font-bold block">Refrigerado</span>
-                    <span className="text-[11px] text-slate-400">Padronizado ~4 °C</span>
+                    <span className="text-[11px] text-slate-400">Sugestão: 4 °C</span>
                   </div>
                 </label>
 
@@ -338,32 +345,59 @@ export function LabelFormPage() {
                     name="storageType"
                     value="CONGELADO"
                     checked={form.storageType === 'CONGELADO'}
-                    onChange={() => {
-                      setField('storageType', 'CONGELADO');
-                      if (!form.storageTemp) setField('storageTemp', '-18 °C');
-                    }}
+                    onChange={() => setField('storageType', 'CONGELADO')}
                     className="accent-brand-600"
                   />
                   <Snowflake className="w-5 h-5 text-indigo-600 shrink-0" />
                   <div>
                     <span className="text-xs font-bold block">Congelado</span>
-                    <span className="text-[11px] text-slate-400">Padronizado ~ -18 °C</span>
+                    <span className="text-[11px] text-slate-400">Sugestão: −18 °C</span>
                   </div>
                 </label>
               </div>
             </Field>
 
-            <Field label="Temperatura Registrada no Ponto" required>
+            <Field label="Temperatura Medida no Ponto (°C)" required htmlFor="storage-temperature">
               <div className="relative max-w-sm">
                 <Thermometer className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input
+                  id="storage-temperature"
                   value={form.storageTemp}
                   onChange={(e) => setField('storageTemp', e.target.value)}
-                  className="input pl-10"
-                  placeholder="Ex: 4 °C ou -18 °C"
+                  className={cn('input pl-10', tempInvalid && 'border-rose-400')}
+                  placeholder="Digite a temperatura, ex.: 4 ou -18"
+                  inputMode="decimal"
+                  autoComplete="off"
                   required
-                  maxLength={40}
+                  maxLength={10}
+                  aria-invalid={tempInvalid}
+                  aria-describedby="storage-temperature-help"
                 />
+              </div>
+              <div id="storage-temperature-help" className="mt-1.5 space-y-1.5 text-[11px]">
+                {tempInvalid && (
+                  <p role="alert" className="font-semibold text-rose-600">
+                    Digite um número entre {formatTemperatureShort(TEMP_MIN)} e {formatTemperatureShort(TEMP_MAX)} (aceita vírgula).
+                  </p>
+                )}
+                {suggested !== null && temperature !== suggested && (
+                  <p className="flex flex-wrap items-center gap-2 text-slate-500">
+                    <span>Sugestão: {formatTemperatureShort(suggested)} (não é medição).</span>
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-sm"
+                      onClick={() => setField('storageTemp', temperatureDraft(suggested))}
+                    >
+                      Usar {formatTemperatureShort(suggested)}
+                    </button>
+                  </p>
+                )}
+                {rangeText && (
+                  <p className="font-semibold text-slate-600">Faixa da regra: {rangeText}</p>
+                )}
+                {temperature === null && !tempInvalid && (
+                  <p className="text-slate-400">Informe a temperatura conferida agora para gerar a etiqueta.</p>
+                )}
               </div>
             </Field>
           </form>
@@ -446,7 +480,7 @@ export function LabelFormPage() {
           <button
             type="submit"
             form="label-form"
-            disabled={submitting || !previewMatchesForm || previewLoading}
+            disabled={submitting || !previewMatchesForm || previewLoading || temperature === null}
             className="btn btn-accent w-full py-3.5 text-sm font-bold shadow-md"
           >
             {submitting || previewLoading ? (
@@ -487,12 +521,22 @@ export function LabelFormPage() {
               responsibleName={form.responsibleName}
               openedAt={form.openedAt}
               storageType={form.storageType}
-              storageTemp={form.storageTemp}
+              storageTemp={temperature !== null ? formatTemperature(temperature) : ''}
               preview={previewMatchesForm ? preview : null}
               previewLoading={previewLoading}
               logoUrl={logoUrl || '/logo.png'}
             />
           </div>
+
+          {previewMatchesForm && preview && !preview.rule.validated && (
+            <div role="alert" className="flex items-start gap-2.5 p-3.5 rounded-xl border border-amber-300 bg-amber-50 text-xs text-amber-900">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <strong>Prazo do cadastro do produto, sem regra validada.</strong> A etiqueta sairá com este aviso.
+                Um administrador pode cadastrar a regra em Regras de validade.
+              </span>
+            </div>
+          )}
 
           {previewMatchesForm && preview?.cappedByOriginalExpiry && (
             <div className="flex items-start gap-2.5 p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-xs text-amber-900">
@@ -592,7 +636,9 @@ function LabelPreviewCard({
 
         {preview && (
           <div className="text-[10px] text-slate-500 font-medium">
-            Fonte: {preview.rule.source}
+            {preview.rule.validated
+              ? `Fonte: ${preview.rule.source}${preview.rule.version != null ? ` (v${preview.rule.version})` : ''}`
+              : 'Prazo sem regra validada'}
           </div>
         )}
 
@@ -612,10 +658,10 @@ function LabelPreviewCard({
 }
 
 // ── Field wrapper ─────────────────────────────────────────
-function Field({ label, required, children }: { label: string; required?: boolean; children: React.ReactNode }) {
+function Field({ label, required, htmlFor, children }: { label: string; required?: boolean; htmlFor?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+      <label htmlFor={htmlFor} className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
         {label} {required && <span className="text-rose-500">*</span>}
       </label>
       {children}

@@ -13,9 +13,10 @@ import { useTotemStore } from '@/store/totemStore';
 import { formatBR } from '@/utils/date';
 import { printLabel } from '@/utils/printLabel';
 import {
-  DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft, formatTemperature,
-  getLastStorage, getOperator, parseDateDraft, rememberChoices, temperatureDraft, weekdayShort,
+  DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft,
+  getLastStorage, getOperator, parseDateDraft, rememberChoices, weekdayShort,
 } from '@/utils/totem';
+import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
 import { createRequestKeeper } from '@/utils/requestId';
 
@@ -43,7 +44,9 @@ export function TotemLabelPage() {
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState('');
   const [storage, setStorage] = useState<StorageType | null>(null);
-  const [temps, setTemps] = useState<Record<StorageType, string>>({ ...DEFAULT_TEMP });
+  // Só vale a temperatura que o operador confirmou NESTA etiqueta. O valor de DEFAULT_TEMP é apenas sugestão
+  // e a tela é remontada a cada etiqueta, então a próxima sempre pede a confirmação de novo.
+  const [temps, setTemps] = useState<Partial<Record<StorageType, number>>>({});
   // Lote cadastrado ou validade digitada a partir da embalagem em mãos.
   const [source, setSource] = useState<ExpirySource | null>(null);
   const [packageExpiry, setPackageExpiry] = useState('');
@@ -93,7 +96,7 @@ export function TotemLabelPage() {
     let active = true;
     for (const type of options) {
       setPreviews((current) => ({ ...current, [type]: { status: 'loading' } }));
-      labelApi.preview({ ...source, productId: product.id, storageType: type, storageTemp: temps[type] })
+      labelApi.preview({ ...source, productId: product.id, storageType: type, storageTemperature: temps[type] })
         .then(({ data }) => {
           if (!active) return;
           setPreviews((current) => ({ ...current, [type]: { status: 'ok', data: data.data } }));
@@ -119,6 +122,7 @@ export function TotemLabelPage() {
   const selectedPreview = storage ? previews[storage] : undefined;
   const isPackage = Boolean(source?.originalExpiryDate);
   const lotReady = !isPackage || Boolean(lot.trim());
+  const confirmedTemp = storage ? temps[storage] : undefined;
   const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lotReady && !submitting);
 
   async function registerPrints(label: Label, count: number) {
@@ -135,6 +139,9 @@ export function TotemLabelPage() {
     const responsible = getOperator();
     if (!responsible) { syncOperator(); openOperatorSheet(); return; }
     if (!source || selectedPreview?.status !== 'ok' || !lotReady) return;
+    // Imprimir só depois de o operador confirmar a temperatura no teclado numérico.
+    const temperature = temps[storage];
+    if (temperature === undefined) { setSheet('temp'); return; }
 
     lock.current = true;
     setSubmitting(true);
@@ -147,7 +154,7 @@ export function TotemLabelPage() {
         lot: isPackage ? lot.trim() : undefined,
         responsibleName: responsible,
         storageType: storage,
-        storageTemp: temps[storage],
+        storageTemperature: temperature,
       };
       const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
       const label: Label = data.data;
@@ -308,6 +315,7 @@ export function TotemLabelPage() {
             key={type}
             type={type}
             temp={temps[type]}
+            suggested={DEFAULT_TEMP[type]}
             selected={storage === type}
             state={previews[type]}
             waiting={!source}
@@ -325,10 +333,22 @@ export function TotemLabelPage() {
         </div>
       )}
 
+      {selectedPreview?.status === 'ok' && !selectedPreview.data.rule.validated && (
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-900 sm:p-4 sm:text-lg">
+          <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-600" />
+          <span className="min-w-0">Prazo do cadastro do produto, sem regra validada.</span>
+        </div>
+      )}
+
       {/* Dados já preenchidos: tocar só se precisar mudar. */}
       <div className={cn('grid grid-cols-1 gap-2 sm:gap-3', isPackage ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
         {isPackage && <FieldButton icon={<Hash className="h-6 w-6" />} label="Lote" value={lot || 'Informar'} onClick={() => setSheet('lot')} warn={!lot.trim()} />}
-        <FieldButton icon={<Thermometer className="h-6 w-6" />} label="Temperatura" value={temps[storage]} onClick={() => setSheet('temp')} />
+        <TempButton
+          suggested={DEFAULT_TEMP[storage]}
+          confirmed={confirmedTemp}
+          range={selectedPreview?.status === 'ok' ? formatTemperatureRange(selectedPreview.data.rule.minTemperature, selectedPreview.data.rule.maxTemperature) : null}
+          onClick={() => setSheet('temp')}
+        />
         <FieldButton icon={<User className="h-6 w-6" />} label="Responsável" value={operator || 'Informar'} onClick={openOperatorSheet} warn={!operator} />
       </div>
 
@@ -369,9 +389,15 @@ export function TotemLabelPage() {
             <Spinner size="md" className="text-white" />
           ) : (
             <>
-              <span className="flex items-center gap-2 sm:gap-3"><Printer className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" /> IMPRIMIR ETIQUETA{copies > 1 ? ` (${copies})` : ''}</span>
+              <span className="flex items-center gap-2 sm:gap-3">
+                {confirmedTemp === undefined
+                  ? <><Thermometer className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" /> CONFIRMAR TEMPERATURA</>
+                  : <><Printer className="h-6 w-6 shrink-0 sm:h-8 sm:w-8" /> IMPRIMIR ETIQUETA{copies > 1 ? ` (${copies})` : ''}</>}
+              </span>
               <span className="mt-1 text-sm font-semibold opacity-90 sm:text-lg">
-                {STORAGE_LABEL[storage]}{discardText ? ` · descarte ${discardText}` : ''}
+                {confirmedTemp === undefined
+                  ? `Antes de imprimir · sugerida ${formatTemperatureShort(DEFAULT_TEMP[storage])}`
+                  : `${STORAGE_LABEL[storage]}${discardText ? ` · descarte ${discardText}` : ''}`}
               </span>
             </>
           )}
@@ -424,17 +450,18 @@ export function TotemLabelPage() {
       {sheet === 'temp' && (
         <KeyboardSheet
           title={`Temperatura — ${STORAGE_LABEL[storage]}`}
-          hint="Digite em °C. Use ± para temperaturas negativas."
+          hint={`Sugestão: ${formatTemperatureShort(DEFAULT_TEMP[storage])}. Confira o termômetro e confirme o valor medido. Use ± para negativo.`}
           placeholder="Ex.: 4"
-          initialValue={temperatureDraft(temps[storage])}
+          initialValue={temperatureDraft(confirmedTemp ?? DEFAULT_TEMP[storage])}
           layout="numeric"
           maxLength={6}
-          confirmLabel="Salvar temperatura"
+          confirmLabel="Confirmar temperatura"
           onCancel={() => setSheet(null)}
           onConfirm={(value) => {
-            const formatted = formatTemperature(value);
-            if (!formatted) return 'Digite uma temperatura válida, em °C.';
-            setTemps((current) => ({ ...current, [storage]: formatted }));
+            const temperature = parseTemperature(value);
+            if (temperature === null) return 'Digite uma temperatura válida, em °C (de −50 a 30).';
+            setTemps((current) => ({ ...current, [storage]: temperature }));
+            setSubmitError('');
             setSheet(null);
           }}
         />
@@ -485,8 +512,8 @@ function SourceButton({ selected, title, subtitle, onClick }: {
   );
 }
 
-function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
-  type: StorageType; temp: string; selected: boolean; state?: PreviewState; waiting: boolean; onSelect: () => void;
+function StorageCard({ type, temp, suggested, selected, state, waiting, onSelect }: {
+  type: StorageType; temp: number | undefined; suggested: number; selected: boolean; state?: PreviewState; waiting: boolean; onSelect: () => void;
 }) {
   const Icon = type === 'REFRIGERADO' ? Refrigerator : Snowflake;
   const iconColor = type === 'REFRIGERADO' ? 'text-sky-600' : 'text-indigo-600';
@@ -511,7 +538,11 @@ function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
         <Icon className={cn('h-8 w-8 sm:h-10 sm:w-10', iconColor)} />
         <div>
           <div className="text-2xl font-extrabold sm:text-3xl">{STORAGE_LABEL[type]}</div>
-          <div className="text-lg font-semibold text-slate-500">{temp}</div>
+          {temp !== undefined ? (
+            <div className="text-lg font-semibold text-slate-500">{formatTemperature(temp)}</div>
+          ) : (
+            <div className="text-lg font-bold text-amber-700">{formatTemperatureShort(suggested)} sugerida</div>
+          )}
         </div>
       </div>
 
@@ -527,6 +558,7 @@ function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
             <div className="mt-2 text-lg font-semibold capitalize text-slate-500">
               {weekdayShort(ok.discardAt)} · {ok.rule.shelfLifeDays} dias
               {ok.cappedByOriginalExpiry ? ' · limitado pelo fabricante' : ''}
+              {!ok.rule.validated ? ' · sem regra validada' : ''}
             </div>
           </>
         ) : (
@@ -535,6 +567,38 @@ function StorageCard({ type, temp, selected, state, waiting, onSelect }: {
           </div>
         )}
       </div>
+    </button>
+  );
+}
+
+function TempButton({ suggested, confirmed, range, onClick }: {
+  suggested: number; confirmed: number | undefined; range: string | null; onClick: () => void;
+}) {
+  const isConfirmed = confirmed !== undefined;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'flex min-h-[72px] min-w-0 touch-manipulation items-center gap-3 rounded-2xl border-2 px-4 py-2 text-left active:scale-[0.98] sm:min-h-[84px] sm:gap-4 sm:px-5 sm:py-3',
+        isConfirmed ? 'border-slate-200 bg-white' : 'border-dashed border-amber-400 bg-amber-50',
+      )}
+    >
+      <span className={cn('shrink-0', isConfirmed ? 'text-emerald-600' : 'text-amber-600')}>
+        {isConfirmed ? <Check className="h-6 w-6" /> : <Thermometer className="h-6 w-6" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-bold uppercase tracking-wider text-slate-400">Temperatura</span>
+        {isConfirmed ? (
+          <span className="block truncate text-xl font-extrabold sm:text-2xl">{formatTemperature(confirmed)}</span>
+        ) : (
+          <>
+            <span className="block text-xl font-extrabold leading-tight text-amber-800 sm:text-2xl">{formatTemperatureShort(suggested)} sugerida</span>
+            <span className="block text-sm font-bold leading-tight text-amber-700 sm:text-base">Toque para confirmar</span>
+          </>
+        )}
+        {range && <span className="block text-sm font-semibold leading-tight text-slate-500">Faixa da regra: {range}</span>}
+      </span>
     </button>
   );
 }

@@ -266,11 +266,14 @@ function LabelCard({ label, onReprint }: { label: Label; onReprint: () => void }
 
           {label.shelfLifeDays != null && (
             <div className="mt-1.5 text-[11px] text-slate-400">
-              Regra: {label.shelfLifeDays} dias • {label.rule?.source ?? 'Prazo cadastrado no produto'}
+              Regra: {label.shelfLifeDays} dias •{' '}
+              {label.ruleId
+                ? <>{label.ruleSource ?? label.rule?.source ?? 'Regra cadastrada'}{label.ruleVersion != null && ` (v${label.ruleVersion})`}</>
+                : <span className="font-semibold text-amber-700">Prazo do produto (sem regra validada)</span>}
               {label.cappedByOriginalExpiry && ' • (Teto: validade original)'}
             </div>
           )}
-        </div>
+            </div>
       </div>
 
       {/* Right Action */}
