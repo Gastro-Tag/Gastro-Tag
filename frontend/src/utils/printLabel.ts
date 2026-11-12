@@ -43,6 +43,9 @@ function nameFontPt(name: string, steps: [number, number, number]): number {
   return steps[2];
 }
 
+/** Só nos modelos A4 e 100×60: o 60×40 e o 50×30 não têm espaço e ficam como estão. */
+const NO_RULE_TEXT = 'Prazo sem regra validada';
+
 function storageLabel(label: Label): string {
   return label.storageType === 'REFRIGERADO' ? 'Refrigerado' : 'Congelado';
 }
@@ -50,7 +53,7 @@ function storageLabel(label: Label): string {
 function fullLabel(label: Label, logo: string): string {
   const name = label.productName ?? label.product?.name ?? '';
   const brand = label.productBrand ?? label.product?.brand ?? '';
-  const source = label.rule?.source ?? `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
+  const source = (label.ruleId && (label.ruleSource ?? label.rule?.source)) || `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
   return `
     <article class="print-label">
       <header class="print-header">
@@ -72,6 +75,7 @@ function fullLabel(label: Label, logo: string): string {
           <strong>${esc(formatBR(label.discardAt))}</strong>
         </div>
         <p class="print-rule">Prazo aplicado: ${esc(label.shelfLifeDays ?? '—')} dias. Fonte: ${esc(source)}.</p>
+        ${label.ruleId ? '' : `<p class="print-cap">${NO_RULE_TEXT}</p>`}
         ${label.cappedByOriginalExpiry ? '<p class="print-cap">Data limitada pela validade original do fabricante.</p>' : ''}
         <div class="print-signature">
           <span>Responsável pela manipulação: <strong>${esc(label.responsibleName || '—')}</strong></span>
@@ -92,11 +96,12 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
   const { scale = 1, grow = false, storage = true } = options;
   const name = label.productName ?? label.product?.name ?? '';
   const brand = label.productBrand ?? label.product?.brand ?? '';
-  const source = label.rule?.source ?? `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
+  const source = (label.ruleId && (label.ruleSource ?? label.rule?.source)) || `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
   const full = template.variant === 'full';
   const minimal = template.variant === 'minimal';
   const nameSize = nameFontPt(name, full ? [14, 12, 10] : minimal ? [9, 8, 7] : [11, 9, 7.5]);
   const logoHtml = `<img class="pt-logo" src="${esc(logo)}" alt="GastroTag" />`;
+  const noRule = label.ruleId ? '' : `<p class="pt-cap">${NO_RULE_TEXT}</p>`;
   const cap = label.cappedByOriginalExpiry
     ? '<p class="pt-cap">Data limitada pela validade original do fabricante.</p>' : '';
   const open = `class="print-label print-thermal print-${template.id}${grow ? ' pt-grow' : ''}" style="--pt-scale:${scale}"`;
@@ -137,6 +142,7 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
         <div><dt>Temperatura</dt><dd>${esc(label.storageTemp)}</dd></div>
       </dl>
       <p class="pt-rule">Prazo aplicado: ${esc(label.shelfLifeDays ?? '—')} dias. Fonte: ${esc(source)}.</p>
+      ${noRule}
       ${cap}
       <p class="pt-resp">Responsável pela manipulação: <strong>${esc(label.responsibleName || '—')}</strong></p>
       <div class="pt-foot">

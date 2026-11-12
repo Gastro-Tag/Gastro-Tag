@@ -14,6 +14,7 @@ import {
   Tablet,
   Users,
   KeyRound,
+  BookOpenCheck,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
@@ -23,6 +24,7 @@ const navItems = [
   { to: '/',         label: 'Dashboard',  icon: LayoutDashboard },
   { to: '/products', label: 'Produtos',   icon: Package         },
   { to: '/labels',   label: 'Etiquetas',  icon: Tag             },
+  { to: '/rules',    label: 'Regras de validade', icon: BookOpenCheck, adminOnly: true },
   { to: '/users',    label: 'Usuários',   icon: Users, adminOnly: true },
   { to: '/totem',    label: 'Modo Totem', icon: Tablet          },
 ];
@@ -44,6 +46,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (location.pathname === '/') return { title: 'Dashboard', subtitle: 'Visão geral do controle de alimentos' };
     if (location.pathname.startsWith('/products')) return { title: 'Controle de Produtos', subtitle: 'Estoque, validade e manipulação' };
     if (location.pathname.startsWith('/labels')) return { title: 'Etiquetas & Descarte', subtitle: 'Geração, impressão e rastreabilidade' };
+    if (location.pathname.startsWith('/rules')) return { title: 'Regras de validade', subtitle: 'Prazos com fonte, responsável e versões' };
     if (location.pathname.startsWith('/users')) return { title: 'Usuários', subtitle: 'Contas, perfis e acesso ao sistema' };
     return { title: 'GastroTag', subtitle: 'Gestão Inteligente de Alimentos' };
   };

@@ -7,10 +7,10 @@ Rota: `http://<servidor>/totem` (mesmo frontend e mesma API do painel). A tela s
 | Toque | Tela | O que acontece |
 |---|---|---|
 | 1 | Início | Toca no produto (mais usados primeiro; busca e categorias disponíveis) |
-| 2 | Etiqueta | Confere a embalagem e a data de descarte (calculada pelo servidor) e toca **IMPRIMIR ETIQUETA** |
+| 2 | Etiqueta | Confere a embalagem e a data de descarte (calculada pelo servidor), **confirma a temperatura no teclado numérico** e toca **IMPRIMIR ETIQUETA** |
 | — | Pronto | Confirmação + Reimprimir / Concluir; volta sozinho ao início em 10 s |
 
-Os 2 toques valem para produto com um único lote em uso. Se houver mais de um lote, nada vem marcado: o operador toca no lote da embalagem em mãos. Sem lote, ou com outra embalagem, toca em **Outra embalagem** e digita a validade impressa.
+Como a temperatura precisa ser confirmada a cada etiqueta, o fluxo ganhou passos além dos 2 toques: o operador digita ou aceita a temperatura sugerida pelo teclado antes de imprimir. Os 2 toques de escolha valem para produto com um único lote em uso. Se houver mais de um lote, nada vem marcado: o operador toca no lote da embalagem em mãos. Sem lote, ou com outra embalagem, toca em **Outra embalagem** e digita a validade impressa.
 
 Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. Cada cartão já mostra a data de descarte daquele armazenamento.
 
@@ -20,7 +20,7 @@ Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. C
 |---|---|
 | Data de abertura | Hoje |
 | Armazenamento | Último usado para o produto neste totem; senão o primeiro disponível |
-| Temperatura | 4 °C (refrigerado) / -18 °C (congelado); editável por teclado numérico |
+| Temperatura | Só **sugerida** (4 °C refrigerado / -18 °C congelado), não vem como valor; não conta como medição e precisa ser confirmada no teclado numérico antes de imprimir |
 | Lote | O lote cadastrado escolhido. Em outra embalagem, o teclado pede o lote impresso; se não estiver legível, registra `NÃO INFORMADO` |
 | Responsável | Escolhido uma vez por turno (expira em 10 h); nomes recentes em um toque |
 
@@ -32,7 +32,9 @@ As memórias ficam no `localStorage` do navegador do totem. A **data de abertura
 - Lote `SEM-LOTE`, criado na migração com a validade antiga do produto, nunca vem marcado: o operador confere a embalagem.
 - Validade digitada já vencida é recusada pelo servidor.
 - Se a data for limitada pela validade da embalagem, o aviso aparece na tela antes de imprimir.
-- Se a regra recusar a temperatura, a mensagem aparece no cartão do armazenamento.
+- Se a regra recusar a temperatura (fora da faixa), a mensagem aparece no cartão do armazenamento.
+- Produto sem regra de validade usa o prazo do cadastro e mostra o aviso "Prazo do cadastro do produto, sem regra validada".
+- **Após o deploy da etapa E, recarregue os totens abertos:** o pacote antigo ainda envia `storageTemp` e recebe erro 422 do servidor.
 - O botão trava durante a geração (sem etiqueta duplicada por toque duplo).
 - Se a rede cair depois que o servidor gravou, tocar de novo em imprimir devolve a mesma etiqueta, sem criar outra.
 - Após 60 s sem toque, volta ao início (e limpa busca/filtros).
@@ -55,7 +57,7 @@ Sem `--kiosk-printing` o Chrome mostra o diálogo de impressão e exige um toque
 ## Limitações conhecidas
 
 - O responsável é um **nome digitado**, não uma conta: não há PIN por operador. Recomendado para o MVP (usuários + PIN).
-- A temperatura da etiqueta é a de armazenamento padrão/informada, não uma leitura de sensor.
+- A temperatura da etiqueta é a informada e confirmada pelo operador, não uma leitura de sensor.
 - A data de abertura é sempre a do dia; para outra data, use o painel administrativo.
 - O login do totem e a confirmação do administrador usam o teclado do sistema operacional; os campos de senha têm botão de olho e "Esqueci minha senha" (sem e-mail: a redefinição é feita por um administrador em Usuários → Senha).
 - Impressão pelo navegador; integração direta com impressora térmica continua fora do escopo do TCC. O modelo térmico ainda não foi testado em impressora física.

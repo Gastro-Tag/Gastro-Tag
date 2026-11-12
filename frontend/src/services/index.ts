@@ -3,6 +3,7 @@ import type {
   ApiResponse, PaginatedResponse, AuthTokens, User, ManagedUser, CreateUserDTO,
   Product, ProductLot, CreateProductDTO, ProductFilters,
   Label, CreateLabelDTO, LabelPreview, LabelPreviewDTO,
+  ShelfLifeRule, RuleFilters, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
 } from '@/types';
 
@@ -95,6 +96,26 @@ export const labelApi = {
 
   registerPrint: (id: string) =>
     api.patch<ApiResponse<Label>>(`/labels/${id}/print`),
+};
+
+// ── Regras de validade (ADMIN) ──────────────────────────
+export const ruleApi = {
+  list: (filters?: RuleFilters) =>
+    api.get<PaginatedResponse<ShelfLifeRule>>('/shelf-life-rules', { params: filters }),
+
+  /** Cadeia de versões da regra, da mais nova para a mais antiga. */
+  versions: (id: string) =>
+    api.get<ApiResponse<ShelfLifeRule[]>>(`/shelf-life-rules/${id}/versions`),
+
+  create: (data: CreateRuleDTO) =>
+    api.post<ApiResponse<ShelfLifeRule>>('/shelf-life-rules', data),
+
+  /** PUT cria uma nova versão e desativa a anterior; nunca edita no lugar. */
+  newVersion: (id: string, data: RuleVersionDTO) =>
+    api.put<ApiResponse<ShelfLifeRule>>(`/shelf-life-rules/${id}`, data),
+
+  deactivate: (id: string) =>
+    api.delete<ApiResponse<ShelfLifeRule>>(`/shelf-life-rules/${id}`),
 };
 
 // ── Dashboard ────────────────────────────────────────────
