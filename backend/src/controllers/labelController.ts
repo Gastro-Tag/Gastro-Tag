@@ -49,9 +49,44 @@ const listSchema = z.object({
   from: dateSchema.optional(),
   to: dateSchema.optional(),
   storageType: z.enum(['REFRIGERADO', 'CONGELADO']).optional(),
+  status: z.enum(['ATIVA', 'ENCERRADA']).optional(),
+  // Pela data da cozinha. Faz sentido junto com status=ATIVA.
+  due: z.enum(['expired', 'today', 'upcoming']).optional(),
+  parentLabelId: z.string().uuid().optional(),
 }).refine((query) => !query.from || !query.to || query.from <= query.to, {
   message: 'A data inicial deve ser menor ou igual à data final.',
 });
+
+const closeSchema = z.object({
+  outcome: z.enum(['USADO', 'DESCARTADO', 'CANCELADO'], { errorMap: () => ({ message: 'Escolha o destino da etiqueta.' }) }),
+  discardReason: z.enum(['PRAZO_VENCIDO', 'ALTERACAO_SENSORIAL', 'EMBALAGEM_DANIFICADA', 'OUTRO'], {
+    errorMap: () => ({ message: 'Motivo do descarte inválido.' }),
+  }).optional(),
+  // Observação vazia conta como não informada.
+  note: z.string().trim().max(300, 'A observação deve ter no máximo 300 caracteres.').optional()
+    .transform((value) => value || undefined),
+}).refine((data) => (data.outcome === 'DESCARTADO') === Boolean(data.discardReason), {
+  message: 'Informe o motivo do descarte (só para etiqueta descartada).',
+}).refine((data) => data.discardReason !== 'OUTRO' || (data.note?.length ?? 0) >= 3, {
+  message: 'Descreva o motivo do descarte na observação (mínimo 3 caracteres).',
+});
+
+const splitPreviewSchema = z.object({
+  storageType: labelFields.shape.storageType,
+  storageTemperature: labelFields.shape.storageTemperature,
+});
+
+const splitSchema = splitPreviewSchema.extend({
+  count: z.number({ required_error: 'Informe a quantidade de etiquetas.', invalid_type_error: 'Quantidade inválida.' })
+    .int('A quantidade deve ser um número inteiro.')
+    .min(1, 'A quantidade deve ser de 1 a 20 etiquetas.').max(20, 'A quantidade deve ser de 1 a 20 etiquetas.'),
+  storageTemperature: labelFields.shape.storageTemperature.unwrap(),
+  responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
+  closeParent: z.boolean().optional(),
+  requestId: z.string().uuid().optional(),
+});
+
+const actor = (req: Request) => ({ id: req.user!.sub, name: req.user!.name, role: req.user!.role });
 
 export const LabelController = {
   async list(req: Request, res: Response) {
@@ -75,6 +110,24 @@ export const LabelController = {
     const data = previewSchema.parse(req.body);
     const result = await LabelService.preview(data);
     res.json({ success: true, data: result });
+  },
+
+  async close(req: Request, res: Response) {
+    const data = closeSchema.parse(req.body);
+    const { label, activeChildren } = await LabelService.close(req.params.id, data, actor(req));
+    res.json({ success: true, data: label, meta: { activeChildren } });
+  },
+
+  async splitPreview(req: Request, res: Response) {
+    const data = splitPreviewSchema.parse(req.body);
+    const result = await LabelService.splitPreview(req.params.id, data);
+    res.json({ success: true, data: result });
+  },
+
+  async split(req: Request, res: Response) {
+    const data = splitSchema.parse(req.body);
+    const { replayed, ...result } = await LabelService.split(req.params.id, data, actor(req));
+    res.status(replayed ? 200 : 201).json({ success: true, data: result });
   },
 
   async registerPrint(req: Request, res: Response) {

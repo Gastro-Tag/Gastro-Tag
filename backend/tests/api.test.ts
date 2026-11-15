@@ -45,7 +45,13 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (productIds.length) await prisma.label.deleteMany({ where: { productId: { in: productIds } } });
+  if (productIds.length) {
+    // Origem com filhas não pode ser apagada (Restrict): apaga das folhas para a origem.
+    for (let round = 0; round < 10; round++) {
+      const removed = await prisma.label.deleteMany({ where: { productId: { in: productIds }, children: { none: {} } } });
+      if (removed.count === 0) break;
+    }
+  }
   if (ruleIds.length) {
     // Versões apontam umas para as outras (Restrict): solta a cadeia antes de apagar.
     await prisma.shelfLifeRule.updateMany({ where: { id: { in: ruleIds } }, data: { previousVersionId: null } });
@@ -1004,6 +1010,352 @@ describe('API integration flow', () => {
       const plainB = await send(productIds[0]);
       expect([plainA.status, plainB.status]).toEqual([201, 201]);
       expect(plainA.body.data.id).not.toBe(plainB.body.data.id);
+    });
+  });
+});
+
+describe('closing and splitting labels', () => {
+  const asAdmin = () => `Bearer ${accessToken}`;
+  let asOperator = '';
+  let productId = '';
+  let ruleProductId = '';
+
+  const newLabel = async (body: object = {}, product = productId) => {
+    const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+      productId: product, lot: 'LOT-FRAC', originalExpiryDate: daysFromToday(60), openedAt: today(),
+      responsibleName: 'Abertura', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+    });
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string; shortCode: string; discardAt: string };
+  };
+  const close = (id: string, body: object, token = asAdmin()) =>
+    request(app).post(`/api/labels/${id}/close`).set('Authorization', token).send(body);
+  const splitPreview = (id: string, body: object) =>
+    request(app).post(`/api/labels/${id}/split/preview`).set('Authorization', asAdmin()).send(body);
+  const split = (id: string, body: object, token = asAdmin()) =>
+    request(app).post(`/api/labels/${id}/split`).set('Authorization', token).send({
+      count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador', ...body,
+    });
+  const listLabels = (query: Record<string, string>) =>
+    request(app).get('/api/labels').query({ limit: '100', ...query }).set('Authorization', asAdmin());
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').send({ email: operatorEmail, password: 'TestPassword123!' });
+    asOperator = `Bearer ${login.body.data.accessToken}`;
+    // Prazos fictícios, só para o teste.
+    const product = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Produto fracionado ${suffix.slice(0, 8)}`, brand: 'Teste', category: `Frac ${suffix.slice(0, 8)}`,
+      daysValidRefrigerated: 5, daysValidFrozen: 30,
+    });
+    productId = product.body.data.id;
+    productIds.push(productId);
+    const ruleProduct = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Produto frac regra ${suffix.slice(0, 8)}`, brand: 'Teste', category: `Frac regra ${suffix.slice(0, 8)}`,
+      daysValidRefrigerated: 10, daysValidFrozen: 30,
+    });
+    ruleProductId = ruleProduct.body.data.id;
+    productIds.push(ruleProductId);
+  });
+
+  describe('close', () => {
+    it('closes as used, repeats the same outcome and refuses another one', async () => {
+      const label = await newLabel();
+      const first = await close(label.id, { outcome: 'USADO' });
+      expect(first.status).toBe(200);
+      expect(first.body.data).toMatchObject({
+        id: label.id, status: 'ENCERRADA', outcome: 'USADO', discardReason: null, closeNote: null,
+        closedByName: 'Teste de integração', parent: null, parentLabelId: null, fractionedAt: null,
+      });
+      expect(first.body.data.closedAt).toBeTruthy();
+      expect(first.body.meta.activeChildren).toEqual([]);
+
+      const again = await close(label.id, { outcome: 'USADO' });
+      expect(again.status).toBe(200);
+      expect(again.body.data.closedAt).toBe(first.body.data.closedAt);
+
+      const other = await close(label.id, { outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO' });
+      expect(other.status).toBe(409);
+      expect(other.body.error.message).toBe('Esta etiqueta já foi encerrada.');
+
+      // Encerrada não volta para a bancada: reimprimir é conflito e não conta impressão.
+      const reprint = await request(app).patch(`/api/labels/${label.id}/print`).set('Authorization', asAdmin());
+      expect(reprint.status).toBe(409);
+      expect(reprint.body.error.message).toBe('Etiqueta encerrada não pode ser reimpressa.');
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: label.id } })).printCount).toBe(0);
+      const active = await newLabel();
+      const printed = await request(app).patch(`/api/labels/${active.id}/print`).set('Authorization', asAdmin());
+      expect(printed.status).toBe(200);
+      expect(printed.body.data).toMatchObject({ printCount: 1, parent: null });
+      expect((await request(app).patch(`/api/labels/${randomUUID()}/print`).set('Authorization', asAdmin())).status).toBe(404);
+    });
+
+    it('requires a discard reason, and a note when the reason is "Outro"', async () => {
+      const label = await newLabel();
+      expect((await close(label.id, { outcome: 'DESCARTADO' })).status).toBe(422);
+      expect((await close(label.id, { outcome: 'USADO', discardReason: 'PRAZO_VENCIDO' })).status).toBe(422);
+      expect((await close(label.id, { outcome: 'DESCARTADO', discardReason: 'OUTRO' })).status).toBe(422);
+      expect((await close(label.id, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: ' ab ' })).status).toBe(422);
+      expect((await close(label.id, { outcome: 'DESCARTADO', discardReason: 'INVALIDO' })).status).toBe(422);
+      expect((await close(label.id, { outcome: 'PERDIDO' })).status).toBe(422);
+      expect((await close(label.id, {
+        outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO', note: 'x'.repeat(301),
+      })).status).toBe(422);
+
+      const discarded = await close(label.id, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: ' Caiu no chão ' });
+      expect(discarded.status).toBe(200);
+      expect(discarded.body.data).toMatchObject({
+        status: 'ENCERRADA', outcome: 'DESCARTADO', discardReason: 'OUTRO', closeNote: 'Caiu no chão',
+      });
+      expect((await close(label.id, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'Repetido' })).status).toBe(200);
+      expect((await close(label.id, { outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO' })).status).toBe(409);
+
+      const sensorial = await newLabel();
+      const bySensorial = await close(sensorial.id, { outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL' });
+      expect(bySensorial.status).toBe(200);
+      expect(bySensorial.body.data.closeNote).toBeNull();
+    });
+
+    it('lets only administrators cancel, while operators close as used or discarded', async () => {
+      const label = await newLabel();
+      const denied = await close(label.id, { outcome: 'CANCELADO' }, asOperator);
+      expect(denied.status).toBe(403);
+      const unchanged = await request(app).get(`/api/labels/${label.id}`).set('Authorization', asAdmin());
+      expect(unchanged.body.data.status).toBe('ATIVA');
+
+      const used = await close(label.id, { outcome: 'USADO' }, asOperator);
+      expect(used.status).toBe(200);
+      expect(used.body.data.closedByName).toBe('Operador de integração');
+
+      const cancelled = await close((await newLabel()).id, { outcome: 'CANCELADO' });
+      expect(cancelled.status).toBe(200);
+      expect(cancelled.body.data.outcome).toBe('CANCELADO');
+
+      expect((await close(randomUUID(), { outcome: 'USADO' })).status).toBe(404);
+      expect((await request(app).post(`/api/labels/${label.id}/close`).send({ outcome: 'USADO' })).status).toBe(401);
+    });
+
+    it('warns about children still active, without closing them', async () => {
+      const parent = await newLabel();
+      const created = await split(parent.id, { count: 2 });
+      expect(created.status).toBe(201);
+      const [childA, childB] = created.body.data.children as { id: string; shortCode: string }[];
+      await close(childA.id, { outcome: 'USADO' }).expect(200);
+
+      const closed = await close(parent.id, { outcome: 'USADO' });
+      expect(closed.status).toBe(200);
+      expect(closed.body.meta.activeChildren).toHaveLength(1);
+      expect(closed.body.meta.activeChildren[0]).toMatchObject({ id: childB.id, shortCode: childB.shortCode });
+      expect(closed.body.meta.activeChildren[0].discardAt).toBeTruthy();
+      const child = await request(app).get(`/api/labels/${childB.id}`).set('Authorization', asAdmin());
+      expect(child.body.data.status).toBe('ATIVA');
+    });
+  });
+
+  describe('split', () => {
+    it('previews the child limited by the parent, and by the rule when it is shorter', async () => {
+      const parent = await newLabel(); // refrigerado, 5 dias: descarte em hoje + 4
+      expect(parent.discardAt.slice(0, 10)).toBe(daysFromToday(4));
+
+      const refrigerated = await splitPreview(parent.id, { storageType: 'REFRIGERADO' });
+      expect(refrigerated.status).toBe(200);
+      expect(refrigerated.body.data).toMatchObject({
+        cappedByParent: false, cappedByOriginalExpiry: false, fractionedAt: today(),
+        storageTemperature: null, storageTemp: null,
+      });
+      expect(refrigerated.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(4));
+      expect(refrigerated.body.data.rule).toMatchObject({ id: null, shelfLifeDays: 5, validated: false });
+
+      // Congelado (30 dias) passaria da origem: fica na data da origem.
+      const frozen = await splitPreview(parent.id, { storageType: 'CONGELADO', storageTemperature: -18 });
+      expect(frozen.status).toBe(200);
+      expect(frozen.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(4));
+      expect(frozen.body.data.cappedByParent).toBe(true);
+      expect(frozen.body.data.storageTemp).toBe('-18,0 °C');
+      const frozenChild = await split(parent.id, { storageType: 'CONGELADO', storageTemperature: -18 });
+      expect(frozenChild.status).toBe(201);
+      expect(frozenChild.body.data.children[0].cappedByParent).toBe(true);
+      expect(frozenChild.body.data.children[0].discardAt.slice(0, 10)).toBe(daysFromToday(4));
+
+      // Origem com 10 dias pelo produto; depois, regra de 2 dias com faixa de temperatura.
+      const ruleParent = await newLabel({}, ruleProductId);
+      expect(ruleParent.discardAt.slice(0, 10)).toBe(daysFromToday(9));
+      const rule = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin()).send({
+        ...ruleBody, productId: ruleProductId, storageType: 'REFRIGERADO', shelfLifeDays: 2,
+        minTemperature: 0, maxTemperature: 5,
+      });
+      expect(rule.status).toBe(201);
+      ruleIds.push(rule.body.data.id);
+
+      const byRule = await splitPreview(ruleParent.id, { storageType: 'REFRIGERADO', storageTemperature: 3 });
+      expect(byRule.status).toBe(200);
+      expect(byRule.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(1));
+      expect(byRule.body.data.cappedByParent).toBe(false);
+      expect(byRule.body.data.rule).toMatchObject({
+        id: rule.body.data.id, shelfLifeDays: 2, version: 1, validated: true, minTemperature: 0, maxTemperature: 5,
+      });
+
+      const outside = await splitPreview(ruleParent.id, { storageType: 'REFRIGERADO', storageTemperature: 7 });
+      expect(outside.status).toBe(422);
+      expect(outside.body.error.message).toContain('acima da faixa');
+      expect((await split(ruleParent.id, { storageTemperature: -1 })).status).toBe(422);
+      expect((await splitPreview(ruleParent.id, { storageType: 'REFRIGERADO', storageTemperature: 31 })).status).toBe(422);
+
+      const child = await split(ruleParent.id, { storageTemperature: 3 });
+      expect(child.status).toBe(201);
+      expect(child.body.data.children[0]).toMatchObject({
+        ruleId: rule.body.data.id, ruleVersion: 1, ruleSource: ruleBody.source, shelfLifeDays: 2,
+        storageTemperature: 3, storageTemp: '3,0 °C',
+      });
+      expect(child.body.data.children[0].discardAt.slice(0, 10)).toBe(daysFromToday(1));
+    });
+
+    it('validates the body', async () => {
+      const parent = await newLabel();
+      expect((await split(parent.id, { count: 0 })).status).toBe(422);
+      expect((await split(parent.id, { count: 21 })).status).toBe(422);
+      expect((await split(parent.id, { count: 1.5 })).status).toBe(422);
+      expect((await split(parent.id, { count: '2' })).status).toBe(422);
+      expect((await split(parent.id, { storageTemperature: undefined })).status).toBe(422);
+      expect((await split(parent.id, { storageTemperature: 31 })).status).toBe(422);
+      expect((await split(parent.id, { responsibleName: '  ' })).status).toBe(422);
+      expect((await split(parent.id, { storageType: 'AMBIENTE' })).status).toBe(422);
+      expect((await split(parent.id, { requestId: 'nao-e-uuid' })).status).toBe(422);
+      expect((await split(randomUUID(), {})).status).toBe(404);
+      expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(0);
+    });
+
+    it('refuses a closed parent (409) and an expired parent (422)', async () => {
+      const closed = await newLabel();
+      await close(closed.id, { outcome: 'USADO' }).expect(200);
+      expect((await splitPreview(closed.id, { storageType: 'REFRIGERADO' })).status).toBe(409);
+      expect((await split(closed.id, {})).status).toBe(409);
+
+      const expired = await newLabel();
+      await prisma.label.update({ where: { id: expired.id }, data: { discardAt: new Date(`${daysFromToday(-1)}T00:00:00Z`) } });
+      const preview = await splitPreview(expired.id, { storageType: 'REFRIGERADO' });
+      expect(preview.status).toBe(422);
+      expect(preview.body.error.message).toBe('A etiqueta de origem está vencida. Descarte o produto.');
+      expect((await split(expired.id, {})).status).toBe(422);
+      expect(await prisma.label.count({ where: { parentLabelId: { in: [closed.id, expired.id] } } })).toBe(0);
+    });
+
+    it('creates children from the parent snapshot, each with its own code', async () => {
+      const parent = await newLabel();
+      // O produto muda depois da abertura: a filha copia o que está na etiqueta de origem.
+      await request(app).put(`/api/products/${productId}`).set('Authorization', asAdmin())
+        .send({ name: `Produto fracionado renomeado ${suffix.slice(0, 8)}`, brand: 'Outra marca' }).expect(200);
+
+      const created = await split(parent.id, { count: 3, responsibleName: ' Maria ' }, asOperator);
+      expect(created.status).toBe(201);
+      const { parent: parentAfter, children } = created.body.data;
+      expect(parentAfter).toMatchObject({ id: parent.id, status: 'ATIVA' });
+      expect(children).toHaveLength(3);
+      expect(new Set(children.map((child: { shortCode: string }) => child.shortCode)).size).toBe(3);
+      for (const child of children) {
+        expect(child).toMatchObject({
+          productId, productName: `Produto fracionado ${suffix.slice(0, 8)}`, productBrand: 'Teste',
+          lot: 'LOT-FRAC', userId: operatorId, responsibleName: 'Maria', status: 'ATIVA',
+          parentLabelId: parent.id, parent: { id: parent.id, shortCode: parent.shortCode },
+          fractionedAt: today(), storageType: 'REFRIGERADO', storageTemperature: 4, storageTemp: '4,0 °C',
+          requestId: null, cappedByParent: false,
+        });
+        expect(child.openedAt.slice(0, 10)).toBe(today());
+        expect(child.originalExpiryDate.slice(0, 10)).toBe(daysFromToday(60));
+        expect(child.discardAt.slice(0, 10)).toBe(daysFromToday(4));
+      }
+
+      const detail = await request(app).get(`/api/labels/${parent.id}`).set('Authorization', asAdmin());
+      expect(detail.body.data.children).toHaveLength(3);
+      expect(detail.body.data.children[0]).toEqual({
+        id: expect.any(String), shortCode: expect.any(String), status: 'ATIVA', discardAt: expect.any(String),
+      });
+      expect(detail.body.data.parent).toBeNull();
+      const childDetail = await request(app).get(`/api/labels/${children[0].id}`).set('Authorization', asAdmin());
+      expect(childDetail.body.data.parent).toEqual({ id: parent.id, shortCode: parent.shortCode });
+      expect(childDetail.body.data.children).toEqual([]);
+
+      // Origem com filhas não pode ser apagada.
+      await expect(prisma.label.delete({ where: { id: parent.id } })).rejects.toThrow(/labels_parent_label_id_fkey/);
+    });
+
+    it('closes the parent as used when the package is finished, and a resend returns the same children', async () => {
+      const parent = await newLabel();
+      const requestId = randomUUID();
+      const first = await split(parent.id, { count: 2, closeParent: true, requestId, responsibleName: ' Turno da Ana ' });
+      expect(first.status).toBe(201);
+      // Quem encerrou é o responsável do turno; a conta logada fica no id.
+      expect(first.body.data.parent).toMatchObject({
+        status: 'ENCERRADA', outcome: 'USADO', closedByName: 'Turno da Ana', closedById: userId,
+      });
+      const ids = first.body.data.children.map((child: { id: string }) => child.id).sort();
+
+      const again = await split(parent.id, { count: 2, closeParent: true, requestId });
+      expect(again.status).toBe(200);
+      expect(again.body.data.children.map((child: { id: string }) => child.id).sort()).toEqual(ids);
+      expect(again.body.data.parent.status).toBe('ENCERRADA');
+      expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(2);
+
+      // Sem a chave do pedido, a origem encerrada não divide mais.
+      expect((await split(parent.id, { count: 1 })).status).toBe(409);
+    });
+
+    it('does not duplicate children when the same request arrives twice at once', async () => {
+      const parent = await newLabel();
+      const requestId = randomUUID();
+      const [a, b] = await Promise.all([
+        split(parent.id, { count: 2, requestId }),
+        split(parent.id, { count: 2, requestId }),
+      ]);
+      expect([a.status, b.status].sort()).toEqual([200, 201]);
+      const idsOf = (res: { body: { data: { children: { id: string }[] } } }) =>
+        res.body.data.children.map((child) => child.id).sort();
+      expect(idsOf(a)).toEqual(idsOf(b));
+      expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(2);
+    });
+
+    it('filters the list by status, due date and parent', async () => {
+      const parent = await newLabel();
+      const children = (await split(parent.id, { count: 2 })).body.data.children as { id: string }[];
+      const closed = await newLabel();
+      await close(closed.id, { outcome: 'DESCARTADO', discardReason: 'EMBALAGEM_DANIFICADA' }).expect(200);
+      const expired = await newLabel();
+      await prisma.label.update({ where: { id: expired.id }, data: { discardAt: new Date(`${daysFromToday(-1)}T00:00:00Z`) } });
+      const dueToday = await newLabel();
+      await prisma.label.update({ where: { id: dueToday.id }, data: { discardAt: new Date(`${today()}T00:00:00Z`) } });
+      const ids = (res: { body: { data: { id: string }[] } }) => res.body.data.map((label) => label.id);
+
+      const byParent = await listLabels({ parentLabelId: parent.id });
+      expect(byParent.status).toBe(200);
+      expect(ids(byParent).sort()).toEqual(children.map((child) => child.id).sort());
+      expect(byParent.body.data[0].parent).toEqual({ id: parent.id, shortCode: parent.shortCode });
+
+      const closedList = ids(await listLabels({ productId, status: 'ENCERRADA' }));
+      expect(closedList).toContain(closed.id);
+      expect(closedList).not.toContain(parent.id);
+      const activeResponse = await listLabels({ productId, status: 'ATIVA' });
+      const countOf = (id: string) =>
+        activeResponse.body.data.find((label: { id: string }) => label.id === id)?.childrenCount;
+      expect(countOf(parent.id)).toBe(2);
+      expect(countOf(children[0].id)).toBe(0);
+      expect(activeResponse.body.data[0]._count).toBeUndefined();
+      const activeList = ids(activeResponse);
+      expect(activeList).toContain(parent.id);
+      expect(activeList).not.toContain(closed.id);
+
+      const expiredList = ids(await listLabels({ productId, status: 'ATIVA', due: 'expired' }));
+      expect(expiredList).toContain(expired.id);
+      expect(expiredList).not.toContain(dueToday.id);
+      expect(expiredList).not.toContain(parent.id);
+      const todayList = ids(await listLabels({ productId, status: 'ATIVA', due: 'today' }));
+      expect(todayList).toEqual([dueToday.id]);
+      const upcoming = ids(await listLabels({ productId, status: 'ATIVA', due: 'upcoming' }));
+      expect(upcoming).toContain(parent.id);
+      expect(upcoming).not.toContain(expired.id);
+      expect(upcoming).not.toContain(dueToday.id);
+
+      expect((await listLabels({ status: 'ABERTA' })).status).toBe(422);
+      expect((await listLabels({ due: 'ontem' })).status).toBe(422);
+      expect((await listLabels({ parentLabelId: 'nao-e-uuid' })).status).toBe(422);
     });
   });
 });

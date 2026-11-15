@@ -86,6 +86,9 @@ router.get('/labels/:id', authenticate, LabelController.getById);
 router.post('/labels/preview', authenticate, LabelController.preview);
 router.post('/labels', authenticate, LabelController.create);
 router.patch('/labels/:id/print', authenticate, LabelController.registerPrint);
+router.post('/labels/:id/close', authenticate, LabelController.close);
+router.post('/labels/:id/split/preview', authenticate, LabelController.splitPreview);
+router.post('/labels/:id/split', authenticate, LabelController.split);
 
 router.get('/dashboard/stats', authenticate, DashboardController.getStats);
 

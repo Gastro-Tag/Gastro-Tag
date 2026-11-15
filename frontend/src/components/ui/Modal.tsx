@@ -7,16 +7,18 @@ interface ModalProps {
   children: ReactNode;
   /** Largura máxima do painel (classe Tailwind). */
   widthClass?: string;
+  /** Enquanto true (ex.: enviando), Esc, o X e o clique fora não fecham o diálogo. */
+  busy?: boolean;
 }
 
 const FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
 /** Diálogo acessível: foco entra ao abrir, fica preso no painel, Esc fecha e o foco volta ao gatilho. */
-export function Modal({ title, onClose, children, widthClass = 'max-w-2xl' }: ModalProps) {
+export function Modal({ title, onClose, children, widthClass = 'max-w-2xl', busy = false }: ModalProps) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const onCloseRef = useRef(() => {});
+  onCloseRef.current = busy ? () => {} : onClose;
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -58,7 +60,7 @@ export function Modal({ title, onClose, children, widthClass = 'max-w-2xl' }: Mo
       >
         <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-6">
           <h2 id={titleId} className="min-w-0 break-words text-base font-bold text-charcoal-800">{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Fechar" className="btn btn-ghost btn-sm h-9 w-9 shrink-0 p-0">
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Fechar" className="btn btn-ghost btn-sm h-9 w-9 shrink-0 p-0">
             <X className="h-4 w-4" />
           </button>
         </div>

@@ -323,7 +323,7 @@ function RecentLabels({ onNotice }: { onNotice: (notice: Notice) => void }) {
     setLoading(true);
     setError('');
     try {
-      const { data } = await labelApi.list({ page: 1, limit: 15 });
+      const { data } = await labelApi.list({ page: 1, limit: 15, status: 'ATIVA' });
       setLabels(data.data);
     } catch (err) {
       setError(extractError(err));

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   AlertTriangle, ArrowLeft, CalendarDays, Check, CheckCircle2, Hash, Minus, Plus,
-  Printer, Refrigerator, Snowflake, Thermometer, User,
+  Printer, Refrigerator, Scissors, Snowflake, Thermometer, User,
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
 import { extractError } from '@/services/api';
@@ -275,6 +275,15 @@ export function TotemLabelPage() {
             {product.brand}{product.category ? ` · ${product.category}` : ''}
           </p>
         </div>
+        <button
+          type="button" aria-label="Dividir uma etiqueta"
+          onClick={() => navigate(`/totem/etiqueta/${product.id}/dividir`)}
+          className="flex h-14 shrink-0 touch-manipulation items-center justify-center gap-2 rounded-2xl border-2 border-slate-200 bg-white px-3 text-base font-bold text-slate-700 active:scale-95 sm:h-20 sm:px-5 sm:text-xl"
+        >
+          <Scissors className="h-6 w-6 sm:h-8 sm:w-8" />
+          <span className="hidden sm:inline">Dividir uma etiqueta</span>
+          <span className="sm:hidden">Dividir</span>
+        </button>
       </div>
 
       {expiredLots.length > 0 && (
@@ -475,14 +484,14 @@ function usableLots(product: Product): ProductLot[] {
   return (product.lots ?? []).filter((item) => item.computedStatus !== 'expired');
 }
 
-function storagesOf(product: Product): StorageType[] {
+export function storagesOf(product: Product): StorageType[] {
   const available = ALL_STORAGES.filter((type) =>
     (type === 'REFRIGERADO' ? product.daysValidRefrigerated : product.daysValidFrozen) > 0);
   // Sem prazo no produto, o servidor ainda pode ter regra: deixa o cálculo decidir.
   return available.length > 0 ? available : ALL_STORAGES;
 }
 
-function Centered({ children }: { children: React.ReactNode }) {
+export function Centered({ children }: { children: React.ReactNode }) {
   return (
     <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center gap-3 p-4 text-center sm:gap-5 sm:p-6">
       {children}
@@ -571,7 +580,7 @@ function StorageCard({ type, temp, suggested, selected, state, waiting, onSelect
   );
 }
 
-function TempButton({ suggested, confirmed, range, onClick }: {
+export function TempButton({ suggested, confirmed, range, onClick }: {
   suggested: number; confirmed: number | undefined; range: string | null; onClick: () => void;
 }) {
   const isConfirmed = confirmed !== undefined;
@@ -603,7 +612,7 @@ function TempButton({ suggested, confirmed, range, onClick }: {
   );
 }
 
-function FieldButton({ icon, label, value, onClick, warn }: {
+export function FieldButton({ icon, label, value, onClick, warn }: {
   icon: React.ReactNode; label: string; value: string; onClick: () => void; warn?: boolean;
 }) {
   return (

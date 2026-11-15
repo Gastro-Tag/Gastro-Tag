@@ -45,6 +45,16 @@ function nameFontPt(name: string, steps: [number, number, number]): number {
 
 /** Só nos modelos A4 e 100×60: o 60×40 e o 50×30 não têm espaço e ficam como estão. */
 const NO_RULE_TEXT = 'Prazo sem regra validada';
+const PARENT_CAP_TEXT = 'Data limitada pela etiqueta de origem.';
+
+/** Linha de origem das etiquetas filhas; vazia nas demais. `short` é para o 60×40. */
+function fractionLine(label: Label, short: boolean): string {
+  const code = label.parent?.shortCode;
+  if (!code) return '';
+  if (short) return `Frac. de ${esc(code)}`;
+  const day = label.fractionedAt ? ` em ${esc(formatBR(label.fractionedAt).slice(0, 5))}` : '';
+  return `Fracionado de ${esc(code)}${day}`;
+}
 
 function storageLabel(label: Label): string {
   return label.storageType === 'REFRIGERADO' ? 'Refrigerado' : 'Congelado';
@@ -75,6 +85,8 @@ function fullLabel(label: Label, logo: string): string {
           <strong>${esc(formatBR(label.discardAt))}</strong>
         </div>
         <p class="print-rule">Prazo aplicado: ${esc(label.shelfLifeDays ?? '—')} dias. Fonte: ${esc(source)}.</p>
+        ${label.parent ? `<p class="print-cap">${fractionLine(label, false)}</p>` : ''}
+        ${label.cappedByParent ? `<p class="print-cap">${PARENT_CAP_TEXT}</p>` : ''}
         ${label.ruleId ? '' : `<p class="print-cap">${NO_RULE_TEXT}</p>`}
         ${label.cappedByOriginalExpiry ? '<p class="print-cap">Data limitada pela validade original do fabricante.</p>' : ''}
         <div class="print-signature">
@@ -104,6 +116,9 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
   const noRule = label.ruleId ? '' : `<p class="pt-cap">${NO_RULE_TEXT}</p>`;
   const cap = label.cappedByOriginalExpiry
     ? '<p class="pt-cap">Data limitada pela validade original do fabricante.</p>' : '';
+  // 50×30 não tem espaço: sem mudança.
+  const parentCap = full && label.cappedByParent ? `<p class="pt-cap">${PARENT_CAP_TEXT}</p>` : '';
+  const fraction = parentCap + (!minimal && label.parent ? `<p class="pt-cap">${fractionLine(label, !full)}</p>` : '');
   const open = `class="print-label print-thermal print-${template.id}${grow ? ' pt-grow' : ''}" style="--pt-scale:${scale}"`;
   const title = `<h1 style="font-size:max(6pt, calc(${nameSize}pt * var(--pt-scale, 1)))">${esc(name)}</h1>`;
   const discard = `<div class="pt-discard"><span>Descartar em</span><strong>${esc(formatBR(label.discardAt))}</strong></div>`;
@@ -121,6 +136,7 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
         <div><dt>Abertura</dt><dd>${esc(formatBR(label.openedAt))}</dd></div>
         ${storageItem}
       </dl>
+      ${fraction}
       <p class="pt-resp">${minimal ? 'Resp.' : 'Responsável'}: <strong>${esc(label.responsibleName || '—')}</strong></p>
       <div class="pt-foot"><span class="pt-code">Cód: ${esc(label.shortCode)}</span></div>
     </article>`;
@@ -142,6 +158,7 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
         <div><dt>Temperatura</dt><dd>${esc(label.storageTemp)}</dd></div>
       </dl>
       <p class="pt-rule">Prazo aplicado: ${esc(label.shelfLifeDays ?? '—')} dias. Fonte: ${esc(source)}.</p>
+      ${fraction}
       ${noRule}
       ${cap}
       <p class="pt-resp">Responsável pela manipulação: <strong>${esc(label.responsibleName || '—')}</strong></p>
@@ -189,7 +206,11 @@ function fitCompact(label: Label, template: LabelTemplate, logo: string): Compac
   }
 }
 
-export function printLabel(label: Label, logoUrl: string | null, copies = 1): void {
+/** Uma etiqueta (com cópias) ou várias (ex.: filhas de um fracionamento) em uma única impressão. */
+export function printLabel(labelOrLabels: Label | Label[], logoUrl: string | null, copies = 1): void {
+  const labels = Array.isArray(labelOrLabels) ? labelOrLabels : [labelOrLabels];
+  const label = labels[0];
+  if (!label) return;
   const root = document.getElementById('print-root');
   if (!root) throw new Error('Área de impressão não encontrada.');
 
@@ -199,11 +220,11 @@ export function printLabel(label: Label, logoUrl: string | null, copies = 1): vo
   const template = getLabelTemplate(loadLabelTemplateId());
   const logo = safeLogoSource(logoUrl);
   const fit = template.compact && template.widthMm && template.heightMm ? fitCompact(label, template, logo) : null;
-  const article = template.compact
-    ? compactLabel(label, template, logo, fit?.options)
-    : fullLabel(label, logo);
+  const render = (item: Label) => (template.compact
+    ? compactLabel(item, template, logo, fit?.options)
+    : fullLabel(item, logo));
   const count = Math.min(Math.max(Math.trunc(copies) || 1, 1), 20);
-  root.innerHTML = Array.from({ length: count }, () => article).join('');
+  root.innerHTML = labels.flatMap((item) => Array.from({ length: count }, () => render(item))).join('');
   injectPageStyle(template);
 
   // Em alguns navegadores (Chrome Android, modo quiosque) print() não bloqueia:
