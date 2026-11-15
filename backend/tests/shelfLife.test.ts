@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AppError } from '../src/utils/errors';
-import { calculateDiscard, parseDateOnly } from '../src/domain/shelfLife';
+import { calculateDiscard, calculateSplitDiscard, parseDateOnly } from '../src/domain/shelfLife';
 
 describe('calculateDiscard', () => {
   it('conta o dia da abertura como dia 1', () => {
@@ -69,5 +69,62 @@ describe('calculateDiscard', () => {
 
   it('rejeita datas impossíveis', () => {
     expect(() => parseDateOnly('2026-02-31', 'Abertura')).toThrowError(AppError);
+  });
+});
+
+describe('calculateSplitDiscard', () => {
+  const iso = (date: Date) => date.toISOString().slice(0, 10);
+  const base = { today: '2026-09-10', capToOriginalExpiry: true, originalExpiryDate: '2026-12-31' };
+
+  it('conta o prazo da filha a partir do dia do fracionamento quando cabe na origem', () => {
+    const result = calculateSplitDiscard({ ...base, parentDiscardAt: '2026-09-20', shelfLifeDays: 3 });
+    expect(iso(result.discardAt)).toBe('2026-09-12');
+    expect(iso(result.fractionedAt)).toBe('2026-09-10');
+    expect(result.cappedByParent).toBe(false);
+    expect(result.cappedByOriginalExpiry).toBe(false);
+  });
+
+  it('nunca passa da data da origem', () => {
+    const result = calculateSplitDiscard({ ...base, parentDiscardAt: '2026-09-11', shelfLifeDays: 30 });
+    expect(iso(result.discardAt)).toBe('2026-09-11');
+    expect(result.cappedByParent).toBe(true);
+    expect(result.cappedByOriginalExpiry).toBe(false);
+  });
+
+  it('com a mesma data da origem não marca limitação pela origem', () => {
+    const result = calculateSplitDiscard({ ...base, parentDiscardAt: '2026-09-12', shelfLifeDays: 3 });
+    expect(iso(result.discardAt)).toBe('2026-09-12');
+    expect(result.cappedByParent).toBe(false);
+  });
+
+  it('respeita a validade original quando ela é a menor data', () => {
+    const result = calculateSplitDiscard({
+      ...base, originalExpiryDate: '2026-09-11', parentDiscardAt: '2026-09-11', shelfLifeDays: 5,
+    });
+    expect(iso(result.discardAt)).toBe('2026-09-11');
+    expect(result.cappedByParent).toBe(false);
+    expect(result.cappedByOriginalExpiry).toBe(true);
+  });
+
+  it('origem que vence hoje ainda pode ser dividida, com descarte hoje', () => {
+    const result = calculateSplitDiscard({ ...base, parentDiscardAt: '2026-09-10', shelfLifeDays: 4 });
+    expect(iso(result.discardAt)).toBe('2026-09-10');
+    expect(result.cappedByParent).toBe(true);
+  });
+
+  it('recusa origem vencida e prazo inválido', () => {
+    expect(() => calculateSplitDiscard({ ...base, parentDiscardAt: '2026-09-09', shelfLifeDays: 3 }))
+      .toThrowError(/origem está vencida/);
+    expect(() => calculateSplitDiscard({ ...base, parentDiscardAt: '2026-09-20', shelfLifeDays: 0 }))
+      .toThrowError(AppError);
+  });
+
+  it('para qualquer prazo, a filha nunca vence depois da origem', () => {
+    for (let days = 1; days <= 60; days++) {
+      for (const parent of ['2026-09-10', '2026-09-15', '2026-10-30']) {
+        const result = calculateSplitDiscard({ ...base, parentDiscardAt: parent, shelfLifeDays: days });
+        expect(result.discardAt.getTime()).toBeLessThanOrEqual(new Date(`${parent}T00:00:00Z`).getTime());
+      }
+    }
   });
 });

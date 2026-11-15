@@ -26,6 +26,19 @@ Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. C
 
 As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade da embalagem e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do aparelho não define a data da etiqueta.
 
+## Dividir uma etiqueta
+
+Na tela do produto, **Dividir uma etiqueta** gera etiquetas filhas de uma etiqueta ativa (`/totem/etiqueta/<produto>/dividir`):
+
+1. Escolha a etiqueta de origem. A lista mostra só etiquetas **ativas** e não vencidas do produto; as encerradas não aparecem.
+2. Informe a quantidade, o armazenamento e **confirme a temperatura** no teclado numérico (a sugestão não é medição).
+3. Confira o responsável do turno e marque **A embalagem original acabou** se for o caso: a etiqueta de origem é encerrada como usada, em nome do responsável do turno.
+4. Toque em imprimir. Cada filha sai com lote e validade do fabricante da origem e a data de descarte calculada pelo servidor, **nunca posterior à da origem**; se a origem limitar a data, a tela avisa e a etiqueta diz "Data limitada pela etiqueta de origem".
+
+Reenviar o mesmo pedido não cria filhas repetidas. Etiqueta encerrada não pode ser reimpressa.
+
+**Descarte:** encerrar uma etiqueta como usada, descartada ou cancelada é feito só no painel, por enquanto. O totem ainda não registra descarte.
+
 ## Salvaguardas
 
 - Lote **vencido** gera alerta, não aparece como opção e o produto só vai para o fim da lista se não tiver outro lote em uso.
@@ -38,6 +51,7 @@ As memórias ficam no `localStorage` do navegador do totem. A **data de abertura
 - O botão trava durante a geração (sem etiqueta duplicada por toque duplo).
 - Se a rede cair depois que o servidor gravou, tocar de novo em imprimir devolve a mesma etiqueta, sem criar outra.
 - Após 60 s sem toque, volta ao início (e limpa busca/filtros).
+- As últimas etiquetas do produto mostram só as ativas.
 - Etiqueta criada com falha de impressão fica salva; a tela oferece "Tentar imprimir".
 
 ## Instalação do totem

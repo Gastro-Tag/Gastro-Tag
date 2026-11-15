@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  CalendarDays, Printer, RefreshCw, Search, Tag,
-  Clock, Refrigerator, Snowflake, User, Hash, CheckCircle2, AlertTriangle, AlertCircle
-} from 'lucide-react';
+import { CalendarDays, RefreshCw, Search, Tag, AlarmClock } from 'lucide-react';
 import { labelApi } from '@/services';
-import type { Label, StorageType } from '@/types';
+import type { CloseLabelResult, Label, LabelListParams, LabelStatus, SplitResult, StorageType } from '@/types';
+import { LabelCard } from '@/components/labels/LabelCard';
+import { CloseLabelDialog } from '@/components/labels/CloseLabelDialog';
+import { SplitLabelDialog } from '@/components/labels/SplitLabelDialog';
+import { useAuthStore } from '@/store/authStore';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pagination } from '@/components/ui/Pagination';
 import { InlineLoader } from '@/components/ui/Spinner';
 import { useToastContext } from '@/components/ui/Toast';
 import { useDebounce } from '@/hooks/useDebounce';
-import { daysUntil, formatBR, formatDateTimeBR } from '@/utils/date';
+import { formatBR } from '@/utils/date';
 import { cn } from '@/utils/cn';
 import { extractError } from '@/services/api';
 import { printLabel } from '@/utils/printLabel';
@@ -26,10 +27,18 @@ export function LabelsPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [storageType, setStorageType] = useState<StorageType | ''>('');
+  const [status, setStatus] = useState<LabelStatus | ''>('');
+  const [due, setDue] = useState<'expired' | 'today' | 'upcoming' | ''>('');
+  // Atalho: ativas vencidas ou que vencem hoje (duas consultas, pois o filtro de vencimento é único).
+  const [discardToday, setDiscardToday] = useState(false);
+  const [truncated, setTruncated] = useState(false);
   const [page, setPage] = useState(1);
+  const [closing, setClosing] = useState<Label | null>(null);
+  const [splitting, setSplitting] = useState<Label | null>(null);
+  const isAdmin = useAuthStore((state) => state.user?.role) === 'ADMIN';
   const debouncedSearch = useDebounce(search, 400);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, from, to, storageType]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, from, to, storageType, status, due, discardToday]);
 
   const fetchLabels = useCallback(async () => {
     if (from && to && from > to) {
@@ -40,19 +49,37 @@ export function LabelsPage() {
     }
     setLoading(true);
     try {
-      const { data } = await labelApi.list({
-        page, limit: 20, q: debouncedSearch.trim() || undefined,
+      const base: LabelListParams = {
+        q: debouncedSearch.trim() || undefined,
         from: from || undefined, to: to || undefined,
         storageType: storageType || undefined,
-      });
-      setLabels(data.data);
-      setMeta({ total: data.meta.total, totalPages: data.meta.totalPages, page: data.meta.page });
+      };
+      if (discardToday) {
+        const [expired, today] = await Promise.all([
+          labelApi.list({ ...base, status: 'ATIVA', due: 'expired', page: 1, limit: 100 }),
+          labelApi.list({ ...base, status: 'ATIVA', due: 'today', page: 1, limit: 100 }),
+        ]);
+        const merged = [...expired.data.data, ...today.data.data]
+          .sort((a, b) => a.discardAt.localeCompare(b.discardAt));
+        setLabels(merged);
+        setTruncated(expired.data.meta.total > expired.data.data.length || today.data.meta.total > today.data.data.length);
+        setMeta({ total: expired.data.meta.total + today.data.meta.total, totalPages: 1, page: 1 });
+      } else {
+        const { data } = await labelApi.list({
+          ...base, page, limit: 20,
+          status: status || undefined,
+          due: status === 'ATIVA' && due ? due : undefined,
+        });
+        setLabels(data.data);
+        setTruncated(false);
+        setMeta({ total: data.meta.total, totalPages: data.meta.totalPages, page: data.meta.page });
+      }
     } catch (error) {
       toast(extractError(error), 'error');
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, from, to, storageType, toast]);
+  }, [page, debouncedSearch, from, to, storageType, status, due, discardToday, toast]);
 
   useEffect(() => { void fetchLabels(); }, [fetchLabels]);
 
@@ -67,8 +94,35 @@ export function LabelsPage() {
     }
   }
 
-  const hasFilters = Boolean(search || from || to || storageType);
-  const clearFilters = () => { setSearch(''); setFrom(''); setTo(''); setStorageType(''); };
+  function handleClosed(result: CloseLabelResult) {
+    setClosing(null);
+    const activeChildren = result.meta?.activeChildren ?? [];
+    toast(`Etiqueta ${result.data.shortCode} encerrada.`, 'success');
+    if (activeChildren.length > 0) {
+      toast(
+        `Atenção: as filhas ${activeChildren.map((child) => child.shortCode).join(', ')} continuam ativas e precisam ser encerradas separadamente.`,
+        'warning',
+      );
+    }
+    void fetchLabels();
+  }
+
+  function handleSplit(result: SplitResult, printed: boolean) {
+    setSplitting(null);
+    const codes = result.children.map((child) => child.shortCode).join(', ');
+    toast(
+      printed
+        ? `${result.children.length} etiqueta(s) criada(s) e enviada(s) para impressão: ${codes}.`
+        : `Etiquetas criadas (${codes}), mas a impressão falhou. Use Reimprimir.`,
+      printed ? 'success' : 'warning',
+    );
+    void fetchLabels();
+  }
+
+  const hasFilters = Boolean(search || from || to || storageType || status || due || discardToday);
+  const clearFilters = () => {
+    setSearch(''); setFrom(''); setTo(''); setStorageType(''); setStatus(''); setDue(''); setDiscardToday(false);
+  };
 
   return (
     <div className="space-y-6">
@@ -92,7 +146,7 @@ export function LabelsPage() {
       </div>
 
       {/* Filter Bar */}
-      <div className="card p-4 sm:p-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5 bg-white">
+      <div className="card p-4 sm:p-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4 bg-white">
         <label className="relative xl:col-span-2">
           <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
           <input
@@ -133,7 +187,40 @@ export function LabelsPage() {
           <option value="REFRIGERADO">Refrigerado</option>
           <option value="CONGELADO">Congelado</option>
         </select>
-        <div className="flex items-center gap-2 md:col-span-2 xl:col-span-5 pt-1">
+        <select
+          className="input text-xs"
+          aria-label="Situação da etiqueta"
+          value={discardToday ? 'ATIVA' : status}
+          disabled={discardToday}
+          onChange={(e) => { setStatus(e.target.value as LabelStatus | ''); if (e.target.value !== 'ATIVA') setDue(''); }}
+        >
+          <option value="">Todas as situações</option>
+          <option value="ATIVA">Ativas</option>
+          <option value="ENCERRADA">Encerradas</option>
+        </select>
+        <select
+          className="input text-xs"
+          aria-label="Vencimento"
+          value={discardToday ? '' : due}
+          disabled={discardToday || status !== 'ATIVA'}
+          title={status !== 'ATIVA' ? 'Escolha "Ativas" para filtrar por vencimento' : undefined}
+          onChange={(e) => setDue(e.target.value as typeof due)}
+        >
+          <option value="">Qualquer vencimento</option>
+          <option value="expired">Vencidas</option>
+          <option value="today">Vencem hoje</option>
+          <option value="upcoming">Próximas</option>
+        </select>
+        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4 pt-1">
+          <button
+            type="button"
+            aria-pressed={discardToday}
+            onClick={() => { setDiscardToday((value) => !value); setStatus(''); setDue(''); }}
+            className={cn('btn btn-sm gap-1.5', discardToday ? 'btn-danger' : 'btn-outline')}
+          >
+            <AlarmClock className="h-3.5 w-3.5" />
+            <span>Para descartar hoje</span>
+          </button>
           <button
             onClick={() => void fetchLabels()}
             className="btn btn-outline btn-sm gap-1.5"
@@ -158,6 +245,13 @@ export function LabelsPage() {
         </div>
       )}
 
+      {discardToday && (
+        <p className="text-xs font-semibold text-slate-500">
+          Etiquetas ativas vencidas ou que vencem hoje, da mais antiga para a mais recente.
+          {truncated && ' Mostrando as primeiras 100 de cada grupo: refine a busca para ver as demais.'}
+        </p>
+      )}
+
       {/* Label List */}
       {loading ? (
         <InlineLoader text="Carregando etiquetas…" />
@@ -180,113 +274,22 @@ export function LabelsPage() {
                 key={label.id}
                 label={label}
                 onReprint={() => void reprint(label)}
+                onSplit={() => setSplitting(label)}
+                onCloseLabel={() => setClosing(label)}
+                onSearchCode={setSearch}
               />
             ))}
           </div>
           <Pagination page={meta.page} totalPages={meta.totalPages} onPage={setPage} />
         </>
       )}
-    </div>
-  );
-}
 
-// ── Label Card Component ─────────────────────────────────
-function LabelCard({ label, onReprint }: { label: Label; onReprint: () => void }) {
-  const daysLeft = daysUntil(label.discardAt);
-  const expired = daysLeft < 0;
-  const expiring = !expired && daysLeft <= 2;
-  const productName = label.productName ?? label.product?.name ?? '—';
-  const productBrand = label.productBrand ?? label.product?.brand ?? '';
-
-  const statusCls = expired
-    ? 'bg-rose-50 text-rose-700 border-rose-200'
-    : expiring
-    ? 'bg-amber-50 text-amber-700 border-amber-200'
-    : 'bg-emerald-50 text-emerald-700 border-emerald-200';
-
-  const squircleCls = expired
-    ? 'bg-rose-50 text-rose-600 border border-rose-100'
-    : expiring
-    ? 'bg-amber-50 text-amber-600 border border-amber-100'
-    : 'bg-orange-50 text-brand-600 border border-orange-100';
-
-  return (
-    <div className="card p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all hover:border-slate-300 hover:shadow-card-hover group">
-      {/* Left Item Details */}
-      <div className="flex items-start gap-4 min-w-0 flex-1">
-        <div className={cn('w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-2xs', squircleCls)}>
-          <Tag className="w-5 h-5" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <h3 className="font-bold text-charcoal-800 text-base group-hover:text-brand-600 transition-colors truncate">
-              {productName}
-            </h3>
-            <span className={cn('badge', statusCls)}>
-              <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current" />
-              <span>
-                {expired
-                  ? `Vencida há ${Math.abs(daysLeft)}d`
-                  : daysLeft === 0
-                  ? 'Vence hoje'
-                  : `${daysLeft}d restantes`}
-              </span>
-            </span>
-            <span className="font-mono text-[10px] font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md border border-slate-200">
-              {label.shortCode}
-            </span>
-          </div>
-
-          <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="font-medium text-slate-600">{productBrand}</span>
-            <span>• Lote: <strong className="text-charcoal-800">{label.lot}</strong></span>
-            <span>• Manipulador: <strong className="text-charcoal-800">{label.responsibleName ?? 'Não informado'}</strong></span>
-          </div>
-
-          <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-500">
-            <span>Abertura: <strong className="text-charcoal-800">{formatBR(label.openedAt)}</strong></span>
-
-            <span className="inline-flex items-center gap-1 font-semibold text-charcoal-800">
-              Descarte:
-              <strong className={cn('px-2 py-0.5 rounded-md', expired ? 'bg-rose-100 text-rose-800' : 'bg-slate-100 text-charcoal-900')}>
-                {formatBR(label.discardAt)}
-              </strong>
-            </span>
-
-            <span className="inline-flex items-center gap-1">
-              {label.storageType === 'REFRIGERADO' ? <Refrigerator className="w-3.5 h-3.5 text-sky-600" /> : <Snowflake className="w-3.5 h-3.5 text-indigo-600" />}
-              <span>{label.storageType === 'REFRIGERADO' ? 'Refrigerado' : 'Congelado'} ({label.storageTemp})</span>
-            </span>
-
-            <span className="text-slate-400">
-              Impresso {label.printCount}x {label.printedAt && `• ${formatDateTimeBR(label.printedAt)}`}
-            </span>
-          </div>
-
-          {label.shelfLifeDays != null && (
-            <div className="mt-1.5 text-[11px] text-slate-400">
-              Regra: {label.shelfLifeDays} dias •{' '}
-              {label.ruleId
-                ? <>{label.ruleSource ?? label.rule?.source ?? 'Regra cadastrada'}{label.ruleVersion != null && ` (v${label.ruleVersion})`}</>
-                : <span className="font-semibold text-amber-700">Prazo do produto (sem regra validada)</span>}
-              {label.cappedByOriginalExpiry && ' • (Teto: validade original)'}
-            </div>
-          )}
-            </div>
-      </div>
-
-      {/* Right Action */}
-      <div className="pt-3 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
-        <button
-          onClick={onReprint}
-          className="btn btn-outline btn-sm w-full sm:w-auto gap-1.5"
-          title="Reimprimir etiqueta"
-        >
-          <Printer className="w-3.5 h-3.5 text-slate-500" />
-          <span>Reimprimir</span>
-        </button>
-      </div>
+      {closing && (
+        <CloseLabelDialog label={closing} isAdmin={isAdmin} onClose={() => setClosing(null)} onClosed={handleClosed} />
+      )}
+      {splitting && (
+        <SplitLabelDialog parent={splitting} onClose={() => setSplitting(null)} onDone={handleSplit} />
+      )}
     </div>
   );
 }

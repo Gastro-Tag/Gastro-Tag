@@ -135,6 +135,86 @@ export interface Label {
   createdAt:   string;
   product?:    Pick<Product, 'id' | 'name' | 'brand'>;
   user?:       { name: string };
+  // Etapa F: destino e fracionamento
+  status:        LabelStatus;
+  outcome?:      LabelOutcome | null;
+  discardReason?: DiscardReason | null;
+  closeNote?:    string | null;
+  closedAt?:     string | null;
+  closedByName?: string | null;
+  parentLabelId?: string | null;
+  /** Dia em que a etiqueta foi dividida (YYYY-MM-DD); só nas filhas. */
+  fractionedAt?: string | null;
+  /** A data de descarte foi limitada pela etiqueta de origem. */
+  cappedByParent?: boolean;
+  /** Número de filhas (itens da lista). */
+  childrenCount?: number;
+  parent?:       { id: string; shortCode: string } | null;
+  /** Só em GET /labels/:id. */
+  children?:     LabelChild[];
+}
+
+export type LabelStatus  = 'ATIVA' | 'ENCERRADA';
+export type LabelOutcome = 'USADO' | 'DESCARTADO' | 'CANCELADO';
+export type DiscardReason = 'PRAZO_VENCIDO' | 'ALTERACAO_SENSORIAL' | 'EMBALAGEM_DANIFICADA' | 'OUTRO';
+
+export interface LabelChild {
+  id:        string;
+  shortCode: string;
+  status:    LabelStatus;
+  discardAt: string;
+}
+
+export interface CloseLabelDTO {
+  outcome:        LabelOutcome;
+  /** Obrigatório se e só se DESCARTADO. */
+  discardReason?: DiscardReason;
+  /** Obrigatória (mín. 3) quando o motivo é OUTRO; até 300 caracteres. */
+  note?:          string;
+}
+
+export interface CloseLabelResult {
+  success: boolean;
+  data:    Label;
+  meta:    { activeChildren: Pick<LabelChild, 'id' | 'shortCode' | 'discardAt'>[] };
+}
+
+export interface SplitPreviewDTO {
+  storageType:         StorageType;
+  storageTemperature?: number;
+}
+
+export interface SplitPreview {
+  discardAt: string;
+  cappedByParent: boolean;
+  cappedByOriginalExpiry: boolean;
+  fractionedAt: string;
+  rule: PreviewRule;
+  storageTemperature: number | null;
+  storageTemp: string | null;
+}
+
+export interface SplitLabelDTO {
+  count:              number;
+  storageType:        StorageType;
+  storageTemperature: number;
+  responsibleName:    string;
+  closeParent?:       boolean;
+  requestId?:         string;
+}
+
+export interface SplitResult {
+  parent:   Label;
+  children: Label[];
+}
+
+export interface LabelListParams {
+  productId?: string; userId?: string; page?: number; limit?: number;
+  q?: string; from?: string; to?: string; storageType?: string;
+  status?: LabelStatus;
+  /** Só com status ATIVA. */
+  due?: 'expired' | 'today' | 'upcoming';
+  parentLabelId?: string;
 }
 
 export interface LabelPreview {

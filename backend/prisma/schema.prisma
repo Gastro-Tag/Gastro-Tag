@@ -20,6 +20,7 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   labels       Label[]
+  closedLabels Label[]         @relation("LabelClosedBy")
   sessions     UserSession[]
   createdRules ShelfLifeRule[] @relation("RuleCreatedBy")
 
@@ -51,20 +52,20 @@ enum UserRole {
 
 // ── Produto (insumo cadastrado) ───────────────────────────
 model Product {
-  id                      String   @id @default(uuid())
-  name                    String
-  brand                   String
-  category                String?
-  daysValidRefrigerated   Int      @default(0) @map("days_valid_refrigerated")
-  daysValidFrozen         Int      @default(0) @map("days_valid_frozen")
-  unit                    String?                                             // kg, L, un, etc.
-  notes                   String?
-  active                  Boolean  @default(true)
-  createdAt               DateTime @default(now()) @map("created_at")
-  updatedAt               DateTime @updatedAt @map("updated_at")
+  id                    String   @id @default(uuid())
+  name                  String
+  brand                 String
+  category              String?
+  daysValidRefrigerated Int      @default(0) @map("days_valid_refrigerated")
+  daysValidFrozen       Int      @default(0) @map("days_valid_frozen")
+  unit                  String? // kg, L, un, etc.
+  notes                 String?
+  active                Boolean  @default(true)
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
 
-  labels Label[]
-  lots   ProductLot[]
+  labels         Label[]
+  lots           ProductLot[]
   shelfLifeRules ShelfLifeRule[]
 
   @@index([name])
@@ -92,35 +93,51 @@ model ProductLot {
 
 // ── Etiqueta gerada ──────────────────────────────────────
 model Label {
-  id               String          @id @default(uuid())
-  shortCode        String          @unique @map("short_code")
-  productId        String          @map("product_id")
-  userId           String          @map("user_id")
-  lot              String
-  lotId            String?         @map("lot_id")                    // nulo: validade informada na hora
-  openedAt         DateTime        @map("opened_at") @db.Date
-  discardAt        DateTime        @map("discard_at") @db.Date
-  storageType      StorageType     @map("storage_type")
-  storageTemp      String          @map("storage_temp")              // texto impresso; nas novas, gerado pelo servidor ("4,0 °C")
-  storageTemperature Decimal?      @map("storage_temperature") @db.Decimal(4, 1) // nulo nas antigas sem texto numérico
-  ruleId           String?         @map("rule_id")
-  ruleVersion      Int?            @map("rule_version")
-  ruleSource       String?         @map("rule_source")               // cópia da fonte da regra usada
-  shelfLifeDays    Int             @map("shelf_life_days")
-  originalExpiryDate DateTime      @map("original_expiry_date") @db.Date
-  cappedByOriginalExpiry Boolean   @default(false) @map("capped_by_original_expiry")
-  productName      String          @map("product_name")
-  productBrand     String          @map("product_brand")
-  responsibleName  String?         @map("responsible_name")
-  requestId        String?         @map("request_id")                // repetir o envio devolve a mesma etiqueta
-  printedAt        DateTime?       @map("printed_at")
-  printCount       Int             @default(0) @map("print_count")
-  createdAt        DateTime        @default(now()) @map("created_at")
+  id                     String         @id @default(uuid())
+  shortCode              String         @unique @map("short_code")
+  productId              String         @map("product_id")
+  userId                 String         @map("user_id")
+  lot                    String
+  lotId                  String?        @map("lot_id") // nulo: validade informada na hora
+  openedAt               DateTime       @map("opened_at") @db.Date
+  discardAt              DateTime       @map("discard_at") @db.Date
+  storageType            StorageType    @map("storage_type")
+  storageTemp            String         @map("storage_temp") // texto impresso; nas novas, gerado pelo servidor ("4,0 °C")
+  storageTemperature     Decimal?       @map("storage_temperature") @db.Decimal(4, 1) // nulo nas antigas sem texto numérico
+  ruleId                 String?        @map("rule_id")
+  ruleVersion            Int?           @map("rule_version")
+  ruleSource             String?        @map("rule_source") // cópia da fonte da regra usada
+  shelfLifeDays          Int            @map("shelf_life_days")
+  originalExpiryDate     DateTime       @map("original_expiry_date") @db.Date
+  cappedByOriginalExpiry Boolean        @default(false) @map("capped_by_original_expiry")
+  productName            String         @map("product_name")
+  productBrand           String         @map("product_brand")
+  responsibleName        String?        @map("responsible_name")
+  requestId              String?        @map("request_id") // repetir o envio devolve a mesma etiqueta
+  printedAt              DateTime?      @map("printed_at")
+  printCount             Int            @default(0) @map("print_count")
+  // Destino da etiqueta: ativa até ser usada, descartada ou cancelada. Não há desfazer.
+  status                 LabelStatus    @default(ATIVA)
+  outcome                LabelOutcome?
+  discardReason          DiscardReason? @map("discard_reason")
+  closeNote              String?        @map("close_note")
+  closedAt               DateTime?      @map("closed_at")
+  closedById             String?        @map("closed_by_id")
+  closedByName           String?        @map("closed_by_name") // cópia do nome de quem encerrou
+  // Dividir: a filha aponta para a etiqueta de origem e guarda o dia em que foi fracionada.
+  parentLabelId          String?        @map("parent_label_id")
+  fractionedAt           DateTime?      @map("fractioned_at") @db.Date
+  splitRequestId         String?        @map("split_request_id") // repetir o envio devolve as mesmas filhas
+  cappedByParent         Boolean        @default(false) @map("capped_by_parent") // descarte da filha limitado pela origem
+  createdAt              DateTime       @default(now()) @map("created_at")
 
-  product Product @relation(fields: [productId], references: [id])
-  user    User    @relation(fields: [userId], references: [id])
-  rule    ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
-  productLot ProductLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
+  product    Product        @relation(fields: [productId], references: [id])
+  user       User           @relation(fields: [userId], references: [id])
+  closedBy   User?          @relation("LabelClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  parent     Label?         @relation("LabelSplit", fields: [parentLabelId], references: [id], onDelete: Restrict)
+  children   Label[]        @relation("LabelSplit")
+  rule       ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  productLot ProductLot?    @relation(fields: [lotId], references: [id], onDelete: SetNull)
 
   @@unique([userId, requestId])
   @@index([productId])
@@ -129,7 +146,28 @@ model Label {
   @@index([createdAt])
   @@index([ruleId])
   @@index([lotId])
+  @@index([status, discardAt])
+  @@index([parentLabelId])
+  @@index([parentLabelId, splitRequestId])
   @@map("labels")
+}
+
+enum LabelStatus {
+  ATIVA
+  ENCERRADA
+}
+
+enum LabelOutcome {
+  USADO
+  DESCARTADO
+  CANCELADO
+}
+
+enum DiscardReason {
+  PRAZO_VENCIDO
+  ALTERACAO_SENSORIAL
+  EMBALAGEM_DANIFICADA
+  OUTRO
 }
 
 // Regra imutável: editar cria uma nova versão e desativa a anterior. Nunca é apagada.

@@ -83,3 +83,51 @@ export function calculateDiscard(input: CalculateDiscardInput): CalculateDiscard
     cappedByOriginalExpiry,
   };
 }
+
+export interface CalculateSplitDiscardInput {
+  /** Data de descarte da etiqueta de origem. */
+  parentDiscardAt: string | Date;
+  /** Prazo da filha, pelo armazenamento escolhido para ela. */
+  shelfLifeDays: number;
+  originalExpiryDate?: string | Date | null;
+  capToOriginalExpiry: boolean;
+  /** Data atual da cozinha: é o dia do fracionamento. */
+  today: string | Date;
+}
+
+export interface CalculateSplitDiscardResult {
+  discardAt: Date;
+  fractionedAt: Date;
+  shelfLifeDays: number;
+  /** A data da filha ficou limitada pela data da origem. */
+  cappedByParent: boolean;
+  cappedByOriginalExpiry: boolean;
+}
+
+/**
+ * Dividir: a filha conta o prazo a partir do dia do fracionamento, mas nunca passa da data de
+ * descarte da origem (o produto é o mesmo, já aberto).
+ */
+export function calculateSplitDiscard(input: CalculateSplitDiscardInput): CalculateSplitDiscardResult {
+  const today = parseDateOnly(input.today, 'Data atual');
+  const parentDiscardAt = parseDateOnly(input.parentDiscardAt, 'Descarte da origem');
+  if (parentDiscardAt.getTime() < today.getTime()) {
+    throw Errors.validation('A etiqueta de origem está vencida. Descarte o produto.');
+  }
+
+  const own = calculateDiscard({
+    openedAt: today,
+    shelfLifeDays: input.shelfLifeDays,
+    originalExpiryDate: input.originalExpiryDate,
+    capToOriginalExpiry: input.capToOriginalExpiry,
+    today,
+  });
+  const cappedByParent = own.discardAt.getTime() > parentDiscardAt.getTime();
+  return {
+    discardAt: cappedByParent ? parentDiscardAt : own.discardAt,
+    fractionedAt: today,
+    shelfLifeDays: input.shelfLifeDays,
+    cappedByParent,
+    cappedByOriginalExpiry: !cappedByParent && own.cappedByOriginalExpiry,
+  };
+}

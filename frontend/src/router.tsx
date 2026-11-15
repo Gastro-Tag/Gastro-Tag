@@ -14,6 +14,7 @@ import { TotemRoute }       from '@/components/totem/TotemShell';
 import { TotemLoginPage }   from '@/pages/totem/TotemLoginPage';
 import { TotemHomePage }    from '@/pages/totem/TotemHomePage';
 import { TotemLabelPage }   from '@/pages/totem/TotemLabelPage';
+import { TotemSplitPage }   from '@/pages/totem/TotemSplitPage';
 
 export const router = createBrowserRouter([
   {
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
     children: [
       { path: '/totem',                     element: <TotemHomePage /> },
       { path: '/totem/etiqueta/:productId', element: <TotemLabelPage /> },
+      { path: '/totem/etiqueta/:productId/dividir', element: <TotemSplitPage /> },
     ],
   },
   {

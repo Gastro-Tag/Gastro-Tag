@@ -3,6 +3,7 @@ import type {
   ApiResponse, PaginatedResponse, AuthTokens, User, ManagedUser, CreateUserDTO,
   Product, ProductLot, CreateProductDTO, ProductFilters,
   Label, CreateLabelDTO, LabelPreview, LabelPreviewDTO,
+  CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
   ShelfLifeRule, RuleFilters, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
 } from '@/types';
@@ -79,10 +80,7 @@ export const lotApi = {
 
 // ── Labels ──────────────────────────────────────────────
 export const labelApi = {
-  list: (params?: {
-    productId?: string; userId?: string; page?: number; limit?: number;
-    q?: string; from?: string; to?: string; storageType?: string;
-  }) =>
+  list: (params?: LabelListParams) =>
     api.get<PaginatedResponse<Label>>('/labels', { params }),
 
   preview: (data: LabelPreviewDTO) =>
@@ -96,6 +94,17 @@ export const labelApi = {
 
   registerPrint: (id: string) =>
     api.patch<ApiResponse<Label>>(`/labels/${id}/print`),
+
+  /** Registra o destino (Usado/Descartado/Cancelado). Sem desfazer. */
+  close: (id: string, data: CloseLabelDTO) =>
+    api.post<CloseLabelResult>(`/labels/${id}/close`, data),
+
+  splitPreview: (id: string, data: SplitPreviewDTO) =>
+    api.post<ApiResponse<SplitPreview>>(`/labels/${id}/split/preview`, data),
+
+  /** 201 na criação, 200 no reenvio com o mesmo requestId. */
+  split: (id: string, data: SplitLabelDTO) =>
+    api.post<ApiResponse<SplitResult>>(`/labels/${id}/split`, data),
 };
 
 // ── Regras de validade (ADMIN) ──────────────────────────
