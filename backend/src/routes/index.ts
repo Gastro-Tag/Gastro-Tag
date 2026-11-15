@@ -6,6 +6,7 @@ import { LotController } from '../controllers/lotController';
 import { LabelController } from '../controllers/labelController';
 import { DashboardController } from '../controllers/dashboardController';
 import { UserController } from '../controllers/userController';
+import { RuleController } from '../controllers/ruleController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
@@ -73,6 +74,12 @@ router.delete('/products/:id', authenticate, requireAdmin, ProductController.rem
 router.post('/products/:id/lots', authenticate, requireAdmin, LotController.create);
 router.put('/products/:id/lots/:lotId', authenticate, requireAdmin, LotController.update);
 router.delete('/products/:id/lots/:lotId', authenticate, requireAdmin, LotController.remove);
+
+router.get('/shelf-life-rules', authenticate, requireAdmin, RuleController.list);
+router.get('/shelf-life-rules/:id/versions', authenticate, requireAdmin, RuleController.versions);
+router.post('/shelf-life-rules', authenticate, requireAdmin, RuleController.create);
+router.put('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.createVersion);
+router.delete('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.deactivate);
 
 router.get('/labels', authenticate, LabelController.list);
 router.get('/labels/:id', authenticate, LabelController.getById);

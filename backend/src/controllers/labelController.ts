@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { LabelService } from '../services/labelService';
 import { parseDateOnly } from '../domain/shelfLife';
+import { LABEL_TEMPERATURE_MAX, LABEL_TEMPERATURE_MIN } from '../domain/temperature';
 
 const dateSchema = z.string().refine((value) => {
   try { parseDateOnly(value); return true; } catch { return false; }
@@ -13,7 +14,14 @@ const labelFields = z.object({
   originalExpiryDate: dateSchema.optional(),
   openedAt:    dateSchema.optional(),
   storageType: z.enum(['REFRIGERADO', 'CONGELADO']),
-  storageTemp: z.string().min(1).max(40),
+  // Medição em °C; o servidor arredonda a uma casa e gera o texto impresso ("4,0 °C").
+  storageTemperature: z.number({
+    required_error: 'Informe a temperatura medida em °C.',
+    invalid_type_error: 'Informe a temperatura em número (°C).',
+  }).finite('Informe a temperatura em número (°C).')
+    .min(LABEL_TEMPERATURE_MIN, `Temperatura fora da faixa aceita (${LABEL_TEMPERATURE_MIN} a ${LABEL_TEMPERATURE_MAX} °C).`)
+    .max(LABEL_TEMPERATURE_MAX, `Temperatura fora da faixa aceita (${LABEL_TEMPERATURE_MIN} a ${LABEL_TEMPERATURE_MAX} °C).`)
+    .optional(),
 });
 
 // A validade vem de um lote cadastrado ou da embalagem em mãos, nunca dos dois.
@@ -24,6 +32,7 @@ const expirySourceError = { message: 'Escolha um lote ou informe a validade da e
 const previewSchema = labelFields.refine(oneExpirySource, expirySourceError);
 
 const createSchema = labelFields.extend({
+  storageTemperature: labelFields.shape.storageTemperature.unwrap(),
   lot: z.string().trim().min(1).max(60).refine((value) => !value.includes('\u0000'), 'Lote inválido.').optional(),
   responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
   requestId: z.string().uuid().optional(),

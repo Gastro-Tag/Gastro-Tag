@@ -24,6 +24,12 @@ let accessToken = '';
 let refreshToken = '';
 let operatorToken = '';
 
+// Valores fictícios, só para o teste: o sistema não traz prazos cadastrados.
+const ruleBody = {
+  sourceType: 'REFERENCIA_TECNICA', source: 'Regra de teste de integração',
+  validatedByName: 'Responsável Técnico de Teste', validatedAt: daysFromToday(-1),
+};
+
 beforeAll(async () => {
   const user = await prisma.user.create({ data: {
     name: 'Teste de integração', email,
@@ -40,7 +46,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (productIds.length) await prisma.label.deleteMany({ where: { productId: { in: productIds } } });
-  if (ruleIds.length) await prisma.shelfLifeRule.deleteMany({ where: { id: { in: ruleIds } } });
+  if (ruleIds.length) {
+    // Versões apontam umas para as outras (Restrict): solta a cadeia antes de apagar.
+    await prisma.shelfLifeRule.updateMany({ where: { id: { in: ruleIds } }, data: { previousVersionId: null } });
+    await prisma.shelfLifeRule.deleteMany({ where: { id: { in: ruleIds } } });
+  }
   if (productIds.length) await prisma.productLot.deleteMany({ where: { productId: { in: productIds } } });
   if (productIds.length) await prisma.product.deleteMany({ where: { id: { in: productIds } } });
   if (createdUserIds.length) await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
@@ -72,7 +82,7 @@ describe('API integration flow', () => {
     const invalidDate = await request(app).post('/api/labels/preview')
       .set('Authorization', `Bearer ${accessToken}`).send({
         productId: product.body.data.id, originalExpiryDate: daysFromToday(30), openedAt: '2026-02-31',
-        storageType: 'REFRIGERADO', storageTemp: '4°C',
+        storageType: 'REFRIGERADO', storageTemperature: 4,
       });
     expect(invalidDate.status).toBe(422);
     expect(invalidDate.body.error.code).toBe('VALIDATION_ERROR');
@@ -80,10 +90,18 @@ describe('API integration flow', () => {
     const missingResponsible = await request(app).post('/api/labels')
       .set('Authorization', `Bearer ${accessToken}`).send({
         productId: product.body.data.id, lot: `LOT-${suffix.slice(0, 8)}`, originalExpiryDate: daysFromToday(30),
-        openedAt: today(), storageType: 'REFRIGERADO', storageTemp: '4°C',
+        openedAt: today(), storageType: 'REFRIGERADO', storageTemperature: 4,
       });
     expect(missingResponsible.status).toBe(422);
     expect(missingResponsible.body.error.code).toBe('VALIDATION_ERROR');
+
+    const missingTemperature = await request(app).post('/api/labels')
+      .set('Authorization', `Bearer ${accessToken}`).send({
+        productId: product.body.data.id, lot: `LOT-${suffix.slice(0, 8)}`, originalExpiryDate: daysFromToday(30),
+        responsibleName: 'Operador de Teste', storageType: 'REFRIGERADO', storageTemp: '4°C',
+      });
+    expect(missingTemperature.status).toBe(422);
+    expect(missingTemperature.body.error.message).toContain('temperatura');
   });
 
   it('creates a product and a label using the backend discard calculation', async () => {
@@ -99,18 +117,26 @@ describe('API integration flow', () => {
     const openedAt = today();
     const preview = await request(app).post('/api/labels/preview')
       .set('Authorization', `Bearer ${accessToken}`).send({
-        productId, originalExpiryDate: expiry, openedAt, storageType: 'REFRIGERADO', storageTemp: '4°C',
+        productId, originalExpiryDate: expiry, openedAt, storageType: 'REFRIGERADO', storageTemperature: 4,
       });
     expect(preview.status).toBe(200);
     expect(preview.body.data.rule.shelfLifeDays).toBe(2);
+    expect(preview.body.data.rule).toMatchObject({
+      id: null, sourceType: null, version: null, validated: false,
+      source: 'Prazo cadastrado no produto (sem regra validada)',
+    });
     expect(preview.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(1));
 
     const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${accessToken}`).send({
       productId, lot: `LOT-${suffix.slice(0, 8)}`, originalExpiryDate: expiry,
-      responsibleName: 'Operador de Teste', openedAt, storageType: 'REFRIGERADO', storageTemp: '4°C',
+      responsibleName: 'Operador de Teste', openedAt, storageType: 'REFRIGERADO', storageTemperature: 4,
     });
     expect(label.status).toBe(201);
     expect(label.body.data.shelfLifeDays).toBe(2);
+    expect(label.body.data).toMatchObject({
+      storageTemperature: 4, storageTemp: '4,0 °C', ruleId: null, ruleVersion: null,
+      ruleSource: 'Prazo cadastrado no produto (sem regra validada)',
+    });
     expect(label.body.data.productName).toBe('Produto integração');
     expect(label.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(1));
 
@@ -132,14 +158,14 @@ describe('API integration flow', () => {
   it('uses the kitchen date when openedAt is omitted', async () => {
     const preview = await request(app).post('/api/labels/preview')
       .set('Authorization', `Bearer ${accessToken}`).send({
-        productId: productIds[0], originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO', storageTemp: '4°C',
+        productId: productIds[0], originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO', storageTemperature: 4,
       });
     expect(preview.status).toBe(200);
     expect(preview.body.data.openedAt.slice(0, 10)).toBe(today());
 
     const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${accessToken}`).send({
       productId: productIds[0], lot: `LOT-${suffix.slice(0, 8)}`, originalExpiryDate: daysFromToday(30),
-      responsibleName: 'Operador de Teste', storageType: 'REFRIGERADO', storageTemp: '4°C',
+      responsibleName: 'Operador de Teste', storageType: 'REFRIGERADO', storageTemperature: 4,
     });
     expect(label.status).toBe(201);
     expect(label.body.data.openedAt.slice(0, 10)).toBe(today());
@@ -148,7 +174,7 @@ describe('API integration flow', () => {
   it('rejects a future opening date and a label that would be born expired', async () => {
     const payload = {
       productId: productIds[0], lot: `LOT-${suffix.slice(0, 8)}`, originalExpiryDate: daysFromToday(30),
-      responsibleName: 'Operador de Teste', storageType: 'REFRIGERADO', storageTemp: '4°C',
+      responsibleName: 'Operador de Teste', storageType: 'REFRIGERADO', storageTemperature: 4,
     };
     const postLabel = (body: object) => request(app).post('/api/labels')
       .set('Authorization', `Bearer ${accessToken}`).send(body);
@@ -174,30 +200,288 @@ describe('API integration flow', () => {
     expect(product.status).toBe(201);
     productIds.push(product.body.data.id);
 
-    const rule = await prisma.shelfLifeRule.create({ data: {
-      productId: product.body.data.id, storageType: 'REFRIGERADO', shelfLifeDays: 4,
-      minTemperature: '0', maxTemperature: '5', source: 'Regra de teste',
-    } });
-    ruleIds.push(rule.id);
+    const rule = await request(app).post('/api/shelf-life-rules').set('Authorization', `Bearer ${accessToken}`).send({
+      ...ruleBody, productId: product.body.data.id, storageType: 'REFRIGERADO', shelfLifeDays: 4,
+      minTemperature: 0, maxTemperature: 5,
+    });
+    expect(rule.status).toBe(201);
+    ruleIds.push(rule.body.data.id);
 
     const payload = {
       productId: product.body.data.id, originalExpiryDate: daysFromToday(30), openedAt: today(),
       storageType: 'REFRIGERADO',
     };
-    const outsideRange = await request(app).post('/api/labels/preview')
-      .set('Authorization', `Bearer ${accessToken}`).send({ ...payload, storageTemp: '6°C' });
+    const preview = (body: object) => request(app).post('/api/labels/preview')
+      .set('Authorization', `Bearer ${accessToken}`).send({ ...payload, ...body });
+
+    const outsideRange = await preview({ storageTemperature: 6 });
     expect(outsideRange.status).toBe(422);
     expect(outsideRange.body.error.code).toBe('VALIDATION_ERROR');
+    expect(outsideRange.body.error.message).toContain('acima da faixa');
+    expect((await preview({ storageTemperature: -0.5 })).body.error.message).toContain('abaixo da faixa');
 
-    const withinRange = await request(app).post('/api/labels/preview')
-      .set('Authorization', `Bearer ${accessToken}`).send({ ...payload, storageTemp: '4°C' });
+    const withinRange = await preview({ storageTemperature: 4.25 });
     expect(withinRange.status).toBe(200);
-    expect(withinRange.body.data.rule.shelfLifeDays).toBe(4);
+    expect(withinRange.body.data.rule).toMatchObject({
+      id: rule.body.data.id, shelfLifeDays: 4, minTemperature: 0, maxTemperature: 5,
+      sourceType: 'REFERENCIA_TECNICA', version: 1, validatedByName: 'Responsável Técnico de Teste',
+      validatedAt: daysFromToday(-1), validated: true,
+    });
+    expect(withinRange.body.data.storageTemperature).toBe(4.3);
+    expect(withinRange.body.data.storageTemp).toBe('4,3 °C');
+
+    // Sem temperatura, a prévia calcula o prazo sem conferir a faixa.
+    const withoutTemperature = await preview({});
+    expect(withoutTemperature.status).toBe(200);
+    expect(withoutTemperature.body.data.storageTemperature).toBeNull();
+    expect(withoutTemperature.body.data.storageTemp).toBeNull();
+
+    // Texto livre não é mais aceito, nem medição fora da faixa de sanidade.
+    expect((await preview({ storageTemperature: '4°C' })).status).toBe(422);
+    expect((await preview({ storageTemperature: 31 })).status).toBe(422);
+    expect((await preview({ storageTemperature: -51 })).status).toBe(422);
+
+    const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${accessToken}`).send({
+      ...payload, lot: 'LOT-REGRA', responsibleName: 'Operador de Teste', storageTemperature: 3,
+    });
+    expect(label.status).toBe(201);
+    expect(label.body.data).toMatchObject({
+      ruleId: rule.body.data.id, ruleVersion: 1, ruleSource: ruleBody.source,
+      storageTemperature: 3, storageTemp: '3,0 °C', shelfLifeDays: 4,
+    });
+    expect(label.body.data.rule.minTemperature).toBe(0);
+
+    const outside = await request(app).post('/api/labels').set('Authorization', `Bearer ${accessToken}`).send({
+      ...payload, lot: 'LOT-REGRA', responsibleName: 'Operador de Teste', storageTemperature: 7,
+    });
+    expect(outside.status).toBe(422);
+  });
+
+  describe('versioned shelf-life rules', () => {
+    const asAdmin = () => `Bearer ${accessToken}`;
+    const category = `Regras ${suffix.slice(0, 8)}`;
+    let productId = '';
+    const rules = (method: 'get' | 'post' | 'put' | 'delete', path = '', token = asAdmin()) =>
+      request(app)[method](`/api/shelf-life-rules${path}`).set('Authorization', token);
+
+    beforeAll(async () => {
+      const product = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+        name: `Produto versões ${suffix.slice(0, 8)}`, brand: 'Teste', category,
+        daysValidRefrigerated: 2, daysValidFrozen: 5,
+      });
+      productId = product.body.data.id;
+      productIds.push(productId);
+    });
+
+    it('lets only administrators manage rules', async () => {
+      const login = await request(app).post('/api/auth/login').send({ email: operatorEmail, password: 'TestPassword123!' });
+      const asOperator = `Bearer ${login.body.data.accessToken}`;
+      const anyId = randomUUID();
+      expect((await rules('get', '', asOperator)).status).toBe(403);
+      expect((await rules('get', `/${anyId}/versions`, asOperator)).status).toBe(403);
+      expect((await rules('post', '', asOperator).send({
+        ...ruleBody, category, storageType: 'CONGELADO', shelfLifeDays: 10,
+      })).status).toBe(403);
+      expect((await rules('put', `/${anyId}`, asOperator).send({ ...ruleBody, shelfLifeDays: 10 })).status).toBe(403);
+      expect((await rules('delete', `/${anyId}`, asOperator)).status).toBe(403);
+      expect((await request(app).get('/api/shelf-life-rules')).status).toBe(401);
+    });
+
+    it('validates the rule body', async () => {
+      const post = (body: object) => rules('post').send({
+        ...ruleBody, category, storageType: 'CONGELADO', shelfLifeDays: 10, ...body,
+      });
+      expect((await post({ productId })).status).toBe(422); // produto e categoria juntos
+      expect((await post({ category: undefined })).status).toBe(422); // nenhum alvo
+      expect((await post({ shelfLifeDays: 0 })).status).toBe(422);
+      expect((await post({ minTemperature: 5, maxTemperature: 1 })).status).toBe(422);
+      expect((await post({ maxTemperature: 31 })).status).toBe(422); // mesma faixa da etiqueta
+      expect((await post({ minTemperature: -51 })).status).toBe(422);
+      const unknownCategory = await post({ category: `Inexistente ${suffix}` });
+      expect(unknownCategory.status).toBe(422);
+      expect(unknownCategory.body.error.message).toBe('Categoria não encontrada entre os produtos ativos.');
+      expect((await post({ sourceType: 'OUTRA' })).status).toBe(422);
+      expect((await post({ source: '' })).status).toBe(422);
+      expect((await post({ validatedByName: undefined })).status).toBe(422);
+      expect((await post({ validatedAt: daysFromToday(1) })).status).toBe(422);
+      expect((await post({ category: undefined, productId: randomUUID() })).status).toBe(404);
+    });
+
+    it('creates a rule, refuses a second active one and chains new versions', async () => {
+      const created = await rules('post').send({
+        ...ruleBody, productId, storageType: 'REFRIGERADO', shelfLifeDays: 3, maxTemperature: 5,
+      });
+      expect(created.status).toBe(201);
+      ruleIds.push(created.body.data.id);
+      expect(created.body.data).toMatchObject({
+        productId, category: null, storageType: 'REFRIGERADO', shelfLifeDays: 3,
+        minTemperature: null, maxTemperature: 5, version: 1, previousVersionId: null, active: true,
+        deactivatedAt: null, validatedAt: daysFromToday(-1), sourceType: 'REFERENCIA_TECNICA',
+        product: { id: productId }, createdBy: { name: 'Teste de integração' },
+      });
+
+      const duplicate = await rules('post').send({ ...ruleBody, productId, storageType: 'REFRIGERADO', shelfLifeDays: 4 });
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body.error.message).toBe('Já existe uma regra ativa para este alvo. Crie uma nova versão dela.');
+      // Outro armazenamento é outro alvo.
+      const frozen = await rules('post').send({ ...ruleBody, productId, storageType: 'CONGELADO', shelfLifeDays: 30 });
+      expect(frozen.status).toBe(201);
+      ruleIds.push(frozen.body.data.id);
+
+      const labelPayload = {
+        productId, lot: 'LOT-VERSAO', originalExpiryDate: daysFromToday(30), responsibleName: 'Operador de Teste',
+        storageType: 'REFRIGERADO', storageTemperature: 4,
+      };
+      const oldLabel = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(labelPayload);
+      expect(oldLabel.status).toBe(201);
+      expect(oldLabel.body.data).toMatchObject({ ruleId: created.body.data.id, ruleVersion: 1, shelfLifeDays: 3 });
+      // Regra usada por etiqueta não pode ser apagada nem direto no banco (FK Restrict).
+      await expect(prisma.shelfLifeRule.delete({ where: { id: created.body.data.id } }))
+        .rejects.toMatchObject({ code: 'P2003' });
+      expect(await prisma.shelfLifeRule.count({ where: { id: created.body.data.id } })).toBe(1);
+
+      const v2 = await rules('put', `/${created.body.data.id}`).send({
+        ...ruleBody, shelfLifeDays: 2, minTemperature: 0, maxTemperature: 4, source: 'Fonte revisada',
+        observation: 'Revisão de teste',
+      });
+      expect(v2.status).toBe(201);
+      ruleIds.push(v2.body.data.id);
+      expect(v2.body.data).toMatchObject({
+        productId, storageType: 'REFRIGERADO', version: 2, previousVersionId: created.body.data.id,
+        active: true, shelfLifeDays: 2, source: 'Fonte revisada', observation: 'Revisão de teste',
+      });
+
+      const versions = await rules('get', `/${created.body.data.id}/versions`).expect(200);
+      expect(versions.body.data.map((rule: { version: number }) => rule.version)).toEqual([2, 1]);
+      expect(versions.body.data[1]).toMatchObject({ id: created.body.data.id, active: false });
+      expect(versions.body.data[1].deactivatedAt).not.toBeNull();
+      expect((await rules('get', `/${v2.body.data.id}/versions`)).body.data).toHaveLength(2);
+
+      // A versão antiga não pode mais ser editada.
+      expect((await rules('put', `/${created.body.data.id}`).send({ ...ruleBody, shelfLifeDays: 5 })).status).toBe(409);
+
+      // A etiqueta antiga continua na versão 1; a nova usa a versão 2 e a faixa nova.
+      const savedOld = await request(app).get(`/api/labels/${oldLabel.body.data.id}`).set('Authorization', asAdmin()).expect(200);
+      expect(savedOld.body.data).toMatchObject({
+        ruleId: created.body.data.id, ruleVersion: 1, ruleSource: ruleBody.source, shelfLifeDays: 3,
+      });
+      const tooWarm = await request(app).post('/api/labels').set('Authorization', asAdmin())
+        .send({ ...labelPayload, storageTemperature: 4.5 });
+      expect(tooWarm.status).toBe(422);
+      const newLabel = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(labelPayload);
+      expect(newLabel.body.data).toMatchObject({
+        ruleId: v2.body.data.id, ruleVersion: 2, ruleSource: 'Fonte revisada', shelfLifeDays: 2,
+      });
+
+      const activeOnly = await rules('get', `?productId=${productId}`).expect(200);
+      expect(activeOnly.body.data.map((rule: { id: string }) => rule.id).sort())
+        .toEqual([v2.body.data.id, frozen.body.data.id].sort());
+      expect(activeOnly.body.meta).toMatchObject({ total: 2, page: 1 });
+      const withInactive = await rules('get', `?productId=${productId}&includeInactive=true&storageType=REFRIGERADO`).expect(200);
+      expect(withInactive.body.data.map((rule: { version: number }) => rule.version)).toEqual([2, 1]);
+    });
+
+    it('only deactivates on delete, and a category rule applies when the product has none', async () => {
+      const categoryRule = await rules('post').send({
+        ...ruleBody, category, storageType: 'CONGELADO', shelfLifeDays: 20,
+      });
+      expect(categoryRule.status).toBe(201);
+      ruleIds.push(categoryRule.body.data.id);
+
+      const other = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+        name: `Outro da categoria ${suffix.slice(0, 8)}`, brand: 'Teste', category,
+        daysValidRefrigerated: 2, daysValidFrozen: 5,
+      });
+      productIds.push(other.body.data.id);
+      const previewFrozen = () => request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+        productId: other.body.data.id, originalExpiryDate: daysFromToday(60), storageType: 'CONGELADO',
+      });
+      expect((await previewFrozen()).body.data.rule).toMatchObject({ id: categoryRule.body.data.id, validated: true });
+      const label = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+        productId: other.body.data.id, lot: 'LOT-CAT', originalExpiryDate: daysFromToday(60),
+        responsibleName: 'Operador de Teste', storageType: 'CONGELADO', storageTemperature: -18,
+      });
+      expect(label.body.data).toMatchObject({ ruleId: categoryRule.body.data.id, storageTemp: '-18,0 °C' });
+
+      const removed = await rules('delete', `/${categoryRule.body.data.id}`).expect(200);
+      expect(removed.body.data).toMatchObject({ id: categoryRule.body.data.id, active: false });
+      expect(removed.body.data.deactivatedAt).not.toBeNull();
+      expect(await prisma.shelfLifeRule.count({ where: { id: categoryRule.body.data.id } })).toBe(1);
+      expect((await request(app).get(`/api/labels/${label.body.data.id}`).set('Authorization', asAdmin())).body.data.ruleId)
+        .toBe(categoryRule.body.data.id);
+
+      // Sem regra ativa, volta ao prazo do produto, sem regra validada.
+      expect((await previewFrozen()).body.data.rule).toMatchObject({ id: null, shelfLifeDays: 5, validated: false });
+      expect((await rules('delete', `/${randomUUID()}`)).status).toBe(404);
+
+      // Depois de desativada, o alvo aceita uma regra nova.
+      const again = await rules('post').send({ ...ruleBody, category, storageType: 'CONGELADO', shelfLifeDays: 15 });
+      expect(again.status).toBe(201);
+      ruleIds.push(again.body.data.id);
+    });
+
+    it('stores the category as written on the active products', async () => {
+      const canonical = `Laticínios ${suffix.slice(0, 8)}`;
+      const product = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+        name: `Produto laticínio ${suffix.slice(0, 8)}`, brand: 'Teste', category: canonical,
+        daysValidRefrigerated: 2, daysValidFrozen: 5,
+      });
+      productIds.push(product.body.data.id);
+
+      const created = await rules('post').send({
+        ...ruleBody, category: `  laticinios ${suffix.slice(0, 8).toUpperCase()} `, storageType: 'REFRIGERADO', shelfLifeDays: 3,
+      });
+      expect(created.status).toBe(201);
+      ruleIds.push(created.body.data.id);
+      expect(created.body.data.category).toBe(canonical);
+
+      // Outra grafia do mesmo alvo bate no 409, e o preview encontra a regra.
+      const duplicate = await rules('post').send({
+        ...ruleBody, category: `laticínios ${suffix.slice(0, 8)}`, storageType: 'REFRIGERADO', shelfLifeDays: 4,
+      });
+      expect(duplicate.status).toBe(409);
+      const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+        productId: product.body.data.id, originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO',
+      });
+      expect(preview.body.data.rule).toMatchObject({ id: created.body.data.id, validated: true });
+    });
+
+    it('treats any rule, even an old one without a validator, as validated on the label', async () => {
+      const product = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+        name: `Produto regra antiga ${suffix.slice(0, 8)}`, brand: 'Teste', daysValidRefrigerated: 2, daysValidFrozen: 5,
+      });
+      productIds.push(product.body.data.id);
+      // Como as regras que a migration encontrou: sem responsável nem data de validação.
+      const legacy = await prisma.shelfLifeRule.create({ data: {
+        productId: product.body.data.id, storageType: 'REFRIGERADO', shelfLifeDays: 3,
+        sourceType: 'REFERENCIA_TECNICA', source: 'Regra antiga de teste',
+      } });
+      ruleIds.push(legacy.id);
+      const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+        productId: product.body.data.id, originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO',
+      });
+      expect(preview.body.data.rule).toMatchObject({
+        id: legacy.id, validatedByName: null, validatedAt: null, validated: true,
+      });
+    });
+
+    it('creates only one new version when two edits arrive together', async () => {
+      const base = await rules('post').send({ ...ruleBody, category, storageType: 'REFRIGERADO', shelfLifeDays: 3 });
+      expect(base.status).toBe(201);
+      ruleIds.push(base.body.data.id);
+      const [a, b] = await Promise.all([
+        rules('put', `/${base.body.data.id}`).send({ ...ruleBody, shelfLifeDays: 4 }),
+        rules('put', `/${base.body.data.id}`).send({ ...ruleBody, shelfLifeDays: 5 }),
+      ]);
+      for (const res of [a, b]) if (res.status === 201) ruleIds.push(res.body.data.id);
+      expect([a.status, b.status].sort()).toEqual([201, 409]);
+      expect(await prisma.shelfLifeRule.count({ where: { category, storageType: 'REFRIGERADO', active: true } })).toBe(1);
+    });
   });
 
   describe('lots and individual packages', () => {
     const asAdmin = () => `Bearer ${accessToken}`;
-    const base = { storageType: 'REFRIGERADO', storageTemp: '4°C', responsibleName: 'Operador de Teste' };
+    const base = { storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Operador de Teste' };
     let productId = '';
     const createLot = (code: string, expiryDate: string) => request(app).post(`/api/products/${productId}/lots`)
       .set('Authorization', asAdmin()).send({ code, expiryDate });
@@ -499,7 +783,7 @@ describe('API integration flow', () => {
 
     const label = await request(app).post('/api/labels').set('Authorization', `Bearer ${token}`).send({
       productId: productIds[0], lot: 'LOT-OPERADOR', originalExpiryDate: daysFromToday(30), responsibleName: 'Operador criado',
-      openedAt: today(), storageType: 'REFRIGERADO', storageTemp: '4°C',
+      openedAt: today(), storageType: 'REFRIGERADO', storageTemperature: 4,
     });
     expect(label.status).toBe(201);
 
@@ -702,7 +986,7 @@ describe('API integration flow', () => {
       const send = (productId: string, requestId?: string) => request(app).post('/api/labels')
         .set('Authorization', `Bearer ${accessToken}`).send({
           productId, lot: 'LOT-REENVIO', originalExpiryDate: daysFromToday(30), responsibleName: 'Reenvio',
-          storageType: 'REFRIGERADO', storageTemp: '4°C', requestId,
+          storageType: 'REFRIGERADO', storageTemperature: 4, requestId,
         });
       const requestId = randomUUID();
       const first = await send(productIds[0], requestId);

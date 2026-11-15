@@ -26,10 +26,8 @@ function write(key: string, value: unknown): void {
   }
 }
 
-export const DEFAULT_TEMP: Record<StorageType, string> = {
-  REFRIGERADO: '4 °C',
-  CONGELADO: '-18 °C',
-};
+/** Temperatura sugerida (°C). Não é medição: o operador confirma a cada etiqueta. */
+export { SUGGESTED_TEMPERATURE as DEFAULT_TEMP } from './temperature';
 
 export const STORAGE_LABEL: Record<StorageType, string> = {
   REFRIGERADO: 'Refrigerado',
@@ -88,15 +86,6 @@ export function weekdayShort(iso: string): string {
     .replace('.', '');
 }
 
-/** "4", "-18", "4,5" → "4 °C", "-18 °C", "4,5 °C". Retorna null se não for número. */
-export function formatTemperature(raw: string): string | null {
-  const text = raw.replace(/[^\d,.-]/g, '').replace(',', '.');
-  if (!/^-?\d+(\.\d+)?$/.test(text)) return null;
-  const value = Number(text);
-  if (!Number.isFinite(value) || value < -60 || value > 100) return null;
-  return `${String(value).replace('.', ',')} °C`;
-}
-
 /** "2512", "25122026" → "25/12", "25/12/2026" (dígitos digitados no teclado de data) */
 export function formatDateDraft(digits: string): string {
   return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4)].filter(Boolean).join('/');
@@ -118,9 +107,4 @@ export function parseDateDraft(digits: string): string | null {
 /** "2026-12-25" → "25122026" (valor inicial do teclado de data) */
 export function dateDraft(iso: string): string {
   return iso.split('-').reverse().join('');
-}
-
-/** "4 °C" → "4" (valor inicial do teclado numérico) */
-export function temperatureDraft(formatted: string): string {
-  return formatted.replace(/[^\d,.-]/g, '');
 }

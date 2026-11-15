@@ -19,8 +19,9 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  labels   Label[]
-  sessions UserSession[]
+  labels       Label[]
+  sessions     UserSession[]
+  createdRules ShelfLifeRule[] @relation("RuleCreatedBy")
 
   @@map("users")
 }
@@ -100,8 +101,11 @@ model Label {
   openedAt         DateTime        @map("opened_at") @db.Date
   discardAt        DateTime        @map("discard_at") @db.Date
   storageType      StorageType     @map("storage_type")
-  storageTemp      String          @map("storage_temp")
+  storageTemp      String          @map("storage_temp")              // texto impresso; nas novas, gerado pelo servidor ("4,0 °C")
+  storageTemperature Decimal?      @map("storage_temperature") @db.Decimal(4, 1) // nulo nas antigas sem texto numérico
   ruleId           String?         @map("rule_id")
+  ruleVersion      Int?            @map("rule_version")
+  ruleSource       String?         @map("rule_source")               // cópia da fonte da regra usada
   shelfLifeDays    Int             @map("shelf_life_days")
   originalExpiryDate DateTime      @map("original_expiry_date") @db.Date
   cappedByOriginalExpiry Boolean   @default(false) @map("capped_by_original_expiry")
@@ -115,7 +119,7 @@ model Label {
 
   product Product @relation(fields: [productId], references: [id])
   user    User    @relation(fields: [userId], references: [id])
-  rule    ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: SetNull)
+  rule    ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
   productLot ProductLot? @relation(fields: [lotId], references: [id], onDelete: SetNull)
 
   @@unique([userId, requestId])
@@ -128,27 +132,46 @@ model Label {
   @@map("labels")
 }
 
+// Regra imutável: editar cria uma nova versão e desativa a anterior. Nunca é apagada.
 model ShelfLifeRule {
-  id             String      @id @default(uuid())
-  productId      String?     @map("product_id")
-  category       String?
-  storageType    StorageType @map("storage_type")
-  shelfLifeDays  Int         @map("shelf_life_days")
-  minTemperature Decimal?    @map("min_temperature") @db.Decimal(5, 2)
-  maxTemperature Decimal?    @map("max_temperature") @db.Decimal(5, 2)
-  source         String
-  observation    String?
-  active         Boolean     @default(true)
-  createdAt      DateTime    @default(now()) @map("created_at")
-  updatedAt      DateTime    @updatedAt @map("updated_at")
+  id                String         @id @default(uuid())
+  productId         String?        @map("product_id")
+  category          String?
+  storageType       StorageType    @map("storage_type")
+  shelfLifeDays     Int            @map("shelf_life_days")
+  minTemperature    Decimal?       @map("min_temperature") @db.Decimal(5, 2)
+  maxTemperature    Decimal?       @map("max_temperature") @db.Decimal(5, 2)
+  sourceType        RuleSourceType @map("source_type")
+  source            String
+  observation       String?
+  validatedByName   String?        @map("validated_by_name") // responsável técnico; pode não ser usuário
+  validatedAt       DateTime?      @map("validated_at") @db.Date
+  createdById       String?        @map("created_by_id")
+  version           Int            @default(1)
+  previousVersionId String?        @unique @map("previous_version_id")
+  active            Boolean        @default(true)
+  deactivatedAt     DateTime?      @map("deactivated_at")
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
 
-  product Product? @relation(fields: [productId], references: [id], onDelete: Restrict)
-  labels  Label[]
+  product         Product?       @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy       User?          @relation("RuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  previousVersion ShelfLifeRule? @relation("RuleVersions", fields: [previousVersionId], references: [id], onDelete: Restrict)
+  nextVersion     ShelfLifeRule? @relation("RuleVersions")
+  labels          Label[]
 
   @@index([productId, storageType, active])
   @@index([category, storageType, active])
   @@map("shelf_life_rules")
 }
+
+enum RuleSourceType {
+  NORMA_LEGAL
+  REFERENCIA_TECNICA
+  FABRICANTE
+  PROCEDIMENTO_INTERNO
+}
+
 enum StorageType {
   REFRIGERADO
   CONGELADO
