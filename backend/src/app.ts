@@ -2,12 +2,19 @@ import 'express-async-errors';
 import express from 'express';
 import helmet  from 'helmet';
 import cors    from 'cors';
-import morgan  from 'morgan';
+import { z }   from 'zod';
 
 import router         from './routes';
 import { errorHandler } from './middlewares/errorHandler';
+import { accessLog }    from './middlewares/accessLog';
 import { logger }       from './utils/logger';
 import { prisma }       from './prisma/client';
+
+// Mensagens padrão do zod em português (as dos schemas continuam valendo quando definidas).
+z.config(z.locales.ptBR());
+
+// Limite do corpo JSON. Nenhuma rota precisa de mais; acima disso a resposta é 413.
+export const JSON_BODY_LIMIT = '100kb';
 
 const app = express();
 
@@ -20,20 +27,17 @@ if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0) {
 app.set('trust proxy', trustProxyHops);
 
 // ── Security & parsing ────────────────────────────────────
+// ── Logging ───────────────────────────────────────────────
+// Antes do parser: JSON inválido e corpo grande demais também aparecem no log.
+if (process.env.NODE_ENV !== 'test') app.use(accessLog);
+
 app.use(helmet());
 app.use(cors({
   origin:      process.env.CORS_ORIGIN ?? 'http://localhost:5173',
   credentials: true,
 }));
-app.use(express.json({ limit: '5mb' }));
-app.use(express.urlencoded({ extended: true }));
-
-// ── Logging ───────────────────────────────────────────────
-if (process.env.NODE_ENV !== 'test') {
-  app.use(morgan('dev', {
-    stream: { write: (msg) => logger.http(msg.trim()) },
-  }));
-}
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
 
 // ── API routes ────────────────────────────────────────────
 app.use('/api', router);

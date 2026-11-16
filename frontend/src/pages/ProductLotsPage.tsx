@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { isAxiosError } from 'axios';
 import { ArrowLeft, Boxes, Edit2, Plus, Save, X } from 'lucide-react';
 import { lotApi, productApi } from '@/services';

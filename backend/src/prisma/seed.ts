@@ -11,7 +11,7 @@ function daysFromToday(days: number): Date {
 }
 
 async function seedAdmin(): Promise<void> {
-  const email = process.env.ADMIN_EMAIL?.trim();
+  const email = process.env.ADMIN_EMAIL?.trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD;
   if (!email && !password) {
     console.info('Seed sem ADMIN_EMAIL/ADMIN_PASSWORD; admin não foi criado.');

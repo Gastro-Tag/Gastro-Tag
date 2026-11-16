@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Plus, Search, Filter, RefreshCw, Trash2, Tag,
   Package, ChevronDown, Utensils, Refrigerator, Snowflake, Calendar,

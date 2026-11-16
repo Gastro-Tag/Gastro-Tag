@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import axios from 'axios';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   AlertTriangle, ArrowLeft, Printer, Tag, Upload, X,
   Refrigerator, Snowflake, CheckCircle2, User, Hash, Calendar, Thermometer
@@ -8,6 +9,7 @@ import { productApi, labelApi } from '@/services';
 import type { ExpirySource, LabelPreview, Product, ProductLot, StorageType } from '@/types';
 import { useToastContext } from '@/components/ui/Toast';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
+import { LoadError } from '@/components/ui/LoadError';
 import { formatBR } from '@/utils/date';
 import { extractError } from '@/services/api';
 import { cn } from '@/utils/cn';
@@ -31,6 +33,9 @@ export function LabelFormPage() {
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
+  const [productError, setProductError] = useState('');
+  const [productTry, setProductTry] = useState(0);
+  const [previewTry, setPreviewTry] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [requests] = useState(createRequestKeeper);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -50,6 +55,8 @@ export function LabelFormPage() {
   useEffect(() => {
     if (!productId) { navigate('/products', { replace: true }); return; }
     let active = true;
+    setLoading(true);
+    setProductError('');
     productApi.getById(productId)
       .then(({ data }) => {
         if (!active) return;
@@ -67,12 +74,19 @@ export function LabelFormPage() {
           setForm((value) => ({ ...value, storageType: 'CONGELADO' }));
         }
       })
-      .catch(() => {
-        if (active) { toast('Produto não encontrado.', 'error'); navigate('/products', { replace: true }); }
+      .catch((err) => {
+        if (!active) return;
+        // Só 404 é "produto não existe"; falha de rede/servidor oferece tentar de novo.
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
+          toast('Produto não encontrado.', 'error');
+          navigate('/products', { replace: true });
+        } else {
+          setProductError(extractError(err));
+        }
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [productId, navigate, toast]);
+  }, [productId, navigate, toast, productTry]);
 
   const isPackage = form.source === PACKAGE;
   const lots = useMemo(() => (product ? usableLots(product) : []), [product]);
@@ -126,7 +140,7 @@ export function LabelFormPage() {
       }
     }, 300);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [product, productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, temperature, previewReady, requestKey, dateFilled]);
+  }, [product, productId, form.source, form.originalExpiryDate, form.openedAt, form.storageType, temperature, previewReady, requestKey, dateFilled, previewTry]);
 
   function setField(field: 'source' | 'lot' | 'originalExpiryDate' | 'responsibleName' | 'openedAt' | 'storageType' | 'storageTemp', value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -195,6 +209,9 @@ export function LabelFormPage() {
   }
 
   if (loading) return <PageLoader />;
+  if (productError) {
+    return <LoadError title="Não foi possível carregar o produto." message={productError} onRetry={() => setProductTry((n) => n + 1)} />;
+  }
   if (!product) return null;
 
   return (
@@ -522,7 +539,10 @@ export function LabelFormPage() {
 
           {previewError && (
             <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-medium">
-              {previewError}
+              <p>{previewError}</p>
+              <button type="button" className="btn btn-outline btn-sm mt-3" onClick={() => setPreviewTry((n) => n + 1)}>
+                Tentar de novo
+              </button>
             </div>
           )}
 

@@ -1,5 +1,5 @@
 import { ReactNode, useState } from 'react';
-import { NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router';
 import {
   LayoutDashboard,
   Package,

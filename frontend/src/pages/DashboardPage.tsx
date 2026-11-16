@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router';
 import {
   Package,
   Tag,
@@ -14,8 +14,10 @@ import {
   UtensilsCrossed,
 } from 'lucide-react';
 import { dashboardApi } from '@/services';
+import { extractError } from '@/services/api';
 import type { DashboardStats } from '@/types';
 import { PageLoader } from '@/components/ui/Spinner';
+import { LoadError } from '@/components/ui/LoadError';
 import { DueTodayPanel } from '@/components/labels/DueTodayPanel';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
@@ -23,22 +25,33 @@ import { cn } from '@/utils/cn';
 export function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const navigate = useNavigate();
   const isAdmin = useAuthStore((state) => state.user?.role === 'ADMIN');
 
-  useEffect(() => {
-    dashboardApi.getStats()
-      .then((r) => setStats(r.data.data))
-      .catch(() => setStats(null))
-      .finally(() => setLoading(false));
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const { data } = await dashboardApi.getStats();
+      setStats(data.data);
+    } catch (err) {
+      setStats(null);
+      setError(extractError(err));
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => { void load(); }, [load]);
+
   if (loading) return <PageLoader />;
-  if (!stats)  return (
-    <div className="card p-6 text-center text-rose-600">
-      <AlertTriangle className="w-8 h-8 mx-auto mb-2 text-rose-500" />
-      <p className="font-semibold">Erro ao carregar estatísticas do sistema.</p>
-    </div>
+  if (!stats) return (
+    <LoadError
+      title="Não foi possível carregar as estatísticas."
+      message={error}
+      onRetry={() => void load()}
+    />
   );
 
   const { products, labels, topProducts } = stats;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import {
   AlertTriangle, ArrowLeft, Check, CheckCircle2, Minus, Plus, Printer, Refrigerator, Scissors, Snowflake, Thermometer, User,
 } from 'lucide-react';
