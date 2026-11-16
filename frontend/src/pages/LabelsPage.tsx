@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CalendarDays, RefreshCw, Search, Tag, AlarmClock } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CalendarDays, Download, RefreshCw, Search, Tag, AlarmClock } from 'lucide-react';
 import { labelApi } from '@/services';
-import type { CloseLabelResult, Label, LabelListParams, LabelStatus, SplitResult, StorageType } from '@/types';
+import type { CloseLabelResult, Label, LabelExportParams, LabelListParams, LabelStatus, SplitResult, StorageType } from '@/types';
 import { LabelCard } from '@/components/labels/LabelCard';
 import { CloseLabelDialog } from '@/components/labels/CloseLabelDialog';
 import { SplitLabelDialog } from '@/components/labels/SplitLabelDialog';
+import { Modal } from '@/components/ui/Modal';
 import { useAuthStore } from '@/store/authStore';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pagination } from '@/components/ui/Pagination';
-import { InlineLoader } from '@/components/ui/Spinner';
+import { InlineLoader, Spinner } from '@/components/ui/Spinner';
 import { useToastContext } from '@/components/ui/Toast';
 import { useDebounce } from '@/hooks/useDebounce';
 import { formatBR } from '@/utils/date';
@@ -19,6 +20,7 @@ import { printLabel } from '@/utils/printLabel';
 
 export function LabelsPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { toast } = useToastContext();
   const [labels, setLabels] = useState<Label[]>([]);
   const [meta, setMeta] = useState({ total: 0, totalPages: 1, page: 1 });
@@ -27,14 +29,22 @@ export function LabelsPage() {
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [storageType, setStorageType] = useState<StorageType | ''>('');
-  const [status, setStatus] = useState<LabelStatus | ''>('');
-  const [due, setDue] = useState<'expired' | 'today' | 'upcoming' | ''>('');
+  // O painel liga aqui com ?status=ATIVA&due=expired|today|upcoming.
+  const [status, setStatus] = useState<LabelStatus | ''>(() => {
+    const value = searchParams.get('status');
+    return value === 'ATIVA' || value === 'ENCERRADA' ? value : '';
+  });
+  const [due, setDue] = useState<'expired' | 'today' | 'upcoming' | ''>(() => {
+    const value = searchParams.get('due');
+    return searchParams.get('status') === 'ATIVA' && (value === 'expired' || value === 'today' || value === 'upcoming') ? value : '';
+  });
   // Atalho: ativas vencidas ou que vencem hoje (duas consultas, pois o filtro de vencimento é único).
   const [discardToday, setDiscardToday] = useState(false);
   const [truncated, setTruncated] = useState(false);
   const [page, setPage] = useState(1);
   const [closing, setClosing] = useState<Label | null>(null);
   const [splitting, setSplitting] = useState<Label | null>(null);
+  const [exporting, setExporting] = useState(false);
   const isAdmin = useAuthStore((state) => state.user?.role) === 'ADMIN';
   const debouncedSearch = useDebounce(search, 400);
 
@@ -136,13 +146,21 @@ export function LabelsPage() {
             {meta.total} {meta.total === 1 ? 'etiqueta registrada' : 'etiquetas registradas'}
           </p>
         </div>
-        <button
-          className="btn btn-primary shadow-sm"
-          onClick={() => navigate('/products')}
-        >
-          <Tag className="w-4 h-4 text-brand-400" />
-          <span>Gerar Nova Etiqueta</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {isAdmin && (
+            <button className="btn btn-outline shadow-sm" onClick={() => setExporting(true)}>
+              <Download className="w-4 h-4 text-slate-500" />
+              <span>Exportar CSV</span>
+            </button>
+          )}
+          <button
+            className="btn btn-primary shadow-sm"
+            onClick={() => navigate('/products')}
+          >
+            <Tag className="w-4 h-4 text-brand-400" />
+            <span>Gerar Nova Etiqueta</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Bar */}
@@ -290,6 +308,100 @@ export function LabelsPage() {
       {splitting && (
         <SplitLabelDialog parent={splitting} onClose={() => setSplitting(null)} onDone={handleSplit} />
       )}
+      {exporting && (
+        <ExportDialog
+          filters={{
+            q: debouncedSearch.trim() || undefined,
+            storageType: storageType || undefined,
+            status: status || undefined,
+            due: status === 'ATIVA' && due ? due : undefined,
+          }}
+          shortcutActive={discardToday}
+          openedFrom={from}
+          openedTo={to}
+          onClose={() => setExporting(false)}
+        />
+      )}
     </div>
+  );
+}
+
+/** Exporta o CSV com os filtros da lista (menos o período de abertura) e um período de criação. */
+function ExportDialog({ filters, shortcutActive, openedFrom, openedTo, onClose }: {
+  filters: LabelExportParams; shortcutActive: boolean; openedFrom: string; openedTo: string; onClose: () => void;
+}) {
+  const { toast } = useToastContext();
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const invalidRange = Boolean(from && to && from > to);
+
+  const summary = [
+    filters.q && `busca “${filters.q}”`,
+    filters.storageType && (filters.storageType === 'REFRIGERADO' ? 'refrigerado' : 'congelado'),
+    filters.status && (filters.status === 'ATIVA' ? 'ativas' : 'encerradas'),
+    filters.due && { expired: 'vencidas', today: 'vencem hoje', upcoming: 'próximas' }[filters.due],
+  ].filter(Boolean).join(' · ');
+
+  async function download() {
+    if (busy || invalidRange) return;
+    setBusy(true);
+    setError('');
+    try {
+      const { blob, filename } = await labelApi.exportCsv({ ...filters, from: from || undefined, to: to || undefined });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast('Exportação gerada.', 'success');
+      onClose();
+    } catch (err) {
+      setError(extractError(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Exportar etiquetas (CSV)" onClose={onClose} widthClass="max-w-md" busy={busy}>
+      <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void download(); }}>
+        <p className="text-sm text-slate-500">
+          O arquivo usa os filtros atuais da lista{summary ? ` (${summary})` : ' (nenhum filtro ativo)'}. O período abaixo vale para a data de criação da etiqueta.
+        </p>
+        {(openedFrom || openedTo) && (
+          <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+            O período de abertura da lista ({openedFrom ? formatBR(openedFrom) : 'início'} a {openedTo ? formatBR(openedTo) : 'hoje'}) não entra na exportação: só vale o período de criação abaixo.
+          </p>
+        )}
+        {shortcutActive && (
+          <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900">
+            O atalho “Para descartar hoje” não entra na exportação. Para exportar só vencidas ou de hoje, escolha Ativas e o vencimento.
+          </p>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500">
+            Criadas a partir de
+            <input type="date" className="input mt-1.5" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </label>
+          <label className="block text-xs font-bold uppercase tracking-wider text-slate-500">
+            Criadas até
+            <input type="date" className="input mt-1.5" value={to} onChange={(e) => setTo(e.target.value)} />
+          </label>
+        </div>
+        {invalidRange && <p role="alert" className="text-xs font-semibold text-rose-700">A data inicial deve ser anterior ou igual à final.</p>}
+        {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">{error}</p>}
+        <div className="flex flex-col-reverse gap-2 pt-1 sm:flex-row sm:justify-end">
+          <button type="button" className="btn btn-outline" onClick={onClose} disabled={busy}>Cancelar</button>
+          <button type="submit" className="btn btn-primary" disabled={busy || invalidRange}>
+            {busy ? <Spinner size="sm" className="text-white" /> : <Download className="h-4 w-4" />}
+            Baixar CSV
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

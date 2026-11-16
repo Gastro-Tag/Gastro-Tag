@@ -30,6 +30,8 @@ export interface User {
 export interface ManagedUser extends User {
   active:    boolean;
   createdAt: string;
+  /** Tem PIN de operador definido (o PIN em si nunca vem do servidor). */
+  hasPin?:   boolean;
 }
 
 export interface CreateUserDTO {
@@ -152,6 +154,10 @@ export interface Label {
   parent?:       { id: string; shortCode: string } | null;
   /** Só em GET /labels/:id. */
   children?:     LabelChild[];
+  // Etapa G1: operador confirmado por PIN
+  handlerId?:       string | null;
+  /** O responsável foi confirmado por PIN no totem. */
+  handlerVerified?: boolean;
 }
 
 export type LabelStatus  = 'ATIVA' | 'ENCERRADA';
@@ -171,6 +177,10 @@ export interface CloseLabelDTO {
   discardReason?: DiscardReason;
   /** Obrigatória (mín. 3) quando o motivo é OUTRO; até 300 caracteres. */
   note?:          string;
+  /** Totem sem PIN: nome de quem encerrou (1..100). Sem ele, vale o nome da conta logada. */
+  responsibleName?: string;
+  /** Operador confirmado por PIN; o servidor usa o nome dele e ignora responsibleName. */
+  handlerToken?:  string;
 }
 
 export interface CloseLabelResult {
@@ -201,6 +211,7 @@ export interface SplitLabelDTO {
   responsibleName:    string;
   closeParent?:       boolean;
   requestId?:         string;
+  handlerToken?:      string;
 }
 
 export interface SplitResult {
@@ -215,6 +226,52 @@ export interface LabelListParams {
   /** Só com status ATIVA. */
   due?: 'expired' | 'today' | 'upcoming';
   parentLabelId?: string;
+}
+
+/** Filtros da exportação CSV (ADMIN). `from`/`to` valem para a data de criação. */
+export interface LabelExportParams {
+  q?: string; from?: string; to?: string; storageType?: string;
+  status?: LabelStatus;
+  due?: 'expired' | 'today' | 'upcoming';
+  productId?: string;
+  parentLabelId?: string;
+}
+
+/** GET /labels/due: etiquetas ATIVAS agrupadas pela data da cozinha. */
+export interface DueLabels {
+  expired:  Label[];
+  today:    Label[];
+  tomorrow: Label[];
+}
+
+export interface DueLabelsMeta {
+  counts: { expired: number; today: number; tomorrow: number };
+  kitchenToday: string;
+}
+
+export interface DueLabelsResult {
+  success: boolean;
+  data:    DueLabels;
+  meta:    DueLabelsMeta;
+}
+
+/** Operador com PIN, listado no totem. */
+export interface TotemOperator {
+  id:   string;
+  name: string;
+}
+
+export interface VerifyOperatorResult {
+  operator:     TotemOperator;
+  handlerToken: string;
+  /** ISO 8601; fim da validade do token (turno de até 10 h). */
+  expiresAt:    string;
+}
+
+/** Datas da cozinha: limite para trás da abertura. */
+export interface KitchenInfo {
+  kitchenToday:    string;
+  maxBackdateDays: number;
 }
 
 export interface LabelPreview {
@@ -271,6 +328,8 @@ export type CreateLabelDTO = ExpirySource & LabelBaseDTO & {
   responsibleName: string;
   /** Igual em cada reenvio do mesmo pedido: o servidor devolve a etiqueta já criada. */
   requestId?:  string;
+  /** Operador confirmado por PIN (totem). Quando válido, o servidor usa o nome dele. */
+  handlerToken?: string;
 };
 
 // ── Regras de validade ──────────────────────────────────

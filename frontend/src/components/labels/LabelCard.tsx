@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  Printer, Refrigerator, Snowflake, Tag, Scissors, CheckCircle2, GitBranch,
+  Printer, Refrigerator, Snowflake, Tag, Scissors, CheckCircle2, GitBranch, ShieldCheck,
 } from 'lucide-react';
 import { labelApi } from '@/services';
 import { extractError } from '@/services/api';
@@ -91,6 +91,11 @@ export function LabelCard({ label, onReprint, onSplit, onCloseLabel, onSearchCod
             <span className="font-medium text-slate-600">{productBrand}</span>
             <span>• Lote: <strong className="text-charcoal-800">{label.lot}</strong></span>
             <span>• Manipulador: <strong className="text-charcoal-800">{label.responsibleName ?? 'Não informado'}</strong></span>
+            {label.handlerVerified && (
+              <span className="badge badge-valid gap-1" title="O responsável confirmou o PIN no totem">
+                <ShieldCheck className="h-3 w-3 shrink-0" /> Operador confirmado
+              </span>
+            )}
           </div>
 
           {label.parent && (

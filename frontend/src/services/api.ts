@@ -1,4 +1,5 @@
 ﻿import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { clearVerifiedOperator } from '@/utils/totem';
 
 export const api = axios.create({
   baseURL: '/api',
@@ -19,7 +20,12 @@ api.interceptors.response.use(
   async (error: AxiosError) => {
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? '';
-    const isAuthRequest = ['/auth/login', '/auth/refresh', '/auth/logout'].some((path) => url.includes(path));
+    // Login, refresh e logout devolvem 401 por motivo próprio. PIN errado e token de operador recusado são 401 do
+    // operador, não da sessão: renovar e repetir não adianta e contaria uma falha a mais no limite de tentativas.
+    // Identificados pelo código; um 401 de sessão (INVALID_TOKEN etc.) segue o fluxo normal de refresh/logout.
+    const code = (error.response?.data as { error?: { code?: string } } | undefined)?.error?.code;
+    const isAuthRequest = ['/auth/login', '/auth/refresh', '/auth/logout'].some((path) => url.includes(path))
+      || code === 'INVALID_PIN' || code === 'HANDLER_INVALID';
 
     if (error.response?.status !== 401 || !original || original._retry || isAuthRequest) {
       return Promise.reject(error);
@@ -61,6 +67,7 @@ api.interceptors.response.use(
 );
 
 function logout() {
+  clearVerifiedOperator();
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
   localStorage.removeItem('gastrotag-auth');

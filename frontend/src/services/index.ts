@@ -6,6 +6,7 @@ import type {
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
   ShelfLifeRule, RuleFilters, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
+  DueLabelsResult, KitchenInfo, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
 
 // ── Auth ────────────────────────────────────────────────
@@ -26,8 +27,9 @@ export const authApi = {
   verifyAdmin: (email: string, password: string) =>
     api.post<ApiResponse<{ valid: boolean }>>('/auth/verify-admin', { email, password }),
 
+  /** `meta` traz kitchenToday e maxBackdateDays (G1); pode vir também dentro de `data`. */
   me: () =>
-    api.get<ApiResponse<User>>('/auth/me'),
+    api.get<ApiResponse<User & Partial<KitchenInfo>> & { meta?: Partial<KitchenInfo> }>('/auth/me'),
 };
 
 // ── Users ───────────────────────────────────────────────
@@ -43,6 +45,20 @@ export const userApi = {
 
   resetPassword: (id: string, password: string) =>
     api.patch<ApiResponse<null>>(`/users/${id}/password`, { password }),
+
+  /** PIN de operador (4 a 6 dígitos); `null` remove. ADMIN. */
+  setPin: (id: string, pin: string | null) =>
+    api.patch<ApiResponse<ManagedUser>>(`/users/${id}/pin`, { pin }),
+};
+
+// ── Totem: operador com PIN ─────────────────────────────
+export const totemApi = {
+  operators: () =>
+    api.get<ApiResponse<TotemOperator[]>>('/totem/operators'),
+
+  /** 401 com PIN incorreto; 429 após 5 falhas em 15 min. */
+  verifyOperator: (userId: string, pin: string) =>
+    api.post<ApiResponse<VerifyOperatorResult>>('/totem/operators/verify', { userId, pin }),
 };
 
 // ── Products ────────────────────────────────────────────
@@ -98,6 +114,27 @@ export const labelApi = {
   /** Registra o destino (Usado/Descartado/Cancelado). Sem desfazer. */
   close: (id: string, data: CloseLabelDTO) =>
     api.post<CloseLabelResult>(`/labels/${id}/close`, data),
+
+  /** Etiquetas ATIVAS vencidas, que vencem hoje e amanhã (data da cozinha). */
+  due: () =>
+    api.get<DueLabelsResult>('/labels/due'),
+
+  /** CSV (ADMIN) com os filtros da lista + período de criação. Devolve o arquivo e o nome sugerido. */
+  exportCsv: async (params: LabelExportParams): Promise<{ blob: Blob; filename: string }> => {
+    try {
+      const response = await api.get<Blob>('/labels/export.csv', { params, responseType: 'blob', timeout: 60_000 });
+      const disposition = String(response.headers['content-disposition'] ?? '');
+      const filename = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? 'etiquetas.csv';
+      return { blob: response.data, filename };
+    } catch (err) {
+      // Com responseType blob, o corpo do erro também vem como Blob: converte para o JSON da API.
+      const body = (err as { response?: { data?: unknown } }).response?.data;
+      if (body instanceof Blob) {
+        try { (err as { response: { data: unknown } }).response.data = JSON.parse(await body.text()); } catch { /* corpo não é JSON */ }
+      }
+      throw err;
+    }
+  },
 
   splitPreview: (id: string, data: SplitPreviewDTO) =>
     api.post<ApiResponse<SplitPreview>>(`/labels/${id}/split/preview`, data),

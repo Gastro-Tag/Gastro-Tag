@@ -1,10 +1,31 @@
-/**
- * Recebe uma string ISO 'YYYY-MM-DD' e retorna um Date sem horário (meia-noite UTC).
- * Evita bugs de timezone ao parsear datas de formulário.
- */
-export function parseDateUTC(str: string): Date {
-  const [y, m, d] = str.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d));
+/** Quantos dias para trás a data de abertura pode ir (MAX_BACKDATE_DAYS, padrão 2). */
+export const MAX_BACKDATE_DAYS = readMaxBackdateDays();
+
+function readMaxBackdateDays(): number {
+  const raw = process.env.MAX_BACKDATE_DAYS;
+  if (raw === undefined || raw.trim() === '') return 2;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error('MAX_BACKDATE_DAYS deve ser um número inteiro maior ou igual a 0.');
+  }
+  return value;
+}
+
+/** dd/mm/aaaa de uma data sem horário (meia-noite UTC). */
+export function formatDateBR(date: Date): string {
+  const iso = date.toISOString().slice(0, 10);
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+}
+
+/** dd/mm/aaaa HH:mm de um instante, no fuso da cozinha. */
+export function formatKitchenDateTime(date: Date): string {
+  const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')}`;
 }
 
 /** Adiciona N dias a uma Date e retorna nova Date */

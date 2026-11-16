@@ -36,11 +36,17 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      MAX_BACKDATE_DAYS: ${MAX_BACKDATE_DAYS:-2}
     depends_on:
       db:
         condition: service_healthy
-    volumes:
-      - uploads_data:/app/uploads
+    # /health confere o banco. start_period cobre o "prisma migrate deploy" antes de a API subir.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3333/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
 
   frontend:
     container_name: gastrotag_frontend
@@ -51,8 +57,8 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:
-  uploads_data:

@@ -22,7 +22,7 @@ Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. C
 | Armazenamento | Último usado para o produto neste totem; senão o primeiro disponível |
 | Temperatura | Só **sugerida** (4 °C refrigerado / -18 °C congelado), não vem como valor; não conta como medição e precisa ser confirmada no teclado numérico antes de imprimir |
 | Lote | O lote cadastrado escolhido. Em outra embalagem, o teclado pede o lote impresso; se não estiver legível, registra `NÃO INFORMADO` |
-| Responsável | Escolhido uma vez por turno (expira em 10 h); nomes recentes em um toque |
+| Responsável | Escolhido uma vez por turno (expira em 10 h): operador com PIN ou nome digitado; nomes recentes em um toque |
 
 As memórias ficam no `localStorage` do navegador do totem. A **data de abertura, o prazo, o teto pela validade da embalagem e a data de descarte vêm do backend** (`POST /api/labels/preview` e `POST /api/labels`). O relógio do aparelho não define a data da etiqueta.
 
@@ -37,7 +37,24 @@ Na tela do produto, **Dividir uma etiqueta** gera etiquetas filhas de uma etique
 
 Reenviar o mesmo pedido não cria filhas repetidas. Etiqueta encerrada não pode ser reimpressa.
 
-**Descarte:** encerrar uma etiqueta como usada, descartada ou cancelada é feito só no painel, por enquanto. O totem ainda não registra descarte.
+## Operador com PIN
+
+O administrador pode definir um PIN de 4 a 6 dígitos para uma conta em **Usuários → Definir PIN** (e remover depois). Ao escolher o responsável do turno, se houver contas com PIN, o totem mostra a lista e um teclado numérico: o operador toca no nome e digita o PIN. Também continua possível digitar só o nome, sem PIN.
+
+- O PIN é opcional e não substitui o login do totem: ele confirma **quem** está operando. Com PIN confirmado, a etiqueta grava o operador (`handlerId`) e o histórico mostra "Operador confirmado"; com nome digitado, fica só o nome.
+- A confirmação vale por 10 h (ou até o fim do turno no aparelho) e só na sessão deste totem. Trocar ou remover o PIN, desativar a conta ou encerrar a sessão do totem a invalida, e o totem pede o operador de novo.
+- 5 PINs errados para o mesmo operador, neste aparelho, bloqueiam novas tentativas por 15 minutos.
+- O token do operador fica no `localStorage` do aparelho (chave `gastrotag:totem:operator`) e é enviado ao criar etiqueta, dividir e descartar.
+
+## Para descartar
+
+Na tela inicial, **Para descartar** mostra a contagem de etiquetas vencidas e que vencem hoje (`/totem/descartar`, datas pela data da cozinha). Cada etiqueta é um cartão grande:
+
+- **Vencidas:** só **Descartei**, que registra descarte por prazo vencido.
+- **Vencem hoje:** **Usei** ou **Descartei** (prazo vencido).
+- **Vencem amanhã:** só informativo.
+
+Cada ação pede uma confirmação e é feita em nome do operador do turno; a lista atualiza em seguida. Outros destinos e motivos (alteração sensorial, embalagem danificada, cancelamento) ficam no histórico do painel.
 
 ## Salvaguardas
 
@@ -70,9 +87,9 @@ Sem `--kiosk-printing` o Chrome mostra o diálogo de impressão e exige um toque
 
 ## Limitações conhecidas
 
-- O responsável é um **nome digitado**, não uma conta: não há PIN por operador. Recomendado para o MVP (usuários + PIN).
+- O PIN é opcional: sem ele, o responsável é só um **nome digitado**, sem prova de quem operou. O PIN confirma o operador, mas não é autenticação forte (4 a 6 dígitos, com limite de tentativas).
 - A temperatura da etiqueta é a informada e confirmada pelo operador, não uma leitura de sensor.
-- A data de abertura é sempre a do dia; para outra data, use o painel administrativo.
+- A data de abertura é sempre a do dia; para outra data (até `MAX_BACKDATE_DAYS` dias para trás, padrão 2), use o painel.
 - O login do totem e a confirmação do administrador usam o teclado do sistema operacional; os campos de senha têm botão de olho e "Esqueci minha senha" (sem e-mail: a redefinição é feita por um administrador em Usuários → Senha).
 - Impressão pelo navegador; integração direta com impressora térmica continua fora do escopo do TCC. O modelo térmico ainda não foi testado em impressora física.
 - A etiqueta com "Quantidade" > 1 imprime cópias do mesmo registro (mesmo código), não registros separados.

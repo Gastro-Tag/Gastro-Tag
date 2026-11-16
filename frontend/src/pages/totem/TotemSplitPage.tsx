@@ -12,10 +12,11 @@ import { Centered, FieldButton, TempButton, storagesOf } from '@/pages/totem/Tot
 import { useSplitPreview } from '@/hooks/useSplitPreview';
 import { useTotemStore } from '@/store/totemStore';
 import { formatBR } from '@/utils/date';
-import { DEFAULT_TEMP, STORAGE_LABEL, getOperator, weekdayShort } from '@/utils/totem';
+import { DEFAULT_TEMP, STORAGE_LABEL, getHandlerToken, getOperator, weekdayShort } from '@/utils/totem';
 import { printSplitChildren } from '@/utils/split';
 import { formatTemperatureRange, formatTemperatureShort, parseTemperature, temperatureDraft } from '@/utils/temperature';
 import { createRequestKeeper } from '@/utils/requestId';
+import { isHandlerInvalid } from '@/utils/handler';
 import { cn } from '@/utils/cn';
 
 const SUCCESS_SECONDS = 10;
@@ -31,7 +32,7 @@ function logo(): string | null {
 export function TotemSplitPage() {
   const { productId = '' } = useParams<{ productId: string }>();
   const navigate = useNavigate();
-  const { operator, openOperatorSheet, syncOperator } = useTotemStore();
+  const { operator, openOperatorSheet, syncOperator, invalidateOperator } = useTotemStore();
 
   const [product, setProduct] = useState<Product | null>(null);
   const [labels, setLabels] = useState<Label[] | null>(null);
@@ -113,7 +114,7 @@ export function TotemSplitPage() {
     let created: SplitResult | null = null;
     try {
       const payload = { count, storageType: storage, storageTemperature: temperature, responsibleName: responsible, closeParent };
-      const { data } = await labelApi.split(parent.id, { ...payload, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
+      const { data } = await labelApi.split(parent.id, { ...payload, handlerToken: getHandlerToken() || undefined, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
       created = data.data;
       requests.reset(); // a próxima divisão, mesmo igual, é outro pedido
       await printSplitChildren(created, logo(), preview.data.fractionedAt);
@@ -121,7 +122,10 @@ export function TotemSplitPage() {
       setDone({ result: created, printed: true, fractionedAt: preview.data.fractionedAt });
     } catch (err) {
       if (created) setDone({ result: created, printed: false, fractionedAt: preview.data.fractionedAt });
-      else setSubmitError(extractError(err));
+      else {
+        if (isHandlerInvalid(err)) invalidateOperator(); // limpa o operador e pede o PIN de novo
+        setSubmitError(extractError(err));
+      }
     } finally {
       lock.current = false;
       setSubmitting(false);

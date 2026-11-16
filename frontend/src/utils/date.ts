@@ -54,3 +54,10 @@ export function statusFromDays(days: number): 'valid' | 'expiring' | 'expired' {
   if (days <= 7) return 'expiring';
   return 'valid';
 }
+
+/** Dias entre duas datas YYYY-MM-DD (to − from), sem depender do fuso do aparelho. */
+export function daysBetween(fromIso: string, toIso: string): number {
+  const [fy, fm, fd] = fromIso.slice(0, 10).split('-').map(Number);
+  const [ty, tm, td] = toIso.slice(0, 10).split('-').map(Number);
+  return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / 86_400_000);
+}

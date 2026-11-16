@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { User } from '@/types';
 import { authApi } from '@/services';
 import { extractError } from '@/services/api';
+import { clearVerifiedOperator } from '@/utils/totem';
+import { useTotemStore } from '@/store/totemStore';
 
 interface AuthState {
   user:         User | null;
@@ -30,6 +32,8 @@ export const useAuthStore = create<AuthState>()(
         try {
           const { data } = await authApi.login(email, password);
           const { user, accessToken, refreshToken } = data.data;
+          clearVerifiedOperator(); // o token do operador pertencia à sessão anterior
+          useTotemStore.getState().syncOperator();
           localStorage.setItem('accessToken',  accessToken);
           localStorage.setItem('refreshToken', refreshToken);
           set({ user, accessToken, refreshToken, isLoading: false });
@@ -45,6 +49,8 @@ export const useAuthStore = create<AuthState>()(
         if (refreshToken) void authApi.logout(refreshToken).catch(() => undefined);
         localStorage.removeItem('accessToken');
         localStorage.removeItem('refreshToken');
+        clearVerifiedOperator();
+        useTotemStore.getState().syncOperator();
         set({ user: null, accessToken: null, refreshToken: null });
       },
 

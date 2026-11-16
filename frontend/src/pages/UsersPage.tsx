@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import { KeyRound, Pencil, Plus, Power, ShieldCheck, User as UserIcon } from 'lucide-react';
+import { Hash, KeyRound, Pencil, Plus, Power, ShieldCheck, User as UserIcon } from 'lucide-react';
 import { userApi } from '@/services';
 import { extractError } from '@/services/api';
 import type { ManagedUser, UserRole } from '@/types';
@@ -15,6 +15,7 @@ type Dialog =
   | { kind: 'create' }
   | { kind: 'edit'; user: ManagedUser }
   | { kind: 'password'; user: ManagedUser }
+  | { kind: 'pin'; user: ManagedUser }
   | null;
 
 const ROLE_LABEL: Record<UserRole, string> = { ADMIN: 'Administrador', OPERATOR: 'Operador' };
@@ -26,6 +27,7 @@ export function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toToggle, setToToggle] = useState<ManagedUser | null>(null);
+  const [toRemovePin, setToRemovePin] = useState<ManagedUser | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -48,6 +50,19 @@ export function UsersPage() {
     try {
       await userApi.update(target.id, { active: !target.active });
       toast(target.active ? 'Usuário desativado.' : 'Usuário reativado.', 'success');
+      void load();
+    } catch (err) {
+      toast(extractError(err), 'error');
+    }
+  }
+
+  async function confirmRemovePin() {
+    if (!toRemovePin) return;
+    const target = toRemovePin;
+    setToRemovePin(null);
+    try {
+      await userApi.setPin(target.id, null);
+      toast(`PIN de ${target.name} removido.`, 'success');
       void load();
     } catch (err) {
       toast(extractError(err), 'error');
@@ -88,6 +103,7 @@ export function UsersPage() {
                       <h3 className="truncate text-base font-bold text-charcoal-800">{user.name}{isSelf && ' (você)'}</h3>
                       <span className="badge badge-neutral">{ROLE_LABEL[user.role]}</span>
                       {!user.active && <span className="badge badge-expired">Desativado</span>}
+                      {user.hasPin && <span className="badge badge-valid gap-1" title="Pode confirmar a identidade no totem com PIN"><Hash className="h-3 w-3" />PIN</span>}
                     </div>
                     <p className="truncate text-xs text-slate-500">{user.email}</p>
                   </div>
@@ -100,6 +116,14 @@ export function UsersPage() {
                   <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'password', user })}>
                     <KeyRound className="h-3.5 w-3.5" /> Senha
                   </button>
+                  <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'pin', user })}>
+                    <Hash className="h-3.5 w-3.5" /> {user.hasPin ? 'Trocar PIN' : 'Definir PIN'}
+                  </button>
+                  {user.hasPin && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setToRemovePin(user)}>
+                      Remover PIN
+                    </button>
+                  )}
                   {!isSelf && (
                     <button className="btn btn-ghost btn-sm" onClick={() => setToToggle(user)}>
                       <Power className="h-3.5 w-3.5" /> {user.active ? 'Desativar' : 'Reativar'}
@@ -120,6 +144,16 @@ export function UsersPage() {
           onSaved={(message) => { setDialog(null); toast(message, 'success'); void load(); }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!toRemovePin}
+        title="Remover PIN"
+        body={`${toRemovePin?.name ?? ''} deixará de confirmar o operador por PIN no totem. As etiquetas já confirmadas continuam marcadas no histórico.`}
+        confirmLabel="Remover PIN"
+        danger
+        onConfirm={() => void confirmRemovePin()}
+        onCancel={() => setToRemovePin(null)}
+      />
 
       <ConfirmDialog
         open={!!toToggle}
@@ -147,14 +181,18 @@ function UserDialog({ dialog, isSelf, onClose, onSaved }: {
   const [email, setEmail] = useState(existing?.email ?? '');
   const [role, setRole] = useState<UserRole>(existing?.role ?? 'OPERATOR');
   const [password, setPassword] = useState('');
+  const [pin, setPin] = useState('');
   const passwordId = useId();
+  const pinId = useId();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
-  const showProfile = dialog.kind !== 'password';
-  const showPassword = dialog.kind !== 'edit';
+  const showProfile = dialog.kind === 'create' || dialog.kind === 'edit';
+  const showPassword = dialog.kind === 'create' || dialog.kind === 'password';
+  const showPin = dialog.kind === 'pin';
   const title = dialog.kind === 'create' ? 'Novo usuário'
-    : dialog.kind === 'edit' ? 'Editar usuário' : `Nova senha de ${dialog.user.name}`;
+    : dialog.kind === 'edit' ? 'Editar usuário'
+    : dialog.kind === 'pin' ? `PIN de ${dialog.user.name}` : `Nova senha de ${dialog.user.name}`;
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -167,6 +205,9 @@ function UserDialog({ dialog, isSelf, onClose, onSaved }: {
       } else if (dialog.kind === 'edit') {
         await userApi.update(dialog.user.id, { name, email, role });
         onSaved('Usuário atualizado.');
+      } else if (dialog.kind === 'pin') {
+        await userApi.setPin(dialog.user.id, pin);
+        onSaved('PIN definido.');
       } else {
         await userApi.resetPassword(dialog.user.id, password);
         onSaved('Senha redefinida.');
@@ -210,6 +251,21 @@ function UserDialog({ dialog, isSelf, onClose, onSaved }: {
           <div>
             <label htmlFor={passwordId} className="block text-xs font-bold uppercase tracking-wider text-slate-500">Senha (mínimo 12 caracteres)</label>
             <PasswordInput id={passwordId} required minLength={12} maxLength={72} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input mt-1.5" />
+          </div>
+        )}
+
+        {showPin && (
+          <div>
+            <label htmlFor={pinId} className="block text-xs font-bold uppercase tracking-wider text-slate-500">PIN (4 a 6 dígitos)</label>
+            <input
+              id={pinId} type="password" inputMode="numeric" pattern="\d{4,6}" minLength={4} maxLength={6} required
+              autoComplete="new-password" autoFocus value={pin}
+              onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))}
+              className="input mt-1.5 tracking-[0.3em]"
+            />
+            <p className="mt-1.5 text-xs font-medium text-slate-400">
+              Usado pelo operador no totem para confirmar quem está manipulando. Só números; evite datas e sequências óbvias.
+            </p>
           </div>
         )}
 

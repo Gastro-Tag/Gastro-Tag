@@ -63,3 +63,46 @@ export function verifyAccessToken(token: string): TokenPayload {
 export function verifyRefreshToken(token: string): TokenPayload {
   return verifyToken(token, REFRESH_SECRET, 'refresh');
 }
+
+/** Turno do operador confirmado com PIN no totem. */
+export const HANDLER_TTL_MS = 10 * 60 * 60 * 1000;
+
+export interface HandlerTokenPayload {
+  typ: 'handler';
+  /** Usuário que digitou o PIN. */
+  hid: string;
+  /** Sessão do aparelho que conferiu o PIN: o token só vale nela. */
+  sid: string;
+  /** Impressão do PIN em uso: trocar ou remover o PIN invalida o token. */
+  pv: string;
+}
+
+export const handlerInvalid = () =>
+  new AppError('Confirme o operador do turno novamente.', 401, 'HANDLER_INVALID');
+
+export function signHandlerToken(payload: Omit<HandlerTokenPayload, 'typ'>): { token: string; expiresAt: Date } {
+  const expiresAt = new Date(Date.now() + HANDLER_TTL_MS);
+  const token = jwt.sign({ ...payload, typ: 'handler' }, ACCESS_SECRET, {
+    expiresIn: Math.floor(HANDLER_TTL_MS / 1000),
+  });
+  return { token, expiresAt };
+}
+
+/** Confere assinatura, validade e formato. Sessão e usuário são conferidos por quem chama. */
+export function verifyHandlerToken(token: string): HandlerTokenPayload {
+  try {
+    const payload = jwt.verify(token, ACCESS_SECRET);
+    if (
+      typeof payload !== 'object' ||
+      payload.typ !== 'handler' ||
+      typeof payload.hid !== 'string' ||
+      typeof payload.sid !== 'string' ||
+      typeof payload.pv !== 'string'
+    ) {
+      throw handlerInvalid();
+    }
+    return payload as unknown as HandlerTokenPayload;
+  } catch {
+    throw handlerInvalid();
+  }
+}

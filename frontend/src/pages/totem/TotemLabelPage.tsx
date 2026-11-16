@@ -14,11 +14,12 @@ import { formatBR } from '@/utils/date';
 import { printLabel } from '@/utils/printLabel';
 import {
   DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft,
-  getLastStorage, getOperator, parseDateDraft, rememberChoices, weekdayShort,
+  getHandlerToken, getLastStorage, getOperator, parseDateDraft, rememberChoices, weekdayShort,
 } from '@/utils/totem';
 import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
 import { createRequestKeeper } from '@/utils/requestId';
+import { isHandlerInvalid } from '@/utils/handler';
 
 const ALL_STORAGES: StorageType[] = ['REFRIGERADO', 'CONGELADO'];
 const SUCCESS_SECONDS = 10;
@@ -39,7 +40,7 @@ function logo(): string | null {
 export function TotemLabelPage() {
   const { productId = '' } = useParams<{ productId: string }>();
   const navigate = useNavigate();
-  const { operator, openOperatorSheet, syncOperator } = useTotemStore();
+  const { operator, openOperatorSheet, syncOperator, invalidateOperator } = useTotemStore();
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -156,7 +157,9 @@ export function TotemLabelPage() {
         storageType: storage,
         storageTemperature: temperature,
       };
-      const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
+      // Com PIN confirmado o servidor usa o nome do operador do token; sem ele vale o nome digitado.
+      const handlerToken = getHandlerToken() || undefined;
+      const { data } = await labelApi.create({ ...payload, handlerToken, requestId: requests.idFor(payload) });
       const label: Label = data.data;
       created = label;
       requests.reset(); // a próxima etiqueta, mesmo igual, é outro pedido
@@ -169,6 +172,7 @@ export function TotemLabelPage() {
       if (created) {
         setDone({ label: created, printed: false });
       } else {
+        if (isHandlerInvalid(err)) invalidateOperator(); // limpa o operador e pede o PIN de novo
         setSubmitError(extractError(err));
       }
     } finally {
