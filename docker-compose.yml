@@ -69,6 +69,20 @@ services:
       timeout: 5s
       retries: 3
 
+  # Túnel gratuito da Cloudflare (quick tunnel: sem conta, sem token) com link HTTPS público
+  # *.trycloudflare.com. Fica no perfil "tunel": NÃO sobe no "docker compose up" normal.
+  # Ligar/desligar: ./scripts/tunel.sh e ./scripts/tunel.sh parar (guia no README).
+  # Aponta para a porta 8081 do frontend (só na rede interna), que confia no CF-Connecting-IP.
+  # Sem "restart": depois de reiniciar o notebook ou o Docker, o túnel continua desligado.
+  tunel:
+    image: cloudflare/cloudflared:2026.10.7
+    container_name: gastrotag_tunel
+    profiles: ["tunel"]
+    command: tunnel --no-autoupdate --url http://frontend:8081
+    depends_on:
+      frontend:
+        condition: service_healthy
+
   # Backup diário (pg_dump -Fc) no volume backups_data; um dump ao subir; mantém os últimos
   # BACKUP_RETENCAO. Guia em scripts/README.md. A senha vai só por PGPASSWORD (ambiente).
   backup:
