@@ -101,4 +101,6 @@ O nome do banco do sistema é o `POSTGRES_DB` do `.env` (padrão `gastrotag`).
 - `restaurar-postgres.sh` — roda dentro do serviço `backup`; exige `CONFIRMA_BANCO`
   igual ao nome do banco;
 - `backup-agora.sh`, `restaurar.sh` — atalhos para usar no servidor;
+- `tunel.sh` — liga o túnel gratuito da Cloudflare (perfil `tunel` do Compose) e mostra o
+  link `https://...trycloudflare.com`; `tunel.sh parar` desliga (guia no README da raiz);
 - `.gitattributes` — mantém os `.sh` com fim de linha LF (os containers são Linux).

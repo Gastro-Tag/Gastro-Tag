@@ -129,6 +129,134 @@ Remove-Item Env:DATABASE_URL
 
 Sem `DATABASE_URL`, o Vitest executa os testes unitários e ignora `tests/api.test.ts`. Não aponte a suíte para um banco de produção ou para o banco com dados que deseja preservar.
 
+## Rodar no notebook (demonstração)
+
+Guia para usar o notebook (Windows + Docker Desktop) como servidor, com tablet ou celular operando pela mesma rede. Sem custo de hospedagem. Os comandos são para o PowerShell, na pasta do projeto.
+
+### 1. Pré-requisitos e `.env`
+
+1. Docker Desktop instalado e **ligado** (ícone da baleia sem aviso de erro).
+2. Crie o `.env` **uma única vez** (o comando não sobrescreve um `.env` existente) e preencha `POSTGRES_PASSWORD`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `ADMIN_EMAIL` e `ADMIN_PASSWORD` (mínimo de 12 caracteres). Use senhas fortes: com o túnel, qualquer pessoa com o link vê a tela de login.
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+3. Para gerar um valor aleatório (pode rodar quantas vezes quiser, uma vez para cada segredo; os dois segredos JWT devem ser diferentes, com pelo menos 32 caracteres):
+
+```powershell
+-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 40 | ForEach-Object { [char]$_ })
+```
+
+Nunca compartilhe nem versione o `.env`.
+
+Atenção: trocar `POSTGRES_PASSWORD` depois da primeira subida **não** muda a senha do banco que já existe (o volume guarda a senha antiga). E `ADMIN_PASSWORD` só vale na criação do administrador; para sincronizá-la depois é preciso `ADMIN_SYNC_ON_BOOT=true` (e voltar a `false` em seguida).
+
+### 2. Subir e conferir
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+Espere os serviços `db`, `api` e `frontend` ficarem `healthy` (a primeira subida demora). Teste no próprio notebook em `http://localhost`. Para dados de demonstração (opcional): `docker compose exec api npm run seed`.
+
+### 3. Descobrir o IP do notebook
+
+```powershell
+ipconfig
+```
+
+No adaptador **Wi-Fi**, anote o **Endereço IPv4** (por exemplo `192.168.0.15`). Se trocar de rede ou usar o hotspot do celular, o IP muda: rode o comando de novo.
+
+### 4. Firewall do Windows (ação sua, como administrador)
+
+Por padrão o Windows bloqueia a entrada de outros aparelhos. Libere a porta 80 **somente para o perfil Privado**; a rede Wi-Fi precisa estar marcada como **Privada** (Configurações → Rede e Internet → Wi-Fi → propriedades da rede → Tipo de perfil de rede). Em um PowerShell **aberto como administrador**:
+
+```powershell
+New-NetFirewallRule -DisplayName "GastroTag demo (porta 80)" -Direction Inbound -Protocol TCP -LocalPort 80 -Action Allow -Profile Private
+```
+
+Para remover a regra quando terminar:
+
+```powershell
+Remove-NetFirewallRule -DisplayName "GastroTag demo (porta 80)"
+```
+
+Este guia não altera o firewall por você: o comando acima é executado por quem administra o notebook. Não use perfil Público (redes de terceiros).
+
+Se o celular ainda não abrir a página, confira em Firewall do Windows → Permitir um aplicativo → se o Docker Desktop está liberado em **Privada**. O hotspot do celular costuma entrar como rede **Pública**: marque-o como Privada.
+
+### 5. Abrir no celular ou tablet
+
+Conecte o aparelho na mesma Wi-Fi (ou ligue o notebook no hotspot do celular) e abra:
+
+- Painel: `http://<IP>` (por exemplo `http://192.168.0.15`)
+- Totem: `http://<IP>/totem/login`
+
+Para imprimir em PDF pelo aparelho (sem impressora):
+
+- **Android (Chrome):** menu do navegador → Compartilhar → Imprimir → Salvar como PDF.
+- **iPhone (Safari):** botão Compartilhar → Imprimir; na prévia, abra o PDF (afastando os dedos sobre a miniatura) e salve ou compartilhe.
+
+O botão de impressão do sistema abre a janela de impressão do navegador; as etiquetas continuam sendo impressas pelo navegador, sem integração direta com impressora térmica.
+
+### 6. Túnel gratuito com HTTPS (opcional)
+
+O túnel da Cloudflare (sem conta) gera um link `https://...trycloudflare.com` para acessar de fora da rede, por exemplo por amigos que vão testar. Cada pessoa precisa de uma conta própria, criada por um ADMIN em **Usuários**.
+
+Depois de atualizar o código, rode `docker compose up -d --build` antes de ligar o túnel. Ligar e mostrar o link (no Git Bash, que acompanha o Git para Windows):
+
+```bash
+./scripts/tunel.sh
+```
+
+Equivalente no PowerShell (o link aparece nos logs):
+
+```powershell
+docker compose --profile tunel rm --stop --force tunel   # apaga o link antigo dos logs
+docker compose --profile tunel up -d tunel
+docker compose --profile tunel logs tunel | Select-String "trycloudflare.com"   # repita se ainda não aparecer
+```
+
+O totem fica em `<link>/totem/login`. Para desligar (o sistema continua no ar pela rede local):
+
+```bash
+./scripts/tunel.sh parar
+```
+
+```powershell
+docker compose --profile tunel rm --stop --force tunel
+```
+
+Avisos:
+
+- O link **muda a cada vez** que o túnel liga.
+- Só funciona com o notebook ligado, acordado e com internet.
+- Qualquer pessoa com o link vê a tela de login: mantenha senhas fortes e **desligue o túnel quando não estiver usando**.
+- Se aparecer `https://api.trycloudflare.com` em uma linha de erro dos logs, esse **não** é o seu link.
+- Antes de `docker compose down`, desligue o túnel (`./scripts/tunel.sh parar`) ou use `docker compose --profile tunel down`.
+- Depois de reiniciar o notebook ou o Docker, o túnel fica desligado até você ligar de novo.
+
+### 7. Backup antes e depois de usar
+
+Rode antes e depois da demonstração. **Estes comandos são para o Git Bash** (não para o PowerShell), com o sistema no ar, e copie o arquivo para **fora** do notebook (pendrive ou nuvem pessoal), pois o volume fica no mesmo disco:
+
+```bash
+./scripts/backup-agora.sh
+mkdir -p ~/backups-gastrotag
+docker compose cp backup:/backups/. ~/backups-gastrotag/
+```
+
+Detalhes e restauração em [`scripts/README.md`](scripts/README.md). Os backups contêm usuários e hashes de senha: guarde em local restrito.
+
+### 8. Limitações
+
+- **Sem HTTPS na rede local:** `http://<IP>` trafega sem criptografia na Wi-Fi; use apenas em rede de confiança. Só o link do túnel tem HTTPS.
+- **O notebook precisa ficar ligado e sem suspender.** Enquanto estiver na tomada, ajuste em Configurações → Sistema → Energia e bateria → Tela e suspensão para "Nunca" na opção "conectado" (e confira a ação ao fechar a tampa). Depois da demonstração, volte à configuração anterior.
+- **Limite de login por IP:** no Docker Desktop, aparelhos da rede local podem chegar à API com o mesmo IP, então tentativas de login falhas de um aparelho podem bloquear outros temporariamente.
+- O IP do notebook pode mudar entre redes; refaça o passo 3.
+
 ## Modo totem
 
 A interface de totem para a bancada fica em `http://localhost/totem`: grade de produtos, data de descarte já calculada e impressão em 2 toques. Detalhes de uso, instalação em modo quiosque e limitações em [`docs/TOTEM.md`](docs/TOTEM.md).
@@ -144,7 +272,7 @@ A interface de totem para a bancada fica em `http://localhost/totem`: grade de p
 
 ## Escopo e limitações atuais
 
-- O cálculo usa os prazos cadastrados no produto ou, quando houver, uma regra de validade inserida diretamente no banco. Ainda não existe um catálogo normativo validado; os valores precisam ser confirmados pelo responsável técnico antes de uso operacional.
+- O cálculo usa os prazos cadastrados no produto ou, quando houver, uma regra de validade versionada, cadastrada na tela `/rules` (somente ADMIN), com fonte e responsável pela validação. Ainda não existe um catálogo normativo validado; os valores precisam ser confirmados pelo responsável técnico antes de uso operacional.
 - O dia da abertura conta como dia 1: um prazo de 3 dias com abertura em 01/09 vai até 03/09. O servidor recusa abertura futura e etiqueta que já nasceria vencida.
 - A impressão é feita pelo navegador, com quatro modelos de etiqueta: folha A4 / papel comum (9 cm de largura) e 100×60 mm, ambos com todas as informações; térmica 60×40 mm, resumida (sem logo, marca, prazo/fonte, aviso do fabricante e assinatura); e térmica 50×30 mm, mínima (produto, descarte, abertura, lote, responsável e código; armazenamento e temperatura só se couberem). Nas térmicas a fonte diminui sozinha (nunca abaixo de 6 pt) e, se mesmo assim não couber, o texto continua na etiqueta seguinte, sem cortar nada. O modelo é escolhido por aparelho na tela de gerar etiqueta (guardado em `localStorage`, chave `gastrotag_label_template`) e o totem usa o modelo salvo no aparelho. Na térmica, o `@page` define o tamanho; o papel configurado no driver da impressora deve ter o mesmo tamanho. **Ainda não houve teste em impressora térmica física**; o modelo térmico não foi validado em papel. Integração direta com impressoras térmicas não faz parte do TCC atual.
 - O sistema não envia e-mail: o "Esqueci minha senha" dos logins do painel e do totem apenas orienta que a senha seja redefinida por um administrador em **Usuários → Senha**. A senha da conta de `ADMIN_EMAIL` é sincronizada pelo servidor na inicialização. Os campos de senha têm botão de olho para mostrar o que foi digitado.
