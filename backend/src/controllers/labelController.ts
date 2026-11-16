@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { LabelService } from '../services/labelService';
+import { OperatorService } from '../services/operatorService';
 import { parseDateOnly } from '../domain/shelfLife';
 import { LABEL_TEMPERATURE_MAX, LABEL_TEMPERATURE_MIN } from '../domain/temperature';
 
@@ -31,20 +32,28 @@ const expirySourceError = { message: 'Escolha um lote ou informe a validade da e
 
 const previewSchema = labelFields.refine(oneExpirySource, expirySourceError);
 
+// Token do operador confirmado com PIN no totem (POST /totem/operators/verify).
+const handlerTokenSchema = z.string().min(1).max(2000).optional();
+const responsibleNameSchema = z.string().trim().min(1, 'Informe o nome do responsável.').max(100);
+// Com operador confirmado, o nome vem dele; sem, o nome digitado é obrigatório.
+const nameOrHandler = (data: { responsibleName?: string; handlerToken?: string }) =>
+  Boolean(data.responsibleName || data.handlerToken);
+const nameOrHandlerError = { message: 'Informe o nome do responsável.' };
+
 const createSchema = labelFields.extend({
   storageTemperature: labelFields.shape.storageTemperature.unwrap(),
   lot: z.string().trim().min(1).max(60).refine((value) => !value.includes('\u0000'), 'Lote inválido.').optional(),
-  responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
+  responsibleName: responsibleNameSchema.optional(),
+  handlerToken: handlerTokenSchema,
   requestId: z.string().uuid().optional(),
 }).refine(oneExpirySource, expirySourceError)
+  .refine(nameOrHandler, nameOrHandlerError)
   .refine((data) => (data.lotId ? !data.lot : Boolean(data.lot)), {
     message: 'Informe o lote da embalagem.',
   });
-const listSchema = z.object({
+const filterFields = z.object({
   productId: z.string().uuid().optional(),
   userId: z.string().uuid().optional(),
-  page: z.coerce.number().int().positive().default(1),
-  limit: z.coerce.number().int().positive().max(100).default(20),
   q: z.string().max(120).optional(),
   from: dateSchema.optional(),
   to: dateSchema.optional(),
@@ -53,9 +62,16 @@ const listSchema = z.object({
   // Pela data da cozinha. Faz sentido junto com status=ATIVA.
   due: z.enum(['expired', 'today', 'upcoming']).optional(),
   parentLabelId: z.string().uuid().optional(),
-}).refine((query) => !query.from || !query.to || query.from <= query.to, {
-  message: 'A data inicial deve ser menor ou igual à data final.',
 });
+const periodOrder = [(query: { from?: string; to?: string }) => !query.from || !query.to || query.from <= query.to, {
+  message: 'A data inicial deve ser menor ou igual à data final.',
+}] as const;
+const listSchema = filterFields.extend({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+}).refine(...periodOrder);
+// Exportação: mesmos filtros, sem paginação; from/to pela data de criação na cozinha.
+const exportSchema = filterFields.refine(...periodOrder);
 
 const closeSchema = z.object({
   outcome: z.enum(['USADO', 'DESCARTADO', 'CANCELADO'], { errorMap: () => ({ message: 'Escolha o destino da etiqueta.' }) }),
@@ -65,6 +81,9 @@ const closeSchema = z.object({
   // Observação vazia conta como não informada.
   note: z.string().trim().max(300, 'A observação deve ter no máximo 300 caracteres.').optional()
     .transform((value) => value || undefined),
+  // Quem encerrou no totem sem PIN; sem ele e sem token, vale o nome da conta logada.
+  responsibleName: responsibleNameSchema.optional(),
+  handlerToken: handlerTokenSchema,
 }).refine((data) => (data.outcome === 'DESCARTADO') === Boolean(data.discardReason), {
   message: 'Informe o motivo do descarte (só para etiqueta descartada).',
 }).refine((data) => data.discardReason !== 'OUTRO' || (data.note?.length ?? 0) >= 3, {
@@ -81,12 +100,24 @@ const splitSchema = splitPreviewSchema.extend({
     .int('A quantidade deve ser um número inteiro.')
     .min(1, 'A quantidade deve ser de 1 a 20 etiquetas.').max(20, 'A quantidade deve ser de 1 a 20 etiquetas.'),
   storageTemperature: labelFields.shape.storageTemperature.unwrap(),
-  responsibleName: z.string().trim().min(1, 'Informe o nome do responsável.').max(100),
+  responsibleName: responsibleNameSchema.optional(),
+  handlerToken: handlerTokenSchema,
   closeParent: z.boolean().optional(),
   requestId: z.string().uuid().optional(),
-});
+}).refine(nameOrHandler, nameOrHandlerError);
 
 const actor = (req: Request) => ({ id: req.user!.sub, name: req.user!.name, role: req.user!.role });
+
+/** Operador confirmado com PIN, preso à sessão deste aparelho; token inválido é 401 HANDLER_INVALID. */
+const handlerOf = (req: Request, handlerToken: string | undefined) =>
+  OperatorService.resolve(handlerToken, req.user!.sid);
+
+/** Responsável da etiqueta: o operador do token ou o nome digitado. O serviço chama só se não for reenvio. */
+const responsibleOf = (req: Request, handlerToken: string | undefined, typedName: string | undefined) =>
+  async () => {
+    const handler = await handlerOf(req, handlerToken);
+    return { responsibleName: handler?.name ?? typedName!, handlerId: handler?.id ?? null };
+  };
 
 export const LabelController = {
   async list(req: Request, res: Response) {
@@ -95,14 +126,31 @@ export const LabelController = {
     res.json({ success: true, ...result });
   },
 
+  async due(_req: Request, res: Response) {
+    const result = await LabelService.due();
+    res.json({ success: true, ...result });
+  },
+
+  async exportCsv(req: Request, res: Response) {
+    const filters = exportSchema.parse(req.query);
+    const { csv, filename } = await LabelService.exportCsv(filters);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(csv);
+  },
+
   async getById(req: Request, res: Response) {
     const label = await LabelService.getById(req.params.id);
     res.json({ success: true, data: label });
   },
 
   async create(req: Request, res: Response) {
-    const data  = createSchema.parse(req.body);
-    const { label, replayed } = await LabelService.create({ ...data, userId: req.user!.sub });
+    const { handlerToken, responsibleName, ...data } = createSchema.parse(req.body);
+    const { label, replayed } = await LabelService.create(
+      { ...data, userId: req.user!.sub, responsibleName: responsibleName ?? '' },
+      responsibleOf(req, handlerToken, responsibleName),
+    );
     res.status(replayed ? 200 : 201).json({ success: true, data: label });
   },
 
@@ -113,8 +161,11 @@ export const LabelController = {
   },
 
   async close(req: Request, res: Response) {
-    const data = closeSchema.parse(req.body);
-    const { label, activeChildren } = await LabelService.close(req.params.id, data, actor(req));
+    const { handlerToken, responsibleName, ...data } = closeSchema.parse(req.body);
+    const handler = await handlerOf(req, handlerToken);
+    const { label, activeChildren } = await LabelService.close(
+      req.params.id, { ...data, closedByName: handler?.name ?? responsibleName }, actor(req),
+    );
     res.json({ success: true, data: label, meta: { activeChildren } });
   },
 
@@ -125,8 +176,11 @@ export const LabelController = {
   },
 
   async split(req: Request, res: Response) {
-    const data = splitSchema.parse(req.body);
-    const { replayed, ...result } = await LabelService.split(req.params.id, data, actor(req));
+    const { handlerToken, responsibleName, ...data } = splitSchema.parse(req.body);
+    const { replayed, ...result } = await LabelService.split(
+      req.params.id, { ...data, responsibleName: responsibleName ?? '' }, actor(req),
+      responsibleOf(req, handlerToken, responsibleName),
+    );
     res.status(replayed ? 200 : 201).json({ success: true, data: result });
   },
 

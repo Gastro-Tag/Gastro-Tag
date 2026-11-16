@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, LogOut, User } from 'lucide-react';
+import { LayoutDashboard, LogOut, ShieldCheck, User } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useTotemStore } from '@/store/totemStore';
 import { useIdle } from '@/hooks/useIdle';
@@ -22,7 +22,7 @@ function TotemShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const logout = useAuthStore((state) => state.logout);
-  const { operator, openOperatorSheet, syncOperator } = useTotemStore();
+  const { operator, handlerToken, openOperatorSheet, syncOperator } = useTotemStore();
   const [adminMenu, setAdminMenu] = useState<'locked' | 'unlocked' | null>(null);
   const [now, setNow] = useState(() => new Date());
   const pressTimer = useRef(0);
@@ -99,7 +99,9 @@ function TotemShell() {
               : 'animate-pulse border-brand-500 bg-brand-50 text-brand-700',
           )}
         >
-          <User className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />
+          {operator && handlerToken
+            ? <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-600 sm:h-6 sm:w-6" aria-label="Operador confirmado por PIN" />
+            : <User className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />}
           <span className="truncate">{operator || 'Informar responsável'}</span>
         </button>
       </header>

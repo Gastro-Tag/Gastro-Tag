@@ -3,10 +3,16 @@ import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import { AuthService } from './authService';
 import { SessionService } from './sessionService';
+import { OperatorService } from './operatorService';
 
 const publicFields = {
-  id: true, name: true, email: true, role: true, active: true, createdAt: true,
+  id: true, name: true, email: true, role: true, active: true, createdAt: true, pinHash: true,
 } as const;
+
+/** O hash do PIN nunca sai da API: a resposta diz só se o usuário tem PIN. */
+function toPublic<T extends { pinHash: string | null }>({ pinHash, ...user }: T) {
+  return { ...user, hasPin: pinHash !== null };
+}
 
 async function ensureEmailAvailable(email: string, exceptId?: string): Promise<void> {
   const existing = await prisma.user.findUnique({ where: { email }, select: { id: true } });
@@ -15,12 +21,13 @@ async function ensureEmailAvailable(email: string, exceptId?: string): Promise<v
 
 export const UserService = {
   async list() {
-    return prisma.user.findMany({ select: publicFields, orderBy: { name: 'asc' } });
+    const users = await prisma.user.findMany({ select: publicFields, orderBy: { name: 'asc' } });
+    return users.map(toPublic);
   },
 
   async create(data: { name: string; email: string; password: string; role: UserRole }) {
     await ensureEmailAvailable(data.email);
-    return prisma.user.create({
+    return toPublic(await prisma.user.create({
       data: {
         name: data.name,
         email: data.email,
@@ -28,7 +35,7 @@ export const UserService = {
         passwordHash: await AuthService.hashPassword(data.password),
       },
       select: publicFields,
-    });
+    }));
   },
 
   async update(
@@ -46,7 +53,13 @@ export const UserService = {
     const updated = await prisma.user.update({ where: { id }, data, select: publicFields });
     // Desativar ou trocar o perfil derruba as sessões abertas: quem volta entra com o acesso novo.
     if (data.active === false || (data.role && data.role !== user.role)) await SessionService.revokeAll(id);
-    return updated;
+    return toPublic(updated);
+  },
+
+  /** Define (4 a 6 dígitos) ou remove (null) o PIN do operador no totem. */
+  async setPin(id: string, pin: string | null) {
+    await OperatorService.setPin(id, pin);
+    return toPublic(await prisma.user.findUniqueOrThrow({ where: { id }, select: publicFields }));
   },
 
   async resetPassword(id: string, password: string) {

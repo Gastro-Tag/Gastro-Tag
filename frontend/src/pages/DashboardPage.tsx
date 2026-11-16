@@ -16,6 +16,7 @@ import {
 import { dashboardApi } from '@/services';
 import type { DashboardStats } from '@/types';
 import { PageLoader } from '@/components/ui/Spinner';
+import { DueTodayPanel } from '@/components/labels/DueTodayPanel';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
 
@@ -137,6 +138,9 @@ export function DashboardPage() {
           onClick={() => navigate('/products?status=expired')}
         />
       </div>
+
+      {/* ── Descarte do dia ───────────────────────────────── */}
+      <DueTodayPanel />
 
       {/* ── Main Content Grid (Etiquetas + Mais Utilizados) ─── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

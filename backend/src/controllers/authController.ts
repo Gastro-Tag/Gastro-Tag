@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthService } from '../services/authService';
+import { kitchenToday, MAX_BACKDATE_DAYS } from '../utils/dateUtils';
 
 const loginSchema = z.object({
   email:    z.string().email('E-mail inválido.'),
@@ -51,6 +52,11 @@ export const AuthController = {
   },
 
   async me(req: Request, res: Response) {
-    res.json({ success: true, data: req.user });
+    // Data da cozinha e limite para trás: o formulário limita a data de abertura (o servidor confere de novo).
+    res.json({
+      success: true,
+      data: req.user,
+      meta: { kitchenToday: kitchenToday().toISOString().slice(0, 10), maxBackdateDays: MAX_BACKDATE_DAYS },
+    });
   },
 };

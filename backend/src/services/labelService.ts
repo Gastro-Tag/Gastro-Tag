@@ -1,7 +1,10 @@
-﻿import { DiscardReason, LabelOutcome, Prisma, ShelfLifeRule, StorageType } from '@prisma/client';
+﻿import { DiscardReason, LabelOutcome, LabelStatus, Prisma, ShelfLifeRule, StorageType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
-import { generateShortCode, kitchenToday } from '../utils/dateUtils';
+import {
+  addDays, formatDateBR, formatKitchenDateTime, generateShortCode, kitchenDayStartInstant, kitchenToday, MAX_BACKDATE_DAYS,
+} from '../utils/dateUtils';
+import { toCsv } from '../utils/csv';
 import { calculateDiscard, calculateSplitDiscard, parseDateOnly } from '../domain/shelfLife';
 import { formatTemperature, roundTemperature } from '../domain/temperature';
 import { LotService } from './lotService';
@@ -20,6 +23,8 @@ export interface LabelInput {
   lot?: string;
   originalExpiryDate?: string;
   responsibleName: string;
+  /** Operador confirmado com PIN (o nome dele já vem em `responsibleName`); nulo: nome digitado. */
+  handlerId?: string | null;
   /** Sem valor, vale a data atual da cozinha, não o relógio do aparelho. */
   openedAt?: string;
   storageType: 'REFRIGERADO' | 'CONGELADO';
@@ -33,6 +38,8 @@ export interface CloseInput {
   outcome: LabelOutcome;
   discardReason?: DiscardReason;
   note?: string;
+  /** Quem encerrou: operador com PIN ou nome digitado no totem. Sem valor, o nome da conta logada. */
+  closedByName?: string;
 }
 
 export interface SplitPreviewInput {
@@ -45,6 +52,8 @@ export interface SplitInput extends SplitPreviewInput {
   count: number;
   storageTemperature: number;
   responsibleName: string;
+  /** Operador confirmado com PIN (o nome dele já vem em `responsibleName`); nulo: nome digitado. */
+  handlerId?: string | null;
   /** A embalagem original acabou: encerra a origem como USADO na mesma transação. */
   closeParent?: boolean;
   /** Gerado pelo aparelho a cada pedido: o reenvio devolve as filhas já criadas. */
@@ -52,6 +61,18 @@ export interface SplitInput extends SplitPreviewInput {
 }
 
 export interface Actor { id: string; name: string; role: string }
+
+/** Quem fez a etiqueta: operador confirmado com PIN (handlerId) ou nome digitado (handlerId nulo). */
+export interface Responsible { responsibleName: string; handlerId: string | null }
+
+/**
+ * Resolve o responsável só depois de conferir o reenvio: o mesmo pedido devolve o que já foi criado
+ * mesmo que o token do operador tenha vencido ou o PIN tenha mudado nesse meio tempo.
+ */
+export type ResolveResponsible = () => Promise<Responsible>;
+
+const typedResponsible = (data: { responsibleName: string; handlerId?: string | null }): ResolveResponsible =>
+  async () => ({ responsibleName: data.responsibleName, handlerId: data.handlerId ?? null });
 
 type Db = Prisma.TransactionClient;
 
@@ -71,6 +92,7 @@ function serializeLabel<T extends LabelRow>(label: T) {
     storageTemperature: label.storageTemperature === null ? null : Number(label.storageTemperature),
     fractionedAt: dateOnly(label.fractionedAt),
     parent: label.parent ?? null,
+    handlerVerified: label.handlerId !== null,
     ...(rule !== undefined && { rule }),
   };
 }
@@ -217,6 +239,78 @@ async function splitResult(db: Db, parentId: string, childWhere: Prisma.LabelWhe
   return { parent: serializeLabel(parent), children: children.map(serializeLabel) };
 }
 
+export interface LabelFilters {
+  productId?: string; userId?: string; q?: string; from?: string; to?: string;
+  storageType?: 'REFRIGERADO' | 'CONGELADO';
+  status?: 'ATIVA' | 'ENCERRADA'; due?: 'expired' | 'today' | 'upcoming'; parentLabelId?: string;
+}
+
+/**
+ * Filtros da lista e da exportação. O período (`from`/`to`) vale para a data de abertura na lista e
+ * para a data de criação (dia da cozinha) na exportação.
+ */
+function labelWhere(filters: LabelFilters, period: 'openedAt' | 'createdAt'): Prisma.LabelWhereInput {
+  const { productId, userId, q, from, to, storageType, status, due, parentLabelId } = filters;
+  // Vencimento pela data da cozinha: vencida antes de hoje, vence hoje, vence depois.
+  const today = kitchenToday();
+  const dueWhere: Prisma.DateTimeFilter | undefined = due === 'expired' ? { lt: today }
+    : due === 'today' ? { equals: today }
+      : due === 'upcoming' ? { gt: today } : undefined;
+  const fromDate = from ? parseDateOnly(from, 'Data inicial') : undefined;
+  const toDate = to ? parseDateOnly(to, 'Data final') : undefined;
+  const periodWhere: Prisma.LabelWhereInput | undefined = !fromDate && !toDate ? undefined
+    : period === 'openedAt'
+      ? { openedAt: { ...(fromDate && { gte: fromDate }), ...(toDate && { lte: toDate }) } }
+      // Criada em: do início do dia inicial até antes do início do dia seguinte ao final, no fuso da cozinha.
+      : { createdAt: {
+        ...(fromDate && { gte: kitchenDayStartInstant(fromDate) }),
+        ...(toDate && { lt: kitchenDayStartInstant(addDays(toDate, 1)) }),
+      } };
+  return {
+    ...(productId && { productId }), ...(userId && { userId }), ...(storageType && { storageType }),
+    ...(status && { status }), ...(parentLabelId && { parentLabelId }),
+    ...(dueWhere && { discardAt: dueWhere }),
+    ...periodWhere,
+    ...(q && { OR: [
+      { productName: { contains: q, mode: 'insensitive' } },
+      { productBrand: { contains: q, mode: 'insensitive' } },
+      { lot: { contains: q, mode: 'insensitive' } },
+      { shortCode: { contains: q, mode: 'insensitive' } },
+    ] }),
+  };
+}
+
+const listInclude = {
+  product: { select: { name: true, brand: true } }, user: { select: { name: true } }, rule: true,
+  parent: parentSelect, _count: { select: { children: true } },
+} as const;
+
+function withChildrenCount({ _count, ...item }: Prisma.LabelGetPayload<{ include: typeof listInclude }>) {
+  return { ...serializeLabel(item), childrenCount: _count.children };
+}
+
+const DUE_GROUP_LIMIT = 100;
+
+/**
+ * Temperatura negativa com o sinal de menos U+2212 ("−18,0 °C"): a planilha não a lê como fórmula,
+ * então não precisa do apóstrofo do escape genérico.
+ */
+const csvTemperature = (text: string) => text.replace(/^-/, '\u2212');
+const CSV_MAX_ROWS = 10_000;
+
+const CSV_HEADER = [
+  'Código', 'Produto', 'Marca', 'Lote', 'Validade do fabricante', 'Abertura', 'Fracionado em', 'Origem (código)',
+  'Armazenamento', 'Temperatura', 'Descarte', 'Prazo (dias)', 'Regra', 'Responsável', 'Operador com PIN',
+  'Situação', 'Destino', 'Motivo', 'Observação', 'Encerrado em', 'Encerrado por', 'Criada em',
+];
+const STORAGE_LABELS: Record<StorageType, string> = { REFRIGERADO: 'Refrigerado', CONGELADO: 'Congelado' };
+const STATUS_LABELS: Record<LabelStatus, string> = { ATIVA: 'Ativa', ENCERRADA: 'Encerrada' };
+const OUTCOME_LABELS: Record<LabelOutcome, string> = { USADO: 'Usado', DESCARTADO: 'Descartado', CANCELADO: 'Cancelado' };
+const REASON_LABELS: Record<DiscardReason, string> = {
+  PRAZO_VENCIDO: 'Prazo vencido', ALTERACAO_SENSORIAL: 'Alteração sensorial',
+  EMBALAGEM_DANIFICADA: 'Embalagem danificada', OUTRO: 'Outro',
+};
+
 export const LabelService = {
   async preview(data: Omit<LabelInput, 'userId' | 'lot' | 'responsibleName'>) {
     const product = await prisma.product.findUnique({ where: { id: data.productId, active: true } });
@@ -240,6 +334,8 @@ export const LabelService = {
       originalExpiryDate,
       capToOriginalExpiry,
       today,
+      // Só a data digitada tem limite para trás; sem ela, vale hoje.
+      earliestOpenedAt: data.openedAt ? addDays(today, -MAX_BACKDATE_DAYS) : null,
     });
     return {
       product: { id: product.id, name: product.name, brand: product.brand },
@@ -256,9 +352,10 @@ export const LabelService = {
   },
 
   /** `replayed`: o mesmo pedido já tinha gerado esta etiqueta (rede caiu, toque repetido). */
-  async create(data: LabelInput) {
+  async create(data: LabelInput, resolveResponsible: ResolveResponsible = typedResponsible(data)) {
     const replay = await findReplay(data);
     if (replay) return { label: serializeLabel(replay), replayed: true };
+    const responsible = await resolveResponsible();
 
     if (data.storageTemperature === undefined) throw Errors.validation('Informe a temperatura medida em °C.');
     const preview = await LabelService.preview(data);
@@ -282,7 +379,7 @@ export const LabelService = {
           originalExpiryDate: preview.originalExpiryDate,
           cappedByOriginalExpiry: preview.cappedByOriginalExpiry,
           productName: preview.product.name, productBrand: preview.product.brand,
-          responsibleName: data.responsibleName.trim(),
+          responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
           requestId: data.requestId,
         },
         include: labelInclude,
@@ -298,45 +395,80 @@ export const LabelService = {
     }
   },
 
-  async list(filters: {
-    productId?: string; userId?: string; page?: number; limit?: number;
-    q?: string; from?: string; to?: string; storageType?: 'REFRIGERADO' | 'CONGELADO';
-    status?: 'ATIVA' | 'ENCERRADA'; due?: 'expired' | 'today' | 'upcoming'; parentLabelId?: string;
-  }) {
-    const { productId, userId, page = 1, limit = 20, q, from, to, storageType, status, due, parentLabelId } = filters;
-    // Vencimento pela data da cozinha: vencida antes de hoje, vence hoje, vence depois.
-    const today = kitchenToday();
-    const dueWhere: Prisma.DateTimeFilter | undefined = due === 'expired' ? { lt: today }
-      : due === 'today' ? { equals: today }
-        : due === 'upcoming' ? { gt: today } : undefined;
-    const where: Prisma.LabelWhereInput = {
-      ...(productId && { productId }), ...(userId && { userId }), ...(storageType && { storageType }),
-      ...(status && { status }), ...(parentLabelId && { parentLabelId }),
-      ...(dueWhere && { discardAt: dueWhere }),
-      ...((from || to) && { openedAt: {
-        ...(from && { gte: parseDateOnly(from, 'Data inicial') }),
-        ...(to && { lte: parseDateOnly(to, 'Data final') }),
-      } }),
-      ...(q && { OR: [
-        { productName: { contains: q, mode: 'insensitive' } },
-        { productBrand: { contains: q, mode: 'insensitive' } },
-        { lot: { contains: q, mode: 'insensitive' } },
-        { shortCode: { contains: q, mode: 'insensitive' } },
-      ] }),
-    };
+  async list(filters: LabelFilters & { page?: number; limit?: number }) {
+    const { page = 1, limit = 20 } = filters;
+    const where = labelWhere(filters, 'openedAt');
     const [total, items] = await Promise.all([
       prisma.label.count({ where }),
       prisma.label.findMany({
         where, skip: (page - 1) * limit, take: Math.min(limit, 100),
         orderBy: { createdAt: 'desc' },
-        include: {
-          product: { select: { name: true, brand: true } }, user: { select: { name: true } }, rule: true,
-          parent: parentSelect, _count: { select: { children: true } },
-        },
+        include: listInclude,
       }),
     ]);
-    const data = items.map(({ _count, ...item }) => ({ ...serializeLabel(item), childrenCount: _count.children }));
+    const data = items.map(withChildrenCount);
     return { data, meta: { total, page, limit: Math.min(limit, 100), totalPages: Math.ceil(total / Math.min(limit, 100)) } };
+  },
+
+  /**
+   * Descarte do dia: etiquetas ativas vencidas, que vencem hoje e amanhã, pela data da cozinha.
+   * Cada lista vem ordenada pelo descarte e limitada a 100; as contagens são os totais.
+   */
+  async due() {
+    const today = kitchenToday();
+    const group = async (discardAt: Prisma.DateTimeFilter) => {
+      const where: Prisma.LabelWhereInput = { status: 'ATIVA', discardAt };
+      const [count, items] = await Promise.all([
+        prisma.label.count({ where }),
+        prisma.label.findMany({
+          where, take: DUE_GROUP_LIMIT, include: listInclude,
+          orderBy: [{ discardAt: 'asc' }, { createdAt: 'asc' }],
+        }),
+      ]);
+      return { count, items: items.map(withChildrenCount) };
+    };
+    const [expired, dueToday, tomorrow] = await Promise.all([
+      group({ lt: today }), group({ equals: today }), group({ equals: addDays(today, 1) }),
+    ]);
+    return {
+      data: { expired: expired.items, today: dueToday.items, tomorrow: tomorrow.items },
+      meta: {
+        counts: { expired: expired.count, today: dueToday.count, tomorrow: tomorrow.count },
+        kitchenToday: dateOnly(today)!,
+      },
+    };
+  },
+
+  /** Histórico em CSV (planilha). Mesmos filtros da lista; o período é pela data de criação na cozinha. */
+  async exportCsv(filters: LabelFilters) {
+    const where = labelWhere(filters, 'createdAt');
+    const total = await prisma.label.count({ where });
+    if (total > CSV_MAX_ROWS) {
+      throw Errors.validation(
+        `A exportação teria ${total.toLocaleString('pt-BR')} etiquetas (máximo ${CSV_MAX_ROWS.toLocaleString('pt-BR')}). Escolha um período menor.`,
+      );
+    }
+    const labels = await prisma.label.findMany({
+      where, orderBy: { createdAt: 'desc' }, take: CSV_MAX_ROWS, include: { parent: parentSelect },
+    });
+    const date = (value: Date | null) => (value ? formatDateBR(value) : '');
+    const dateTime = (value: Date | null) => (value ? formatKitchenDateTime(value) : '');
+    const rows = labels.map((label) => [
+      label.shortCode, label.productName, label.productBrand, label.lot,
+      date(label.originalExpiryDate), date(label.openedAt), date(label.fractionedAt), label.parent?.shortCode ?? '',
+      STORAGE_LABELS[label.storageType], csvTemperature(label.storageTemp), date(label.discardAt), String(label.shelfLifeDays),
+      label.ruleId
+        ? [label.ruleVersion ? `v${label.ruleVersion}` : null, label.ruleSource].filter(Boolean).join(' - ')
+        : 'sem regra validada',
+      label.responsibleName ?? '', label.handlerId ? 'sim' : 'não',
+      STATUS_LABELS[label.status], label.outcome ? OUTCOME_LABELS[label.outcome] : '',
+      label.discardReason ? REASON_LABELS[label.discardReason] : '', label.closeNote ?? '',
+      dateTime(label.closedAt), label.closedByName ?? '', dateTime(label.createdAt),
+    ]);
+    return {
+      csv: toCsv(CSV_HEADER, rows),
+      filename: `etiquetas-${dateOnly(kitchenToday())}.csv`,
+    };
   },
 
   async getById(id: string) {
@@ -390,7 +522,8 @@ export const LabelService = {
           where: { id },
           data: {
             status: 'ENCERRADA', outcome: data.outcome, discardReason: data.discardReason ?? null,
-            closeNote: data.note ?? null, closedAt: new Date(), closedById: actor.id, closedByName: actor.name,
+            closeNote: data.note ?? null, closedAt: new Date(), closedById: actor.id,
+            closedByName: data.closedByName?.trim() || actor.name,
           },
         });
       }
@@ -409,13 +542,15 @@ export const LabelService = {
    * Cria `count` filhas da etiqueta numa transação, travada por origem. `replayed`: o mesmo pedido
    * (mesmo `requestId` para a mesma origem) já tinha criado as filhas, que são devolvidas sem criar outras.
    */
-  async split(id: string, data: SplitInput, actor: Actor) {
+  async split(id: string, data: SplitInput, actor: Actor, resolveResponsible: ResolveResponsible = typedResponsible(data)) {
     const replayWhere = data.requestId ? { splitRequestId: data.requestId } : null;
     const hasReplay = async (db: Db) =>
       replayWhere !== null && await db.label.count({ where: { parentLabelId: id, ...replayWhere } }) > 0;
 
     // Reenvio: vale mesmo depois que a origem foi encerrada por este pedido (closeParent).
     if (await hasReplay(prisma)) return { ...await splitResult(prisma, id, replayWhere!), replayed: true };
+    // Fora da transação: confere o token do operador sem segurar a trava da etiqueta.
+    const responsible = await resolveResponsible();
 
     return prisma.$transaction(async (tx) => {
       await lockLabel(tx, id);
@@ -441,7 +576,7 @@ export const LabelService = {
             originalExpiryDate: parent.originalExpiryDate,
             cappedByOriginalExpiry: calculation.cappedByOriginalExpiry,
             productName: parent.productName, productBrand: parent.productBrand,
-            responsibleName: data.responsibleName.trim(),
+            responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
             parentLabelId: parent.id, fractionedAt, splitRequestId: data.requestId,
             cappedByParent: calculation.cappedByParent,
           },
@@ -455,7 +590,7 @@ export const LabelService = {
           data: {
             // Quem encerrou é o responsável do turno informado; a conta logada fica em closedById.
             status: 'ENCERRADA', outcome: 'USADO', closedAt: new Date(),
-            closedById: actor.id, closedByName: data.responsibleName.trim(),
+            closedById: actor.id, closedByName: responsible.responsibleName.trim(),
           },
         });
       }

@@ -39,10 +39,61 @@ export function cleanName(value: string): string {
   return value.replace(/\s+/g, ' ').trim().slice(0, 100);
 }
 
+/** Operador do turno, guardado neste aparelho. Com PIN, traz também o id e o handlerToken. */
+export interface OperatorSession {
+  name: string;
+  /** Preenchidos só quando o operador confirmou o PIN. */
+  id?: string;
+  handlerToken?: string;
+  /** Fim da validade do handlerToken (ms desde 1970). */
+  tokenExpiresAt?: number;
+}
+
+type SavedOperator = { name: string; at: number } & Partial<Pick<OperatorSession, 'id' | 'handlerToken' | 'tokenExpiresAt'>>;
+
+/** Sessão válida do operador: some 10 h depois, ou antes se o token do PIN vencer antes. */
+export function getOperatorSession(now = Date.now()): OperatorSession | null {
+  const saved = read<SavedOperator | null>('operator', null);
+  if (!saved || !saved.name) return null;
+  if (now - saved.at > SHIFT_MS) return null;
+  if (saved.handlerToken && saved.tokenExpiresAt !== undefined && now >= saved.tokenExpiresAt) return null;
+  return { name: saved.name, id: saved.id, handlerToken: saved.handlerToken, tokenExpiresAt: saved.tokenExpiresAt };
+}
+
 export function getOperator(now = Date.now()): string {
-  const saved = read<{ name: string; at: number } | null>('operator', null);
-  if (!saved || !saved.name) return '';
-  return now - saved.at > SHIFT_MS ? '' : saved.name;
+  return getOperatorSession(now)?.name ?? '';
+}
+
+/** Token do operador confirmado por PIN; vazio quando o nome foi apenas digitado. */
+export function getHandlerToken(now = Date.now()): string {
+  return getOperatorSession(now)?.handlerToken ?? '';
+}
+
+/** Operador que confirmou o PIN: guarda o token junto do turno (mesma expiração, a menor entre as duas). */
+export function rememberVerifiedOperator(
+  operator: { id: string; name: string }, handlerToken: string, expiresAtIso: string, now = Date.now(),
+): void {
+  const parsed = Date.parse(expiresAtIso);
+  const entry: SavedOperator = {
+    name: cleanName(operator.name), at: now, id: operator.id, handlerToken,
+    // Sem data válida, o turno de 10 h continua valendo como limite.
+    tokenExpiresAt: Number.isNaN(parsed) ? now + SHIFT_MS : Math.min(parsed, now + SHIFT_MS),
+  };
+  write('operator', entry);
+}
+
+/** Esquece o operador só se ele tem handlerToken (o token é da sessão que o gerou); nome digitado pode ficar. */
+export function clearVerifiedOperator(): void {
+  if (read<SavedOperator | null>('operator', null)?.handlerToken) clearOperator();
+}
+
+/** Esquece o operador do turno (ex.: o servidor recusou o token). */
+export function clearOperator(): void {
+  try {
+    localStorage.removeItem(NS + 'operator');
+  } catch {
+    /* sem armazenamento: nada a limpar */
+  }
 }
 
 export function getRecentOperators(): string[] {
@@ -52,7 +103,7 @@ export function getRecentOperators(): string[] {
 export function rememberOperator(name: string, now = Date.now()): void {
   const clean = cleanName(name);
   if (!clean) return;
-  write('operator', { name: clean, at: now });
+  write('operator', { name: clean, at: now }); // nome digitado: sem PIN, sem token
   const recents = getRecentOperators().filter((n) => n.toLowerCase() !== clean.toLowerCase());
   write('operators', [clean, ...recents].slice(0, MAX_RECENT_OPERATORS));
 }

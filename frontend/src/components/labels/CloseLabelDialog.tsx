@@ -14,6 +14,10 @@ interface Props {
   isAdmin: boolean;
   onClose: () => void;
   onClosed: (result: CloseLabelResult) => void;
+  /** Destino já marcado ao abrir (ex.: "Descartei" no descarte do dia). O usuário só confirma. */
+  initialOutcome?: LabelOutcome;
+  /** Motivo já marcado ao abrir; só vale com destino Descartado. */
+  initialReason?: DiscardReason;
 }
 
 const OUTCOME_HELP: Record<LabelOutcome, string> = {
@@ -22,9 +26,9 @@ const OUTCOME_HELP: Record<LabelOutcome, string> = {
   CANCELADO: 'A etiqueta foi gerada por engano. Só administradores.',
 };
 
-export function CloseLabelDialog({ label, isAdmin, onClose, onClosed }: Props) {
-  const [outcome, setOutcome] = useState<LabelOutcome>('USADO');
-  const [reason, setReason] = useState<DiscardReason | ''>('');
+export function CloseLabelDialog({ label, isAdmin, onClose, onClosed, initialOutcome = 'USADO', initialReason }: Props) {
+  const [outcome, setOutcome] = useState<LabelOutcome>(initialOutcome);
+  const [reason, setReason] = useState<DiscardReason | ''>(initialOutcome === 'DESCARTADO' ? (initialReason ?? '') : '');
   const [note, setNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');

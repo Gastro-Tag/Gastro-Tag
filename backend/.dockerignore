@@ -3,6 +3,5 @@ dist
 .env
 .env.*
 coverage
-uploads
 *.log
 .git

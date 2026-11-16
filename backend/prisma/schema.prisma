@@ -14,15 +14,17 @@ model User {
   name         String
   email        String   @unique
   passwordHash String   @map("password_hash")
+  pinHash      String?  @map("pin_hash") // PIN do operador no totem (bcrypt, como a senha); nulo: sem PIN
   role         UserRole @default(OPERATOR)
   active       Boolean  @default(true)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  labels       Label[]
-  closedLabels Label[]         @relation("LabelClosedBy")
-  sessions     UserSession[]
-  createdRules ShelfLifeRule[] @relation("RuleCreatedBy")
+  labels        Label[]
+  closedLabels  Label[]         @relation("LabelClosedBy")
+  handledLabels Label[]         @relation("LabelHandler")
+  sessions      UserSession[]
+  createdRules  ShelfLifeRule[] @relation("RuleCreatedBy")
 
   @@map("users")
 }
@@ -113,6 +115,7 @@ model Label {
   productName            String         @map("product_name")
   productBrand           String         @map("product_brand")
   responsibleName        String?        @map("responsible_name")
+  handlerId              String?        @map("handler_id") // operador confirmado com PIN no totem; nulo: nome digitado
   requestId              String?        @map("request_id") // repetir o envio devolve a mesma etiqueta
   printedAt              DateTime?      @map("printed_at")
   printCount             Int            @default(0) @map("print_count")
@@ -134,6 +137,7 @@ model Label {
   product    Product        @relation(fields: [productId], references: [id])
   user       User           @relation(fields: [userId], references: [id])
   closedBy   User?          @relation("LabelClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+  handler    User?          @relation("LabelHandler", fields: [handlerId], references: [id], onDelete: Restrict)
   parent     Label?         @relation("LabelSplit", fields: [parentLabelId], references: [id], onDelete: Restrict)
   children   Label[]        @relation("LabelSplit")
   rule       ShelfLifeRule? @relation(fields: [ruleId], references: [id], onDelete: Restrict)
@@ -149,6 +153,7 @@ model Label {
   @@index([status, discardAt])
   @@index([parentLabelId])
   @@index([parentLabelId, splitRequestId])
+  @@index([handlerId])
   @@map("labels")
 }
 

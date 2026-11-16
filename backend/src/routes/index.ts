@@ -1,5 +1,5 @@
 import { Request, Response, Router } from 'express';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { AuthController } from '../controllers/authController';
 import { ProductController } from '../controllers/productController';
 import { LotController } from '../controllers/lotController';
@@ -7,6 +7,7 @@ import { LabelController } from '../controllers/labelController';
 import { DashboardController } from '../controllers/dashboardController';
 import { UserController } from '../controllers/userController';
 import { RuleController } from '../controllers/ruleController';
+import { TotemController } from '../controllers/totemController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
@@ -53,6 +54,20 @@ const changePasswordRateLimit = rateLimit({
   },
 });
 
+// PIN tem poucas combinações: 5 erros por aparelho e operador escolhido bloqueiam por 15 minutos.
+const verifyPinRateLimit = rateLimit({
+  ...countOnlyRejected,
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip ?? '')}:${String(req.body?.userId ?? '').slice(0, 64)}`,
+  message: {
+    success: false,
+    error: { message: 'Muitas tentativas de PIN. Tente novamente em 15 minutos.', code: 'RATE_LIMITED' },
+  },
+});
+
 router.post('/auth/login', loginRateLimit, AuthController.login);
 router.post('/auth/refresh', AuthController.refresh);
 router.post('/auth/logout', AuthController.logout);
@@ -64,6 +79,10 @@ router.get('/users', authenticate, requireAdmin, UserController.list);
 router.post('/users', authenticate, requireAdmin, UserController.create);
 router.put('/users/:id', authenticate, requireAdmin, UserController.update);
 router.patch('/users/:id/password', authenticate, requireAdmin, UserController.resetPassword);
+router.patch('/users/:id/pin', authenticate, requireAdmin, UserController.setPin);
+
+router.get('/totem/operators', authenticate, TotemController.operators);
+router.post('/totem/operators/verify', authenticate, verifyPinRateLimit, TotemController.verifyOperator);
 
 router.get('/products', authenticate, ProductController.list);
 router.get('/products/categories', authenticate, ProductController.getCategories);
@@ -82,6 +101,9 @@ router.put('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.c
 router.delete('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.deactivate);
 
 router.get('/labels', authenticate, LabelController.list);
+// Antes de /labels/:id, senão "due" e "export.csv" seriam lidos como id.
+router.get('/labels/due', authenticate, LabelController.due);
+router.get('/labels/export.csv', authenticate, requireAdmin, LabelController.exportCsv);
 router.get('/labels/:id', authenticate, LabelController.getById);
 router.post('/labels/preview', authenticate, LabelController.preview);
 router.post('/labels', authenticate, LabelController.create);

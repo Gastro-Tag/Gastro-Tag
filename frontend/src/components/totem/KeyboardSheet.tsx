@@ -14,20 +14,23 @@ interface KeyboardSheetProps {
   cancelLabel?: string;
   /** Como mostrar o texto digitado (ex.: barras em uma data). */
   displayValue?: (value: string) => string;
+  /** Texto lido por leitores de tela a cada toque (ex.: "3 dígitos digitados"), sem expor o valor. */
+  announce?: (value: string) => string;
   /** Chamado a cada toque (ex.: filtrar a lista enquanto digita). */
   onLiveChange?: (value: string) => void;
   onCancel: () => void;
   /** Retorne um texto para manter a janela aberta e mostrar o erro. */
-  onConfirm: (value: string) => string | void;
+  onConfirm: (value: string) => string | void | Promise<string | void>;
 }
 
 export function KeyboardSheet({
   title, hint, placeholder, initialValue = '', layout = 'text', capitalize = 'none',
   maxLength = 60, required = true, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar',
-  displayValue, onLiveChange, onCancel, onConfirm,
+  displayValue, announce, onLiveChange, onCancel, onConfirm,
 }: KeyboardSheetProps) {
   const [draft, setDraft] = useState(initialValue);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   function update(value: string) {
     setDraft(value);
@@ -35,12 +38,18 @@ export function KeyboardSheet({
     onLiveChange?.(value);
   }
 
-  function confirm() {
-    const result = onConfirm(draft);
-    if (typeof result === 'string' && result) setError(result);
+  async function confirm() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await onConfirm(draft);
+      if (typeof result === 'string' && result) setError(result);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  const blocked = required && draft.trim() === '';
+  const blocked = busy || (required && draft.trim() === '');
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/55" role="dialog" aria-modal="true" aria-label={title}>
@@ -55,6 +64,8 @@ export function KeyboardSheet({
           {draft ? (displayValue?.(draft) ?? draft) : <span className="font-semibold text-slate-300">{placeholder}</span>}
           <span className="ml-0.5 inline-block h-6 w-0.5 sm:h-8 animate-pulse bg-brand-500 align-middle" />
         </div>
+
+        {announce && <p className="sr-only" aria-live="polite">{announce(draft)}</p>}
 
         {error && (
           <p role="alert" className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700 sm:mb-3 sm:px-4 sm:py-2.5 sm:text-base [@media(max-height:500px)]:col-start-1 [@media(max-height:500px)]:mb-1">
@@ -72,7 +83,7 @@ export function KeyboardSheet({
           </button>
           <button
             type="button"
-            onClick={confirm}
+            onClick={() => void confirm()}
             disabled={blocked}
             className="btn btn-accent h-12 flex-[2] px-2 text-base font-extrabold leading-tight sm:h-16 sm:text-lg [@media(max-height:500px)]:h-11 [@media(max-height:500px)]:flex-[4]"
           >

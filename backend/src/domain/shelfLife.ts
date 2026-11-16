@@ -1,5 +1,5 @@
 import { Errors } from '../utils/errors';
-import { addDays } from '../utils/dateUtils';
+import { addDays, formatDateBR } from '../utils/dateUtils';
 
 export interface CalculateDiscardInput {
   openedAt: string | Date;
@@ -8,6 +8,11 @@ export interface CalculateDiscardInput {
   capToOriginalExpiry: boolean;
   /** Data atual da cozinha. Quando informada, recusa abertura futura e etiqueta já vencida. */
   today?: string | Date | null;
+  /**
+   * Abertura mais antiga aceita (hoje da cozinha menos MAX_BACKDATE_DAYS). Só para a data informada
+   * pelo usuário; o Dividir não usa, porque a filha herda a abertura da origem.
+   */
+  earliestOpenedAt?: string | Date | null;
 }
 
 export interface CalculateDiscardResult {
@@ -53,6 +58,13 @@ export function calculateDiscard(input: CalculateDiscardInput): CalculateDiscard
 
   if (today && openedAt.getTime() > today.getTime()) {
     throw Errors.validation('A data de abertura não pode ser futura.');
+  }
+
+  if (input.earliestOpenedAt != null) {
+    const earliest = parseDateOnly(input.earliestOpenedAt, 'Data mínima de abertura');
+    if (openedAt.getTime() < earliest.getTime()) {
+      throw Errors.validation(`A data de abertura não pode ser anterior a ${formatDateBR(earliest)}.`);
+    }
   }
 
   // Vale mesmo com o teto desligado: embalagem vencida não gera etiqueta nova.

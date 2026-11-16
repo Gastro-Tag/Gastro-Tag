@@ -189,7 +189,8 @@ describe('API integration flow', () => {
     expect(future.status).toBe(422);
     expect(future.body.error.message).toContain('futura');
 
-    const expired = await postLabel({ ...payload, openedAt: daysFromToday(-10) });
+    // Prazo de 2 dias aberto há 2 dias (dentro do limite para trás): venceu ontem.
+    const expired = await postLabel({ ...payload, openedAt: daysFromToday(-2) });
     expect(expired.status).toBe(422);
     expect(expired.body.error.message).toContain('vencida');
 
@@ -1356,6 +1357,376 @@ describe('closing and splitting labels', () => {
       expect((await listLabels({ status: 'ABERTA' })).status).toBe(422);
       expect((await listLabels({ due: 'ontem' })).status).toBe(422);
       expect((await listLabels({ parentLabelId: 'nao-e-uuid' })).status).toBe(422);
+    });
+  });
+});
+
+describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e saúde', () => {
+  const asAdmin = () => `Bearer ${accessToken}`;
+  let asOperator = '';
+  let productId = '';
+  let pinUserId = '';
+  const pinUserName = `Operadora PIN ${suffix.slice(0, 6)}`;
+
+  const loginAs = async (userEmail: string) => {
+    const res = await request(app).post('/api/auth/login').send({ email: userEmail, password: 'TestPassword123!' }).expect(200);
+    return `Bearer ${res.body.data.accessToken as string}`;
+  };
+  const setPin = (id: string, pin: unknown, token = asAdmin()) =>
+    request(app).patch(`/api/users/${id}/pin`).set('Authorization', token).send({ pin });
+  const verify = (body: object, token = asAdmin(), ip = '198.51.100.1') =>
+    request(app).post('/api/totem/operators/verify').set('Authorization', token).set('X-Forwarded-For', ip).send(body);
+  const labelBody = (body: object = {}) => ({
+    productId, lot: 'LOT-G1', originalExpiryDate: daysFromToday(60), openedAt: today(),
+    responsibleName: 'Nome digitado', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+  });
+  const postLabel = (body: object = {}, token = asAdmin()) =>
+    request(app).post('/api/labels').set('Authorization', token).send(labelBody(body));
+  const newLabel = async (body: object = {}) => {
+    const res = await postLabel(body);
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string; shortCode: string };
+  };
+
+  beforeAll(async () => {
+    asOperator = await loginAs(operatorEmail);
+    // Prazos fictícios, só para o teste.
+    const product = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Produto G1 ${suffix.slice(0, 8)}`, brand: 'Teste', daysValidRefrigerated: 5, daysValidFrozen: 30,
+    });
+    productId = product.body.data.id;
+    productIds.push(productId);
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: pinUserName, email: `api-pin-${suffix}@example.test`, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    pinUserId = created.body.data.id;
+    createdUserIds.push(pinUserId);
+  });
+
+  describe('PIN do operador', () => {
+    it('only lets an admin set or remove a PIN and never exposes its hash', async () => {
+      expect((await setPin(pinUserId, '1234', asOperator)).status).toBe(403);
+      expect((await setPin(pinUserId, '12a4')).status).toBe(422);
+      expect((await setPin(pinUserId, '123')).status).toBe(422);
+      expect((await setPin(pinUserId, '1234567')).status).toBe(422);
+      expect((await setPin(randomUUID(), '1234')).status).toBe(404);
+
+      const set = await setPin(pinUserId, '4321');
+      expect(set.status).toBe(200);
+      expect(set.body.data).toMatchObject({ id: pinUserId, hasPin: true });
+      expect(set.body.data.pinHash).toBeUndefined();
+
+      const list = await request(app).get('/api/users').set('Authorization', asAdmin()).expect(200);
+      expect(list.body.data.find((user: { id: string }) => user.id === pinUserId).hasPin).toBe(true);
+      expect(list.body.data.find((user: { id: string }) => user.id === userId).hasPin).toBe(false);
+      expect(JSON.stringify(list.body)).not.toContain('pinHash');
+
+      const operators = await request(app).get('/api/totem/operators').set('Authorization', asOperator).expect(200);
+      expect(operators.body.data).toContainEqual({ id: pinUserId, name: pinUserName });
+      expect(operators.body.data.some((user: { id: string }) => user.id === userId)).toBe(false);
+
+      const removed = await setPin(pinUserId, null);
+      expect(removed.body.data.hasPin).toBe(false);
+      const after = await request(app).get('/api/totem/operators').set('Authorization', asOperator).expect(200);
+      expect(after.body.data.some((user: { id: string }) => user.id === pinUserId)).toBe(false);
+      await setPin(pinUserId, '4321').expect(200);
+    });
+
+    it('verifies the PIN with the same answer for a wrong PIN and a user without PIN', async () => {
+      const ok = await verify({ userId: pinUserId, pin: '4321' }, asOperator);
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.operator).toEqual({ id: pinUserId, name: pinUserName });
+      expect(typeof ok.body.data.handlerToken).toBe('string');
+      const ttl = new Date(ok.body.data.expiresAt).getTime() - Date.now();
+      expect(ttl).toBeGreaterThan(9.9 * 3_600_000);
+      expect(ttl).toBeLessThanOrEqual(10 * 3_600_000);
+
+      const wrong = await verify({ userId: pinUserId, pin: '0000' }, asOperator, '198.51.100.2');
+      expect(wrong.status).toBe(401);
+      expect(wrong.body.error).toEqual({ message: 'PIN incorreto.', code: 'INVALID_PIN' });
+      const noPin = await verify({ userId, pin: '0000' }, asOperator, '198.51.100.2');
+      expect(noPin.status).toBe(401);
+      expect(noPin.body.error).toEqual(wrong.body.error);
+
+      expect((await request(app).post('/api/totem/operators/verify').send({ userId: pinUserId, pin: '4321' })).status).toBe(401);
+    });
+
+    it('blocks the sixth failed PIN for the same device and operator', async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect((await verify({ userId: pinUserId, pin: '9999' }, asOperator, '198.51.100.3')).status).toBe(401);
+      }
+      const blocked = await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.3');
+      expect(blocked.status).toBe(429);
+      expect(blocked.body.error.code).toBe('RATE_LIMITED');
+      // Outro aparelho não fica bloqueado.
+      expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.4')).status).toBe(200);
+    }, 30_000);
+
+    it('records the confirmed operator on labels, children and closing', async () => {
+      const { handlerToken } = (await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.5')).body.data;
+
+      const created = await postLabel({ handlerToken, responsibleName: 'Ignorado' }, asOperator);
+      expect(created.status).toBe(201);
+      expect(created.body.data).toMatchObject({ handlerId: pinUserId, responsibleName: pinUserName, handlerVerified: true });
+      // Com operador confirmado, o nome digitado não é obrigatório.
+      const withoutName = await postLabel({ handlerToken, responsibleName: undefined }, asOperator);
+      expect(withoutName.status).toBe(201);
+      expect(withoutName.body.data.responsibleName).toBe(pinUserName);
+      expect((await postLabel({ responsibleName: undefined }, asOperator)).status).toBe(422);
+
+      const typed = await postLabel({}, asOperator);
+      expect(typed.body.data).toMatchObject({ handlerId: null, responsibleName: 'Nome digitado', handlerVerified: false });
+
+      const split = await request(app).post(`/api/labels/${created.body.data.id}/split`).set('Authorization', asOperator)
+        .send({ count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, handlerToken, closeParent: true });
+      expect(split.status).toBe(201);
+      expect(split.body.data.children[0]).toMatchObject({ handlerId: pinUserId, responsibleName: pinUserName, handlerVerified: true });
+      expect(split.body.data.parent.closedByName).toBe(pinUserName);
+
+      const closed = await request(app).post(`/api/labels/${typed.body.data.id}/close`).set('Authorization', asOperator)
+        .send({ outcome: 'USADO', handlerToken, responsibleName: 'Ignorado' });
+      expect(closed.status).toBe(200);
+      expect(closed.body.data.closedByName).toBe(pinUserName);
+      expect(closed.body.data.closedById).toBe(operatorId);
+    });
+
+    it('closes with the typed shift name, or with the logged account without one', async () => {
+      const typed = await newLabel();
+      const closed = await request(app).post(`/api/labels/${typed.id}/close`).set('Authorization', asOperator)
+        .send({ outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO', responsibleName: '  Maria do turno ' });
+      expect(closed.status).toBe(200);
+      expect(closed.body.data).toMatchObject({ closedByName: 'Maria do turno', closedById: operatorId });
+
+      const plain = await newLabel();
+      const closedPlain = await request(app).post(`/api/labels/${plain.id}/close`).set('Authorization', asOperator)
+        .send({ outcome: 'USADO' });
+      expect(closedPlain.body.data.closedByName).toBe('Operador de integração');
+      const tooLong = await newLabel();
+      expect((await request(app).post(`/api/labels/${tooLong.id}/close`).set('Authorization', asOperator)
+        .send({ outcome: 'USADO', responsibleName: 'x'.repeat(101) })).status).toBe(422);
+    });
+
+    it('rejects a handler token from another session, a forged one, a changed PIN and a deactivated user', async () => {
+      const { handlerToken } = (await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.6')).body.data;
+      const otherSession = await loginAs(operatorEmail);
+      const fromOther = await postLabel({ handlerToken }, otherSession);
+      expect(fromOther.status).toBe(401);
+      expect(fromOther.body.error).toEqual({ message: 'Confirme o operador do turno novamente.', code: 'HANDLER_INVALID' });
+      // O token de acesso não serve como token de operador.
+      expect((await postLabel({ handlerToken: accessToken }, asAdmin())).body.error.code).toBe('HANDLER_INVALID');
+      expect((await postLabel({ handlerToken: 'nao-e-um-token' }, asOperator)).body.error.code).toBe('HANDLER_INVALID');
+
+      // Trocar o PIN invalida o token emitido com o anterior.
+      await setPin(pinUserId, '5678').expect(200);
+      expect((await postLabel({ handlerToken }, asOperator)).body.error.code).toBe('HANDLER_INVALID');
+      const fresh = (await verify({ userId: pinUserId, pin: '5678' }, asOperator, '198.51.100.6')).body.data.handlerToken;
+      expect((await postLabel({ handlerToken: fresh }, asOperator)).status).toBe(201);
+
+      await request(app).put(`/api/users/${pinUserId}`).set('Authorization', asAdmin()).send({ active: false }).expect(200);
+      const deactivated = await postLabel({ handlerToken: fresh }, asOperator);
+      expect(deactivated.status).toBe(401);
+      expect(deactivated.body.error.code).toBe('HANDLER_INVALID');
+      expect((await verify({ userId: pinUserId, pin: '5678' }, asOperator, '198.51.100.6')).status).toBe(401);
+      const operators = await request(app).get('/api/totem/operators').set('Authorization', asOperator).expect(200);
+      expect(operators.body.data.some((user: { id: string }) => user.id === pinUserId)).toBe(false);
+      await request(app).put(`/api/users/${pinUserId}`).set('Authorization', asAdmin()).send({ active: true }).expect(200);
+    });
+    it('returns the label and children already created for a resend even after the handler token became invalid', async () => {
+      const { handlerToken } = (await verify({ userId: pinUserId, pin: '5678' }, asOperator, '198.51.100.7')).body.data;
+      const requestId = randomUUID();
+      const created = await postLabel({ handlerToken, requestId }, asOperator);
+      expect(created.status).toBe(201);
+      const splitRequestId = randomUUID();
+      const splitBody = { count: 2, storageType: 'REFRIGERADO', storageTemperature: 4, handlerToken, requestId: splitRequestId };
+      const splitLabel = (body: object) => request(app).post(`/api/labels/${created.body.data.id}/split`)
+        .set('Authorization', asOperator).send(body);
+      const split = await splitLabel(splitBody);
+      expect(split.status).toBe(201);
+
+      // PIN trocado: o token antigo deixa de valer, mas o reenvio do mesmo pedido devolve o que já existe.
+      await setPin(pinUserId, '2468').expect(200);
+      const resent = await postLabel({ handlerToken, requestId }, asOperator);
+      expect(resent.status).toBe(200);
+      expect(resent.body.data).toMatchObject({ id: created.body.data.id, handlerId: pinUserId });
+      const resplit = await splitLabel(splitBody);
+      expect(resplit.status).toBe(200);
+      const ids = (res: { body: { data: { children: { id: string }[] } } }) => res.body.data.children.map((child) => child.id).sort();
+      expect(ids(resplit)).toEqual(ids(split));
+
+      // Pedido novo com o token antigo continua recusado.
+      const fresh = await postLabel({ handlerToken, requestId: randomUUID() }, asOperator);
+      expect(fresh.status).toBe(401);
+      expect(fresh.body.error.code).toBe('HANDLER_INVALID');
+      const freshSplit = await splitLabel({ ...splitBody, requestId: randomUUID() });
+      expect(freshSplit.status).toBe(401);
+      expect(freshSplit.body.error.code).toBe('HANDLER_INVALID');
+    });
+  });
+
+  describe('limite da data de abertura', () => {
+    it('reports the kitchen date and the backdate limit in /auth/me', async () => {
+      const me = await request(app).get('/api/auth/me').set('Authorization', asOperator).expect(200);
+      expect(me.body.data.sub).toBe(operatorId);
+      expect(me.body.meta).toEqual({ kitchenToday: today(), maxBackdateDays: 2 });
+    });
+
+    it('accepts an opening 2 days ago and rejects 3 days ago and the future', async () => {
+      expect((await postLabel({ openedAt: daysFromToday(-2) })).status).toBe(201);
+      const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+        productId, originalExpiryDate: daysFromToday(60), openedAt: daysFromToday(-2), storageType: 'REFRIGERADO',
+      });
+      expect(preview.status).toBe(200);
+
+      const [y, m, d] = daysFromToday(-2).split('-');
+      const tooOld = await postLabel({ openedAt: daysFromToday(-3) });
+      expect(tooOld.status).toBe(422);
+      expect(tooOld.body.error.message).toBe(`A data de abertura não pode ser anterior a ${d}/${m}/${y}.`);
+      const tooOldPreview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+        productId, originalExpiryDate: daysFromToday(60), openedAt: daysFromToday(-3), storageType: 'REFRIGERADO',
+      });
+      expect(tooOldPreview.status).toBe(422);
+      expect((await postLabel({ openedAt: daysFromToday(1) })).status).toBe(422);
+    });
+
+    it('does not apply the limit when splitting an older label', async () => {
+      const parent = await newLabel();
+      await prisma.label.update({ where: { id: parent.id }, data: { openedAt: new Date(`${daysFromToday(-5)}T00:00:00Z`) } });
+      const split = await request(app).post(`/api/labels/${parent.id}/split`).set('Authorization', asAdmin())
+        .send({ count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' });
+      expect(split.status).toBe(201);
+      expect(split.body.data.children[0].openedAt.slice(0, 10)).toBe(daysFromToday(-5));
+    });
+  });
+
+  describe('descarte do dia', () => {
+    it('groups active labels by the kitchen date, not the UTC date', async () => {
+      const kitchenDay = today();
+      const setDiscard = (id: string, date: string) =>
+        prisma.label.update({ where: { id }, data: { discardAt: new Date(`${date}T00:00:00Z`) } });
+      const expired = await newLabel();
+      await setDiscard(expired.id, daysFromToday(-1));
+      const dueToday = await newLabel();
+      await setDiscard(dueToday.id, kitchenDay);
+      const tomorrow = await newLabel();
+      await setDiscard(tomorrow.id, daysFromToday(1));
+      const later = await newLabel();
+      await setDiscard(later.id, daysFromToday(2));
+      const closedToday = await newLabel();
+      await setDiscard(closedToday.id, kitchenDay);
+      await request(app).post(`/api/labels/${closedToday.id}/close`).set('Authorization', asAdmin()).send({ outcome: 'USADO' }).expect(200);
+
+      // 23:30 em Manaus (UTC−4) já é o dia seguinte em UTC: o "hoje" tem de seguir a cozinha.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date(`${daysFromToday(1)}T03:30:00Z`));
+        expect(new Date().toISOString().slice(0, 10)).not.toBe(kitchenDay);
+        const token = await loginAs(operatorEmail);
+        const due = await request(app).get('/api/labels/due').set('Authorization', token);
+        expect(due.status).toBe(200);
+        expect(due.body.meta.kitchenToday).toBe(kitchenDay);
+        const ids = (group: 'expired' | 'today' | 'tomorrow') => due.body.data[group].map((label: { id: string }) => label.id);
+        expect(ids('expired')).toContain(expired.id);
+        expect(ids('today')).toContain(dueToday.id);
+        expect(ids('today')).not.toContain(tomorrow.id);
+        expect(ids('tomorrow')).toContain(tomorrow.id);
+        for (const group of ['expired', 'today', 'tomorrow'] as const) {
+          expect(ids(group)).not.toContain(later.id);
+          expect(ids(group)).not.toContain(closedToday.id);
+          expect(due.body.meta.counts[group]).toBeGreaterThanOrEqual(ids(group).length);
+          const dates = due.body.data[group].map((label: { discardAt: string }) => label.discardAt);
+          expect(dates).toEqual([...dates].sort());
+        }
+        expect(due.body.data.today.find((label: { id: string }) => label.id === dueToday.id))
+          .toMatchObject({ status: 'ATIVA', handlerVerified: false, childrenCount: 0 });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe('exportação CSV', () => {
+    const exportCsv = (query: Record<string, string>, token = asAdmin()) =>
+      request(app).get('/api/labels/export.csv').query(query).set('Authorization', token)
+        .buffer(true).parse((res, callback) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => callback(null, Buffer.concat(chunks)));
+        });
+    const rowsOf = (body: Buffer) => body.toString('utf8').replace(/^﻿/, '').split('\r\n').filter(Boolean);
+
+    it('is only for admins', async () => {
+      const res = await request(app).get('/api/labels/export.csv').set('Authorization', asOperator);
+      expect(res.status).toBe(403);
+    });
+
+    it('exports a spreadsheet with BOM, semicolons, Brazilian dates and formula protection', async () => {
+      const formula = await newLabel({ lot: '=1+1', responsibleName: 'Ana "Chefe"' });
+      const frozen = await newLabel({ storageType: 'CONGELADO', storageTemperature: -18 });
+      await request(app).post(`/api/labels/${formula.id}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'DESCARTADO', discardReason: 'OUTRO', note: '@nota' }).expect(200);
+
+      const res = await exportCsv({ productId });
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toBe('text/csv; charset=utf-8');
+      expect(res.headers['content-disposition']).toBe(`attachment; filename="etiquetas-${today()}.csv"`);
+      const body = res.body as Buffer;
+      expect([...body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+
+      const rows = rowsOf(body);
+      expect(rows[0].split(';')).toHaveLength(22);
+      expect(rows[0]).toContain('"Código";"Produto";"Marca";"Lote"');
+      const row = rows.find((line) => line.startsWith(`"${formula.shortCode}"`))!;
+      expect(row).toBeTruthy();
+      expect(row).toContain(`"'=1+1"`);
+      expect(row).toContain('"Ana ""Chefe"""');
+      expect(row).toContain(`"'@nota"`);
+      expect(row).toContain('"Encerrada";"Descartado";"Outro"');
+      expect(row).toContain('"sem regra validada"');
+      const [y, m, d] = today().split('-');
+      expect(row).toContain(`"${d}/${m}/${y}"`);
+      expect(row).toContain('"não"');
+      // Temperatura negativa com o sinal de menos U+2212: sem apóstrofo e sem virar fórmula.
+      const frozenRow = rows.find((line) => line.startsWith(`"${frozen.shortCode}"`))!;
+      expect(frozenRow).toContain('"Congelado";"−18,0 °C"');
+      expect(frozenRow).not.toContain("'-18");
+      expect(frozenRow).not.toContain('"-18');
+    });
+
+    it('applies the list filters and the creation period', async () => {
+      const active = await newLabel();
+      const all = rowsOf((await exportCsv({ productId })).body);
+      const closed = rowsOf((await exportCsv({ productId, status: 'ENCERRADA' })).body);
+      expect(all.some((line) => line.startsWith(`"${active.shortCode}"`))).toBe(true);
+      expect(closed.some((line) => line.startsWith(`"${active.shortCode}"`))).toBe(false);
+      expect(closed.length).toBeLessThan(all.length);
+      expect(rowsOf((await exportCsv({ productId, q: active.shortCode })).body)).toHaveLength(2);
+
+      expect(rowsOf((await exportCsv({ productId, from: today(), to: today() })).body).length).toBe(all.length);
+      expect(rowsOf((await exportCsv({ productId, from: daysFromToday(1) })).body)).toHaveLength(1);
+      expect(rowsOf((await exportCsv({ productId, to: daysFromToday(-1) })).body)).toHaveLength(1);
+      expect((await exportCsv({ from: today(), to: daysFromToday(-1) })).status).toBe(422);
+      expect((await exportCsv({ due: 'ontem' })).status).toBe(422);
+    });
+  });
+
+  describe('saúde', () => {
+    it('answers ok when the database responds and 503 without details when it does not', async () => {
+      const ok = await request(app).get('/health');
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual({ status: 'ok', db: 'ok' });
+
+      const outage = vi.spyOn(prisma, '$queryRaw').mockRejectedValueOnce(new Error('conexão recusada'));
+      try {
+        const down = await request(app).get('/health');
+        expect(down.status).toBe(503);
+        expect(down.body).toEqual({ status: 'error', db: 'error' });
+      } finally {
+        outage.mockRestore();
+      }
+    });
+
+    it('no longer serves /uploads', async () => {
+      expect((await request(app).get('/uploads/qualquer.png')).status).toBe(404);
     });
   });
 });

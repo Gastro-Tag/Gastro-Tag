@@ -13,6 +13,7 @@ import { extractError } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
 import { createRequestKeeper } from '@/utils/requestId';
+import { shiftDate, useKitchenInfo } from '@/hooks/useKitchenInfo';
 import {
   SUGGESTED_TEMPERATURE, TEMP_MAX, TEMP_MIN, formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft,
 } from '@/utils/temperature';
@@ -39,6 +40,8 @@ export function LabelFormPage() {
   const [templateId, setTemplateId] = useState<LabelTemplateId>(loadLabelTemplateId);
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
   const [dateFilled, setDateFilled] = useState(false);
+  // Abertura: do limite para trás até hoje da cozinha (o servidor valida de novo).
+  const kitchen = useKitchenInfo();
   const [form, setForm] = useState({
     source: '', lot: '', originalExpiryDate: '',
     responsibleName: '', openedAt: '', storageType: '' as StorageType | '', storageTemp: '',
@@ -304,11 +307,20 @@ export function LabelFormPage() {
                 <input
                   type="date"
                   value={form.openedAt}
+                  min={kitchen ? shiftDate(kitchen.kitchenToday, -kitchen.maxBackdateDays) : undefined}
+                  max={kitchen?.kitchenToday}
                   onChange={(e) => setField('openedAt', e.target.value)}
                   className="input pl-10"
                   required
                 />
               </div>
+              {kitchen && (
+                <p className="mt-1.5 text-xs font-medium text-slate-400">
+                  {kitchen.maxBackdateDays === 0
+                    ? 'Só é possível usar a data de hoje.'
+                    : `Hoje ou até ${kitchen.maxBackdateDays} ${kitchen.maxBackdateDays === 1 ? 'dia' : 'dias'} para trás.`}
+                </p>
+              )}
             </Field>
 
             <Field label="Condição de Armazenamento" required>

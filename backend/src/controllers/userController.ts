@@ -15,6 +15,13 @@ const userFields = z.object({
 const createSchema = userFields.extend({ password: passwordSchema });
 const updateSchema = userFields.extend({ active: z.boolean() }).partial();
 const passwordBodySchema = z.object({ password: passwordSchema });
+// null remove o PIN.
+const pinBodySchema = z.object({
+  pin: z.union([
+    z.string({ invalid_type_error: 'O PIN deve ter de 4 a 6 dígitos.' }).regex(/^\d{4,6}$/, 'O PIN deve ter de 4 a 6 dígitos.'),
+    z.null(),
+  ], { errorMap: () => ({ message: 'O PIN deve ter de 4 a 6 dígitos.' }) }),
+});
 
 export const UserController = {
   async list(_req: Request, res: Response) {
@@ -38,5 +45,11 @@ export const UserController = {
     const { password } = passwordBodySchema.parse(req.body);
     await UserService.resetPassword(req.params.id, password);
     res.json({ success: true, data: null });
+  },
+
+  async setPin(req: Request, res: Response) {
+    const { pin } = pinBodySchema.parse(req.body);
+    const user = await UserService.setPin(req.params.id, pin);
+    res.json({ success: true, data: user });
   },
 };
