@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { AlarmClock, AlertTriangle, ArrowUpRight, CheckCircle2, RefreshCw, Trash2 } from 'lucide-react';
 import { CloseLabelDialog } from '@/components/labels/CloseLabelDialog';
 import { InlineLoader } from '@/components/ui/Spinner';

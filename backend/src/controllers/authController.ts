@@ -4,7 +4,8 @@ import { AuthService } from '../services/authService';
 import { kitchenToday, MAX_BACKDATE_DAYS } from '../utils/dateUtils';
 
 const loginSchema = z.object({
-  email:    z.string().email('E-mail inválido.'),
+  // E-mail sem diferenciar maiúsculas: a conta é guardada em minúsculas.
+  email:    z.string().trim().toLowerCase().email('E-mail inválido.'),
   password: z.string().min(6, 'Senha deve ter ao menos 6 caracteres.'),
 });
 

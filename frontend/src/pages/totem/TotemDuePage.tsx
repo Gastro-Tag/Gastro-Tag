@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   AlertTriangle, ArrowLeft, CheckCircle2, PartyPopper, RefreshCw, ShieldCheck, Trash2, User, X,
 } from 'lucide-react';

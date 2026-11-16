@@ -10,6 +10,21 @@ export function errorHandler(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   _next: NextFunction,
 ): void {
+  // Erros do parser de corpo (body-parser): são do cliente, não do servidor.
+  const bodyError = err as Error & { type?: string; status?: number };
+  if (bodyError.type === 'entity.parse.failed') {
+    res.status(400).json({ success: false, error: { message: 'JSON inválido.', code: 'INVALID_JSON' } });
+    return;
+  }
+  if (bodyError.type === 'entity.too.large') {
+    res.status(413).json({ success: false, error: { message: 'Requisição grande demais.', code: 'PAYLOAD_TOO_LARGE' } });
+    return;
+  }
+  if (bodyError.type && typeof bodyError.status === 'number' && bodyError.status >= 400 && bodyError.status < 500) {
+    res.status(bodyError.status).json({ success: false, error: { message: 'Requisição inválida.', code: 'BAD_REQUEST' } });
+    return;
+  }
+
   if (err instanceof ZodError) {
     res.status(422).json({
       success: false,

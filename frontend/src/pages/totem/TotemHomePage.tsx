@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   AlarmClock, AlertTriangle, CheckCircle2, History, PackageOpen, Printer,
   Refrigerator, RefreshCw, Search, Snowflake, Tag, X,

@@ -7,8 +7,7 @@ import { LABEL_TEMPERATURE_MAX, LABEL_TEMPERATURE_MIN } from '../domain/temperat
 const noNullByte = (value: string) => !value.includes('\u0000');
 
 // Mesma faixa de sanidade da temperatura informada na etiqueta.
-const temperature = z.number({ invalid_type_error: 'Informe a temperatura em número (°C).' })
-  .finite()
+const temperature = z.number({ error: 'Informe a temperatura em número (°C).' })
   .min(LABEL_TEMPERATURE_MIN, `Temperatura mínima: ${LABEL_TEMPERATURE_MIN} °C.`)
   .max(LABEL_TEMPERATURE_MAX, `Temperatura máxima: ${LABEL_TEMPERATURE_MAX} °C.`)
   .nullable().optional();

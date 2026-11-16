@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16.16-alpine3.24
     container_name: gastrotag_db
     restart: unless-stopped
     environment:
@@ -23,6 +23,8 @@ services:
       dockerfile: Dockerfile
     container_name: gastrotag_api
     restart: unless-stopped
+    # A API encerra sozinha em até 10 s após o SIGTERM (desligamento gracioso).
+    stop_grace_period: 15s
     environment:
       NODE_ENV: production
       PORT: 3333
@@ -35,6 +37,7 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?Defina JWT_REFRESH_SECRET no arquivo .env}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_SYNC_ON_BOOT: ${ADMIN_SYNC_ON_BOOT:-false}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
       MAX_BACKDATE_DAYS: ${MAX_BACKDATE_DAYS:-2}
     depends_on:
@@ -54,11 +57,59 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # nginx sem root escuta 8080 no container; no host continua a porta 80.
     ports:
-      - "80:80"
+      - "80:8080"
     depends_on:
       api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Túnel gratuito da Cloudflare (quick tunnel: sem conta, sem token) com link HTTPS público
+  # *.trycloudflare.com. Fica no perfil "tunel": NÃO sobe no "docker compose up" normal.
+  # Ligar/desligar: ./scripts/tunel.sh e ./scripts/tunel.sh parar (guia no README).
+  # Aponta para a porta 8081 do frontend (só na rede interna), que confia no CF-Connecting-IP.
+  # Sem "restart": depois de reiniciar o notebook ou o Docker, o túnel continua desligado.
+  tunel:
+    image: cloudflare/cloudflared:2026.10.7
+    container_name: gastrotag_tunel
+    profiles: ["tunel"]
+    command: tunnel --no-autoupdate --url http://frontend:8081
+    depends_on:
+      frontend:
+        condition: service_healthy
+
+  # Backup diário (pg_dump -Fc) no volume backups_data; um dump ao subir; mantém os últimos
+  # BACKUP_RETENCAO. Guia em scripts/README.md. A senha vai só por PGPASSWORD (ambiente).
+  backup:
+    image: postgres:16.16-alpine3.24
+    container_name: gastrotag_backup
+    restart: unless-stopped
+    # Dá tempo de um dump em andamento terminar antes do SIGKILL.
+    stop_grace_period: 60s
+    # tr remove um eventual CR (checkout com fim de linha do Windows) antes de executar.
+    entrypoint: ["sh", "-c", "tr -d '\\r' < /scripts/backup-postgres.sh > /tmp/backup-postgres.sh && exec sh /tmp/backup-postgres.sh loop"]
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-gastrotag}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
+      PGDATABASE: ${POSTGRES_DB:-gastrotag}
+      TZ: America/Manaus
+      BACKUP_DIR: /backups
+      BACKUP_HORARIO: ${BACKUP_HORARIO:-03:00}
+      BACKUP_RETENCAO: ${BACKUP_RETENCAO:-14}
+    volumes:
+      - backups_data:/backups
+      - ./scripts:/scripts:ro
+    depends_on:
+      db:
         condition: service_healthy
 
 volumes:
   postgres_data:
+  backups_data:

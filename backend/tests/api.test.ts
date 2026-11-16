@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import app from '../src/app';
 import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
+import { AdminBootstrapService } from '../src/services/adminBootstrapService';
+import { logger } from '../src/utils/logger';
 import { kitchenToday } from '../src/utils/dateUtils';
 
 // Precisa valer antes de importar o app: simula a API atrás do nginx.
@@ -1727,6 +1729,183 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
 
     it('no longer serves /uploads', async () => {
       expect((await request(app).get('/uploads/qualquer.png')).status).toBe(404);
+    });
+  });
+});
+
+describe('etapa G2a: e-mail sem diferenciar maiúsculas, admin no boot e mensagens do zod 4', () => {
+  const asAdmin = () => `Bearer ${accessToken}`;
+
+  describe('e-mail', () => {
+    it('stores the e-mail in lowercase and logs in with any case', async () => {
+      const mixed = `  Api-Caixa-${suffix}@Example.TEST `;
+      const lower = mixed.trim().toLowerCase();
+      const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+        name: 'Operador caixa', email: mixed, password: 'TestPassword123!', role: 'OPERATOR',
+      });
+      expect(created.status).toBe(201);
+      createdUserIds.push(created.body.data.id);
+      expect(created.body.data.email).toBe(lower);
+
+      const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.20')
+        .send({ email: lower.toUpperCase(), password: 'TestPassword123!' });
+      expect(login.status).toBe(200);
+      expect(login.body.data.user.email).toBe(lower);
+
+      const duplicate = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+        name: 'Duplicado só na caixa', email: lower.toUpperCase(), password: 'TestPassword123!', role: 'OPERATOR',
+      });
+      expect(duplicate.status).toBe(409);
+      expect(duplicate.body.error.code).toBe('CONFLICT');
+    });
+
+    it('rejects an update to an e-mail that only differs by case and normalizes updates', async () => {
+      const first = `api-upd-a-${suffix}@example.test`;
+      const second = `api-upd-b-${suffix}@example.test`;
+      const ids: string[] = [];
+      for (const userEmail of [first, second]) {
+        const res = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+          name: 'Operador atualização', email: userEmail, password: 'TestPassword123!', role: 'OPERATOR',
+        }).expect(201);
+        ids.push(res.body.data.id);
+        createdUserIds.push(res.body.data.id);
+      }
+      const clash = await request(app).put(`/api/users/${ids[1]}`).set('Authorization', asAdmin())
+        .send({ email: first.toUpperCase() });
+      expect(clash.status).toBe(409);
+
+      const renamed = `API-UPD-C-${suffix}@Example.test`;
+      const ok = await request(app).put(`/api/users/${ids[1]}`).set('Authorization', asAdmin()).send({ email: renamed });
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.email).toBe(renamed.toLowerCase());
+    });
+
+    it('verifies the admin with the e-mail in another case', async () => {
+      const res = await request(app).post('/api/auth/verify-admin').set('Authorization', asAdmin())
+        .set('X-Forwarded-For', '198.51.100.21').send({ email: email.toUpperCase(), password: 'TestPassword123!' });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({ valid: true });
+    });
+  });
+
+  describe('admin no boot', () => {
+    const bootEmail = `api-boot-${suffix}@example.test`;
+    const password = 'SenhaDoBoot123!';
+    const env = (extra: Record<string, string> = {}) => ({
+      ADMIN_EMAIL: ` ${bootEmail.toUpperCase()} `, ADMIN_PASSWORD: password, ...extra,
+    });
+    const bootUser = () => prisma.user.findUniqueOrThrow({ where: { email: bootEmail } });
+
+    afterAll(async () => {
+      await prisma.user.deleteMany({ where: { email: bootEmail } });
+    });
+
+    it('does nothing without both variables and rejects a short password when creating', async () => {
+      expect(await AdminBootstrapService.ensure({ ADMIN_EMAIL: bootEmail })).toBe('skipped');
+      await expect(AdminBootstrapService.ensure({ ADMIN_EMAIL: bootEmail, ADMIN_PASSWORD: 'curta' }))
+        .rejects.toThrow('12 caracteres');
+      expect(await prisma.user.findUnique({ where: { email: bootEmail } })).toBeNull();
+    });
+
+    it('only creates the admin when missing and never changes it without ADMIN_SYNC_ON_BOOT', async () => {
+      expect(await AdminBootstrapService.ensure(env())).toBe('created');
+      const created = await bootUser();
+      expect(created.role).toBe('ADMIN');
+
+      // Conta desativada e rebaixada pelo painel: o boot não desfaz.
+      await prisma.user.update({ where: { id: created.id }, data: { active: false, role: 'OPERATOR' } });
+      expect(await AdminBootstrapService.ensure(env({ ADMIN_PASSWORD: 'OutraSenhaQualquer1!' }))).toBe('kept');
+      expect(await AdminBootstrapService.ensure(env({ ADMIN_SYNC_ON_BOOT: 'false' }))).toBe('kept');
+      const kept = await bootUser();
+      expect(kept.active).toBe(false);
+      expect(kept.role).toBe('OPERATOR');
+      expect(kept.passwordHash).toBe(created.passwordHash);
+
+      // Senha curta com a conta já existente e sem sync: sobe com aviso, sem alterar nada.
+      const warn = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+      try {
+        expect(await AdminBootstrapService.ensure(env({ ADMIN_PASSWORD: 'curta' }))).toBe('kept');
+        expect(warn.mock.calls.some(([message]) => String(message).includes('12 caracteres'))).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+      expect((await bootUser()).passwordHash).toBe(created.passwordHash);
+      // Com sync, a senha curta continua derrubando o boot.
+      await expect(AdminBootstrapService.ensure(env({ ADMIN_PASSWORD: 'curta', ADMIN_SYNC_ON_BOOT: 'true' })))
+        .rejects.toThrow('12 caracteres');
+      expect((await bootUser()).active).toBe(false);
+    });
+
+    it('re-syncs password, role and active flag with ADMIN_SYNC_ON_BOOT=true', async () => {
+      const newPassword = 'SenhaNovaDoBoot456!';
+      const sync = env({ ADMIN_PASSWORD: newPassword, ADMIN_SYNC_ON_BOOT: 'true' });
+      expect(await AdminBootstrapService.ensure(sync)).toBe('synced');
+      const synced = await bootUser();
+      expect(synced.active).toBe(true);
+      expect(synced.role).toBe('ADMIN');
+      const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.22')
+        .send({ email: bootEmail, password: newPassword });
+      expect(login.status).toBe(200);
+
+      expect(await AdminBootstrapService.ensure(sync)).toBe('in_sync');
+      // Sem mudança, a sessão continua valendo.
+      const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${login.body.data.accessToken}`);
+      expect(me.status).toBe(200);
+    });
+  });
+
+  describe('mensagens de validação', () => {
+    let productId = '';
+
+    beforeAll(async () => {
+      // Prazos fictícios, só para o teste.
+      const product = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+        name: `Produto G2a ${suffix.slice(0, 8)}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30,
+      }).expect(201);
+      productId = product.body.data.id;
+      productIds.push(productId);
+    });
+
+    it('keeps the custom Portuguese messages after the zod 4 migration', async () => {
+      const base = {
+        productId, lot: 'LOT-G2A', originalExpiryDate: daysFromToday(30), responsibleName: 'Teste',
+        storageType: 'REFRIGERADO',
+      };
+      const missing = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(base);
+      expect(missing.status).toBe(422);
+      expect(missing.body.error.message).toBe('Informe a temperatura medida em °C.');
+
+      const wrongType = await request(app).post('/api/labels').set('Authorization', asAdmin())
+        .send({ ...base, storageTemperature: '4' });
+      expect(wrongType.body.error.message).toBe('Informe a temperatura em número (°C).');
+
+      const label = await request(app).post('/api/labels').set('Authorization', asAdmin())
+        .send({ ...base, storageTemperature: 4 }).expect(201);
+      const labelId = label.body.data.id as string;
+
+      const close = await request(app).post(`/api/labels/${labelId}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'PERDIDO' });
+      expect(close.status).toBe(422);
+      expect(close.body.error.message).toBe('Escolha o destino da etiqueta.');
+
+      const reason = await request(app).post(`/api/labels/${labelId}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'DESCARTADO', discardReason: 'NAO_SEI' });
+      expect(reason.body.error.message).toBe('Motivo do descarte inválido.');
+
+      const split = (body: object) => request(app).post(`/api/labels/${labelId}/split`).set('Authorization', asAdmin())
+        .send({ storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Teste', ...body });
+      expect((await split({})).body.error.message).toBe('Informe a quantidade de etiquetas.');
+      expect((await split({ count: 'dois' })).body.error.message).toBe('Quantidade inválida.');
+
+      const pin = await request(app).patch(`/api/users/${operatorId}/pin`).set('Authorization', asAdmin()).send({ pin: 1234 });
+      expect(pin.status).toBe(422);
+      expect(pin.body.error.message).toBe('O PIN deve ter de 4 a 6 dígitos.');
+
+      const rule = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin()).send({
+        ...ruleBody, productId, storageType: 'CONGELADO', shelfLifeDays: 10, minTemperature: 'frio',
+      });
+      expect(rule.status).toBe(422);
+      expect(rule.body.error.message).toBe('Informe a temperatura em número (°C).');
     });
   });
 });

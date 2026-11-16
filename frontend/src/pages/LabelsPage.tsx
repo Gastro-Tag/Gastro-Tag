@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { CalendarDays, Download, RefreshCw, Search, Tag, AlarmClock } from 'lucide-react';
 import { labelApi } from '@/services';
 import type { CloseLabelResult, Label, LabelExportParams, LabelListParams, LabelStatus, SplitResult, StorageType } from '@/types';
@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { useAuthStore } from '@/store/authStore';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Pagination } from '@/components/ui/Pagination';
+import { LoadError } from '@/components/ui/LoadError';
 import { InlineLoader, Spinner } from '@/components/ui/Spinner';
 import { useToastContext } from '@/components/ui/Toast';
 import { useDebounce } from '@/hooks/useDebounce';
@@ -25,6 +26,7 @@ export function LabelsPage() {
   const [labels, setLabels] = useState<Label[]>([]);
   const [meta, setMeta] = useState({ total: 0, totalPages: 1, page: 1 });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -54,10 +56,12 @@ export function LabelsPage() {
     if (from && to && from > to) {
       setLabels([]);
       setMeta({ total: 0, totalPages: 1, page: 1 });
+      setLoadError('');
       setLoading(false);
       return;
     }
     setLoading(true);
+    setLoadError('');
     try {
       const base: LabelListParams = {
         q: debouncedSearch.trim() || undefined,
@@ -85,7 +89,7 @@ export function LabelsPage() {
         setMeta({ total: data.meta.total, totalPages: data.meta.totalPages, page: data.meta.page });
       }
     } catch (error) {
-      toast(extractError(error), 'error');
+      setLoadError(extractError(error));
     } finally {
       setLoading(false);
     }
@@ -273,6 +277,8 @@ export function LabelsPage() {
       {/* Label List */}
       {loading ? (
         <InlineLoader text="Carregando etiquetas…" />
+      ) : loadError ? (
+        <LoadError title="Não foi possível carregar as etiquetas." message={loadError} onRetry={() => void fetchLabels()} />
       ) : labels.length === 0 ? (
         <EmptyState
           icon="🏷"

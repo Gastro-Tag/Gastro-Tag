@@ -1,0 +1,2 @@
+# Scripts shell rodam em Linux (containers); manter LF mesmo no Windows.
+*.sh text eol=lf

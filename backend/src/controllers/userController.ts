@@ -8,7 +8,8 @@ const passwordSchema = z.string()
 
 const userFields = z.object({
   name:  z.string().trim().min(2, 'Nome deve ter ao menos 2 caracteres.').max(100),
-  email: z.string().trim().email('E-mail inválido.').max(120),
+  // Guardado em minúsculas: "Ana@x.com" e "ana@x.com" são a mesma conta.
+  email: z.string().trim().toLowerCase().email('E-mail inválido.').max(120),
   role:  z.enum(['ADMIN', 'OPERATOR']),
 });
 
@@ -18,9 +19,9 @@ const passwordBodySchema = z.object({ password: passwordSchema });
 // null remove o PIN.
 const pinBodySchema = z.object({
   pin: z.union([
-    z.string({ invalid_type_error: 'O PIN deve ter de 4 a 6 dígitos.' }).regex(/^\d{4,6}$/, 'O PIN deve ter de 4 a 6 dígitos.'),
+    z.string({ error: 'O PIN deve ter de 4 a 6 dígitos.' }).regex(/^\d{4,6}$/, 'O PIN deve ter de 4 a 6 dígitos.'),
     z.null(),
-  ], { errorMap: () => ({ message: 'O PIN deve ter de 4 a 6 dígitos.' }) }),
+  ], { error: 'O PIN deve ter de 4 a 6 dígitos.' }),
 });
 
 export const UserController = {

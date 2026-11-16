@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Spinner } from '@/components/ui/Spinner';

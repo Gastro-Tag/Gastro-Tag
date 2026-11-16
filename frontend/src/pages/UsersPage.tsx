@@ -6,6 +6,7 @@ import type { ManagedUser, UserRole } from '@/types';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { InlineLoader, Spinner } from '@/components/ui/Spinner';
+import { LoadError } from '@/components/ui/LoadError';
 import { PasswordInput } from '@/components/ui/PasswordInput';
 import { useToastContext } from '@/components/ui/Toast';
 import { useAuthStore } from '@/store/authStore';
@@ -25,17 +26,19 @@ export function UsersPage() {
   const { toast } = useToastContext();
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toToggle, setToToggle] = useState<ManagedUser | null>(null);
   const [toRemovePin, setToRemovePin] = useState<ManagedUser | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const { data } = await userApi.list();
       setUsers(data.data);
     } catch (err) {
-      toast(extractError(err), 'error');
+      setLoadError(extractError(err));
     } finally {
       setLoading(false);
     }
@@ -86,6 +89,8 @@ export function UsersPage() {
 
       {loading ? (
         <InlineLoader text="Carregando usuários…" />
+      ) : loadError ? (
+        <LoadError title="Não foi possível carregar os usuários." message={loadError} onRetry={() => void load()} />
       ) : users.length === 0 ? (
         <EmptyState icon="👤" title="Nenhum usuário encontrado" desc="Cadastre a conta do totem e os operadores." />
       ) : (

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { LayoutDashboard, LogOut, ShieldCheck, User } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useTotemStore } from '@/store/totemStore';

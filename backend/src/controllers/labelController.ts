@@ -16,10 +16,12 @@ const labelFields = z.object({
   openedAt:    dateSchema.optional(),
   storageType: z.enum(['REFRIGERADO', 'CONGELADO']),
   // Medição em °C; o servidor arredonda a uma casa e gera o texto impresso ("4,0 °C").
+  // zod 4 já recusa NaN e Infinity em z.number().
   storageTemperature: z.number({
-    required_error: 'Informe a temperatura medida em °C.',
-    invalid_type_error: 'Informe a temperatura em número (°C).',
-  }).finite('Informe a temperatura em número (°C).')
+    error: (issue) => (issue.input === undefined
+      ? 'Informe a temperatura medida em °C.'
+      : 'Informe a temperatura em número (°C).'),
+  })
     .min(LABEL_TEMPERATURE_MIN, `Temperatura fora da faixa aceita (${LABEL_TEMPERATURE_MIN} a ${LABEL_TEMPERATURE_MAX} °C).`)
     .max(LABEL_TEMPERATURE_MAX, `Temperatura fora da faixa aceita (${LABEL_TEMPERATURE_MIN} a ${LABEL_TEMPERATURE_MAX} °C).`)
     .optional(),
@@ -74,9 +76,9 @@ const listSchema = filterFields.extend({
 const exportSchema = filterFields.refine(...periodOrder);
 
 const closeSchema = z.object({
-  outcome: z.enum(['USADO', 'DESCARTADO', 'CANCELADO'], { errorMap: () => ({ message: 'Escolha o destino da etiqueta.' }) }),
+  outcome: z.enum(['USADO', 'DESCARTADO', 'CANCELADO'], { error: 'Escolha o destino da etiqueta.' }),
   discardReason: z.enum(['PRAZO_VENCIDO', 'ALTERACAO_SENSORIAL', 'EMBALAGEM_DANIFICADA', 'OUTRO'], {
-    errorMap: () => ({ message: 'Motivo do descarte inválido.' }),
+    error: 'Motivo do descarte inválido.',
   }).optional(),
   // Observação vazia conta como não informada.
   note: z.string().trim().max(300, 'A observação deve ter no máximo 300 caracteres.').optional()
@@ -96,7 +98,9 @@ const splitPreviewSchema = z.object({
 });
 
 const splitSchema = splitPreviewSchema.extend({
-  count: z.number({ required_error: 'Informe a quantidade de etiquetas.', invalid_type_error: 'Quantidade inválida.' })
+  count: z.number({
+    error: (issue) => (issue.input === undefined ? 'Informe a quantidade de etiquetas.' : 'Quantidade inválida.'),
+  })
     .int('A quantidade deve ser um número inteiro.')
     .min(1, 'A quantidade deve ser de 1 a 20 etiquetas.').max(20, 'A quantidade deve ser de 1 a 20 etiquetas.'),
   storageTemperature: labelFields.shape.storageTemperature.unwrap(),
