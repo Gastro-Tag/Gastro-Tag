@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
 import { LayoutDashboard, LogOut, ShieldCheck, User } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useTotemStore } from '@/store/totemStore';
 import { useIdle } from '@/hooks/useIdle';
 import { cn } from '@/utils/cn';
+import { createPressGesture } from '@/utils/pressGesture';
 import { AdminUnlockDialog } from './AdminUnlockDialog';
 import { OperatorSheet } from './OperatorSheet';
 
 const IDLE_MS = 60_000;        // volta ao início após 60 s sem toque
-const LONG_PRESS_MS = 1_500;   // segurar o logo pede a senha do administrador
+const LONG_PRESS_MS = 1_500;   // segurar a logo pede a senha do administrador; toque curto volta ao início
 
 /** Protege as rotas do totem: exige sessão, mas não usa o layout administrativo. */
 export function TotemRoute() {
@@ -25,7 +26,6 @@ function TotemShell() {
   const { operator, handlerToken, openOperatorSheet, syncOperator } = useTotemStore();
   const [adminMenu, setAdminMenu] = useState<'locked' | 'unlocked' | null>(null);
   const [now, setNow] = useState(() => new Date());
-  const pressTimer = useRef(0);
 
   // Tela de totem: sem zoom por gesto, sem seleção de texto, sem menu de contexto.
   useEffect(() => {
@@ -56,11 +56,17 @@ function TotemShell() {
     if (location.pathname !== '/totem') navigate('/totem', { replace: true });
   });
 
-  const startPress = () => {
-    window.clearTimeout(pressTimer.current);
-    pressTimer.current = window.setTimeout(() => setAdminMenu('locked'), LONG_PRESS_MS);
-  };
-  const cancelPress = () => window.clearTimeout(pressTimer.current);
+  // Toque curto na logo volta ao início; segurar pede a senha do administrador.
+  const pathname = location.pathname;
+  const logoGesture = useMemo(
+    () => createPressGesture({
+      delayMs: LONG_PRESS_MS,
+      onTap: () => { if (pathname !== '/totem') navigate('/totem'); },
+      onLongPress: () => setAdminMenu('locked'),
+    }),
+    [pathname, navigate],
+  );
+  useEffect(() => () => logoGesture.cancel(), [logoGesture]);
 
   const clock = new Intl.DateTimeFormat('pt-BR', { hour: '2-digit', minute: '2-digit' }).format(now);
   const date = new Intl.DateTimeFormat('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }).format(now);
@@ -69,13 +75,22 @@ function TotemShell() {
     <div className="totem-root flex h-[100dvh] flex-col bg-[#F3F4F6] text-charcoal-800">
       <header className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-3 shadow-sm sm:h-20 sm:gap-4 sm:px-5 [@media(max-height:500px)]:h-14">
         <div
-          className="flex shrink-0 select-none items-center gap-2 sm:gap-3"
-          onPointerDown={startPress}
-          onPointerUp={cancelPress}
-          onPointerLeave={cancelPress}
-          onPointerCancel={cancelPress}
+          role="button"
+          tabIndex={0}
+          aria-label="Voltar ao início do totem (segure para opções do administrador)"
+          className="flex shrink-0 cursor-pointer touch-manipulation select-none items-center gap-2 rounded-xl sm:gap-3"
+          onPointerDown={logoGesture.start}
+          onPointerUp={logoGesture.end}
+          onPointerLeave={logoGesture.cancel}
+          onPointerCancel={logoGesture.cancel}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              if (!event.repeat && pathname !== '/totem') navigate('/totem');
+            }
+          }}
         >
-          <img src="/logo.png" alt="GastroTag" className="h-10 w-10 object-contain sm:h-12 sm:w-12" draggable={false} />
+          <img src="/logo-icon.png" alt="" className="h-10 w-10 object-contain sm:h-12 sm:w-12" draggable={false} />
           <div className="leading-none">
             <div className="text-xl font-extrabold tracking-tight sm:text-2xl">
               Gastro<span className="text-brand-500">Tag</span>
