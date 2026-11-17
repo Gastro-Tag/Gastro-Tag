@@ -131,7 +131,7 @@ export interface Label {
   productName?: string;
   productBrand?: string;
   responsibleName?: string | null;
-  rule?: { id: string; shelfLifeDays: number; source: string; observation?: string | null } | null;
+  rule?: { id: string; shelfLifeDays: number; source: string; sourceType?: RuleSourceType | null; observation?: string | null } | null;
   printedAt?:  string;
   printCount:  number;
   createdAt:   string;

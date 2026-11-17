@@ -21,8 +21,8 @@ export const DEFAULT_LABEL_TEMPLATE: LabelTemplateId = 'a4';
 export const LABEL_TEMPLATES: LabelTemplate[] = [
   { id: 'a4', name: 'Folha A4 / comum (9 cm)', description: 'Todas as informações, com logo, em papel comum (9 cm de largura).', widthMm: null, heightMm: null, compact: false, variant: 'full' },
   { id: 't100x60', name: 'Térmica 100 × 60 mm', description: 'Todas as informações, com logo. A letra diminui sozinha se o texto for longo.', widthMm: 100, heightMm: 60, compact: true, variant: 'full' },
-  { id: 't60x40', name: 'Térmica 60 × 40 mm (resumida)', description: 'Resumida: sem logo, marca, prazo/fonte, aviso do fabricante e assinatura. Mostra produto, descarte, abertura, lote, armazenamento, responsável e código.', widthMm: 60, heightMm: 40, compact: true, variant: 'short' },
-  { id: 't50x30', name: 'Térmica 50 × 30 mm (mínima)', description: 'Mínima: sem logo, marca, prazo/fonte, aviso do fabricante e assinatura. Mostra produto, descarte, abertura, lote, responsável e código; armazenamento só se couber.', widthMm: 50, heightMm: 30, compact: true, variant: 'minimal' },
+  { id: 't60x40', name: 'Térmica 60 × 40 mm (resumida)', description: 'Resumida: sem logo, marca e assinatura. Mostra produto, descarte (maior), abertura, lote, armazenamento, validade do fabricante, prazo e tipo da fonte (ou SEM REGRA VALIDADA), responsável e código.', widthMm: 60, heightMm: 40, compact: true, variant: 'short' },
+  { id: 't50x30', name: 'Térmica 50 × 30 mm (mínima)', description: 'Mínima: sem logo, marca, prazo/fonte e assinatura. Mostra produto, descarte (maior), abertura, lote, validade do fabricante, responsável e código, com S/ REGRA quando não há regra; armazenamento só se couber.', widthMm: 50, heightMm: 30, compact: true, variant: 'minimal' },
 ];
 
 export function isLabelTemplateId(value: unknown): value is LabelTemplateId {
@@ -37,15 +37,27 @@ export function getLabelTemplate(id: string | null | undefined): LabelTemplate {
 // impressão concordarem. Gravada com sucesso, quem manda é o localStorage, e outra aba vê a troca.
 let unsavedTemplateId: LabelTemplateId | null = null;
 
-export function loadLabelTemplateId(): LabelTemplateId {
-  if (unsavedTemplateId) return unsavedTemplateId;
+/** Modelo em uso neste aparelho. `explicit` é false quando ninguém escolheu: a impressão cai em A4 (padrão). */
+export function getLabelTemplateChoice(): { id: LabelTemplateId; explicit: boolean } {
+  if (unsavedTemplateId) return { id: unsavedTemplateId, explicit: true };
   try {
     const value = localStorage.getItem(LABEL_TEMPLATE_KEY);
-    return isLabelTemplateId(value) ? value : DEFAULT_LABEL_TEMPLATE;
+    return isLabelTemplateId(value)
+      ? { id: value, explicit: true }
+      : { id: DEFAULT_LABEL_TEMPLATE, explicit: false };
   } catch {
-    return DEFAULT_LABEL_TEMPLATE;
+    return { id: DEFAULT_LABEL_TEMPLATE, explicit: false };
   }
 }
+
+export function loadLabelTemplateId(): LabelTemplateId {
+  return getLabelTemplateChoice().id;
+}
+
+/** Avisa as telas abertas (mesma aba) de que o modelo mudou; outras abas recebem o evento `storage`. */
+export const LABEL_TEMPLATE_EVENT = 'gastrotag:label-template';
+
+export const LABEL_TEMPLATE_NOT_CHOSEN_TEXT = 'Modelo de etiqueta não escolhido neste aparelho: imprimindo em A4.';
 
 export function saveLabelTemplateId(id: LabelTemplateId): void {
   try {
@@ -54,4 +66,5 @@ export function saveLabelTemplateId(id: LabelTemplateId): void {
   } catch {
     unsavedTemplateId = id; // sem armazenamento: a escolha vale até recarregar a página
   }
+  window.dispatchEvent(new Event(LABEL_TEMPLATE_EVENT));
 }

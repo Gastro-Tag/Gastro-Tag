@@ -18,6 +18,7 @@ import {
 } from '@/utils/totem';
 import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
+import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
 import { createRequestKeeper } from '@/utils/requestId';
 import { isHandlerInvalid } from '@/utils/handler';
 
@@ -392,6 +393,7 @@ export function TotemLabelPage() {
       )}
 
       <div className="sticky bottom-0 -mx-3 mt-auto bg-gradient-to-t from-[#F3F4F6] via-[#F3F4F6] to-transparent px-3 pb-3 pt-3 sm:-mx-5 sm:px-5 sm:pb-5 sm:pt-4">
+        <LabelTemplateStatus large className="mb-2 [@media(max-height:500px)]:mb-1" />
         <button
           type="button"
           disabled={!canPrint}

@@ -174,13 +174,19 @@
 /* Último recurso: se nem na escala mínima couber, a altura cresce e o restante sai na etiqueta seguinte. */
 .print-thermal.pt-grow { height: auto; min-height: var(--pt-h); break-inside: auto; page-break-inside: auto; }
 
-/* Modelos resumidos: sem logo, marca, prazo/fonte, aviso do fabricante e assinatura. */
+/* Modelos resumidos: sem logo, marca e assinatura; mostram validade do fabricante e aviso de regra curtos. */
 .pt-wide { grid-column: 1 / -1; }
 .print-t60x40 .pt-discard strong, .print-t50x30 .pt-discard strong { white-space: nowrap; }
-.print-t60x40 .pt-foot, .print-t50x30 .pt-foot { justify-content: flex-end; }
+/* Data de descarte: o maior elemento, fora de --pt-scale. Só cai ao piso (--pt-ds, ver DATE_FLOOR em printLabel.ts)
+   quando, sem isso, a etiqueta cresceria ou perderia o armazenamento; o restante encolhe antes. */
+.print-t60x40 .pt-discard, .print-t50x30 .pt-discard { flex-direction: column; justify-content: center; gap: 0; text-align: center; }
+.print-t60x40 .pt-discard span, .print-t50x30 .pt-discard span { font-size: 6pt; line-height: 1.1; }
+.print-t60x40 .pt-foot, .print-t50x30 .pt-foot { justify-content: space-between; align-items: flex-end; gap: 2mm; }
+.pt-ruleshort { color: #444; font-weight: 700; overflow-wrap: anywhere; }
+.print-t60x40 .pt-ruleshort, .print-t60x40 .pt-foot .pt-cap, .print-t50x30 .pt-foot .pt-cap { font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); }
 .print-t60x40 { --pt-h: 39.5mm; width: 60mm; height: var(--pt-h); padding: 2mm 3mm; font-size: max(6pt, calc(7pt * var(--pt-scale, 1))); gap: 0.8mm; }
-.print-t60x40 .pt-discard { padding: 1mm 2mm; font-size: max(6pt, calc(7pt * var(--pt-scale, 1))); }
-.print-t60x40 .pt-discard strong { font-size: max(6pt, calc(15pt * var(--pt-scale, 1))); }
+.print-t60x40 .pt-discard { padding: 0.8mm 2mm 1mm; }
+.print-t60x40 .pt-discard strong { font-size: calc(22pt * var(--pt-ds, 1)); }
 .print-t60x40 .pt-grid { gap: 0.6mm 3mm; }
 .print-t60x40 .pt-grid dt { font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); }
 .print-t60x40 .pt-grid dd { font-size: max(6pt, calc(8pt * var(--pt-scale, 1))); }
@@ -188,9 +194,9 @@
 .print-t60x40 .pt-code { font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); }
 
 /* Modelo mínimo: produto, descarte, abertura, lote, responsável e código (armazenamento só se couber). */
-.print-t50x30 { --pt-h: 29.5mm; width: 50mm; height: var(--pt-h); padding: 1.5mm 2mm; font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); gap: 0.6mm; }
-.print-t50x30 .pt-discard { padding: 0.6mm 1.5mm; font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); flex-wrap: wrap; }
-.print-t50x30 .pt-discard strong { font-size: max(6pt, calc(13pt * var(--pt-scale, 1))); }
+.print-t50x30 { --pt-h: 29.5mm; width: 50mm; height: var(--pt-h); padding: 1.2mm 2mm; font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); gap: 0.4mm; }
+.print-t50x30 .pt-discard { padding: 0.3mm 1.5mm 0.4mm; }
+.print-t50x30 .pt-discard strong { font-size: calc(16pt * var(--pt-ds, 1)); }
 .print-t50x30 .pt-grid { gap: 0.4mm 2mm; }
 .print-t50x30 .pt-grid dt { font-size: max(6pt, calc(6pt * var(--pt-scale, 1))); }
 .print-t50x30 .pt-grid dd { font-size: max(6pt, calc(7pt * var(--pt-scale, 1))); }

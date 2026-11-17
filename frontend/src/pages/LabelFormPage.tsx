@@ -20,8 +20,10 @@ import {
   SUGGESTED_TEMPERATURE, TEMP_MAX, TEMP_MIN, formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft,
 } from '@/utils/temperature';
 import {
-  LABEL_TEMPLATES, getLabelTemplate, loadLabelTemplateId, saveLabelTemplateId, type LabelTemplateId,
+  LABEL_TEMPLATES, getLabelTemplate, type LabelTemplateId,
 } from '@/utils/labelTemplates';
+import { useLabelTemplate } from '@/hooks/useLabelTemplate';
+import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
 
 const PACKAGE = 'embalagem';
 
@@ -42,7 +44,7 @@ export function LabelFormPage() {
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
-  const [templateId, setTemplateId] = useState<LabelTemplateId>(loadLabelTemplateId);
+  const { templateId, explicit: templateChosen, choose: chooseTemplate } = useLabelTemplate();
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
   const [dateFilled, setDateFilled] = useState(false);
   // Abertura: do limite para trás até hoje da cozinha (o servidor valida de novo).
@@ -201,11 +203,6 @@ export function LabelFormPage() {
   function removeLogo() {
     setLogoUrl(null);
     localStorage.removeItem('gastrotag_logo');
-  }
-
-  function chooseTemplate(id: LabelTemplateId) {
-    setTemplateId(id);
-    saveLabelTemplateId(id);
   }
 
   if (loading) return <PageLoader />;
@@ -470,7 +467,7 @@ export function LabelFormPage() {
             </p>
             <div role="radiogroup" aria-label="Modelo da etiqueta" className="space-y-2">
               {LABEL_TEMPLATES.map((template) => {
-                const selected = template.id === templateId;
+                const selected = templateChosen && template.id === templateId;
                 const ratio = template.widthMm && template.heightMm ? template.widthMm / template.heightMm : 0.75;
                 return (
                   <button
@@ -506,6 +503,7 @@ export function LabelFormPage() {
             </p>
           </div>
 
+          <LabelTemplateStatus />
           <button
             type="submit"
             form="label-form"

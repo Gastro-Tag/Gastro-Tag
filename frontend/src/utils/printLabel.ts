@@ -1,4 +1,4 @@
-import type { Label } from '@/types';
+import type { Label, RuleSourceType } from '@/types';
 import { formatBR } from './date';
 import { getLabelTemplate, loadLabelTemplateId, type LabelTemplate } from './labelTemplates';
 
@@ -43,8 +43,31 @@ function nameFontPt(name: string, steps: [number, number, number]): number {
   return steps[2];
 }
 
-/** Só nos modelos A4 e 100×60: o 60×40 e o 50×30 não têm espaço e ficam como estão. */
 const NO_RULE_TEXT = 'Prazo sem regra validada';
+// Modelos pequenos: textos curtos (o tipo da fonte, nunca o texto livre).
+const NO_RULE_SHORT_TEXT = 'SEM REGRA VALIDADA';
+const NO_RULE_MINIMAL_TEXT = 'S/ REGRA';
+const SOURCE_TYPE_SHORT: Record<RuleSourceType, string> = {
+  NORMA_LEGAL: 'Norma',
+  REFERENCIA_TECNICA: 'Ref. técnica',
+  FABRICANTE: 'Fabricante',
+  PROCEDIMENTO_INTERNO: 'Proc. interno',
+};
+
+/** Validade do fabricante (DD/MM/AAAA); vazia quando a etiqueta não tem. */
+function manufacturerExpiry(label: Label): string {
+  return label.originalExpiryDate ? esc(formatBR(label.originalExpiryDate)) : '';
+}
+
+/** "3 dias · Fabricante" no 60×40; "SEM REGRA VALIDADA" (60×40) ou "S/ REGRA" (50×30) sem regra. */
+function ruleShort(label: Label, minimal: boolean): string {
+  if (!label.ruleId) return `<span class="pt-cap">${minimal ? NO_RULE_MINIMAL_TEXT : NO_RULE_SHORT_TEXT}</span>`;
+  if (minimal) return '';
+  const type = label.rule?.sourceType;
+  const source = type ? SOURCE_TYPE_SHORT[type] : undefined;
+  const days = label.shelfLifeDays != null ? `${esc(label.shelfLifeDays)} dias` : '';
+  return `<span class="pt-ruleshort">${[days, source && esc(source)].filter(Boolean).join(' · ')}</span>`;
+}
 const PARENT_CAP_TEXT = 'Data limitada pela etiqueta de origem.';
 
 /** Linha de origem das etiquetas filhas; vazia nas demais. `short` é para o 60×40. */
@@ -60,7 +83,7 @@ function storageLabel(label: Label): string {
   return label.storageType === 'REFRIGERADO' ? 'Refrigerado' : 'Congelado';
 }
 
-function fullLabel(label: Label, logo: string): string {
+export function fullLabel(label: Label, logo: string): string {
   const name = label.productName ?? label.product?.name ?? '';
   const brand = label.productBrand ?? label.product?.brand ?? '';
   const source = (label.ruleId && (label.ruleSource ?? label.rule?.source)) || `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
@@ -79,6 +102,7 @@ function fullLabel(label: Label, logo: string): string {
           <div><dt>Data de abertura</dt><dd>${esc(formatBR(label.openedAt))}</dd></div>
           <div><dt>Armazenamento</dt><dd>${storageLabel(label)}</dd></div>
           <div><dt>Temperatura</dt><dd>${esc(label.storageTemp)}</dd></div>
+          ${manufacturerExpiry(label) ? `<div><dt>Val. fabricante</dt><dd>${manufacturerExpiry(label)}</dd></div>` : ''}
         </dl>
         <div class="print-discard">
           <span>Descartar em</span>
@@ -98,20 +122,28 @@ function fullLabel(label: Label, logo: string): string {
     </article>`;
 }
 
+// A data de descarte não entra nesta escala nos modelos 60×40 e 50×30 (tamanho fixo no CSS).
 // Escala mínima de fonte do ajuste automático; abaixo disso a etiqueta cresce (ver pt-grow).
 const SCALE_STEP = 0.05;
 const SCALE_MIN = 0.5;
 
-interface CompactOptions { scale?: number; grow?: boolean; storage?: boolean }
+// Piso da data de descarte nos modelos pequenos (fração do tamanho normal, 22→18 pt e 16→14 pt):
+// só é usado quando, sem ele, a etiqueta cresceria ou perderia o armazenamento.
+const DATE_FLOOR: Partial<Record<LabelTemplate['variant'], number>> = { short: 18 / 22, minimal: 14 / 16 };
 
-function compactLabel(label: Label, template: LabelTemplate, logo: string, options: CompactOptions = {}): string {
-  const { scale = 1, grow = false, storage = true } = options;
+const LONG_LOT_CHARS = 12;
+
+interface CompactOptions { scale?: number; grow?: boolean; storage?: boolean; dateScale?: number }
+
+export function compactLabel(label: Label, template: LabelTemplate, logo: string, options: CompactOptions = {}): string {
+  const { scale = 1, grow = false, storage = true, dateScale = 1 } = options;
   const name = label.productName ?? label.product?.name ?? '';
   const brand = label.productBrand ?? label.product?.brand ?? '';
   const source = (label.ruleId && (label.ruleSource ?? label.rule?.source)) || `Prazo informado no produto (${label.shelfLifeDays ?? '—'} dias)`;
   const full = template.variant === 'full';
   const minimal = template.variant === 'minimal';
   const nameSize = nameFontPt(name, full ? [14, 12, 10] : minimal ? [9, 8, 7] : [11, 9, 7.5]);
+  const expiry = manufacturerExpiry(label);
   const logoHtml = `<img class="pt-logo" src="${esc(logo)}" alt="GastroTag" />`;
   const noRule = label.ruleId ? '' : `<p class="pt-cap">${NO_RULE_TEXT}</p>`;
   const cap = label.cappedByOriginalExpiry
@@ -119,26 +151,30 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
   // 50×30 não tem espaço: sem mudança.
   const parentCap = full && label.cappedByParent ? `<p class="pt-cap">${PARENT_CAP_TEXT}</p>` : '';
   const fraction = parentCap + (!minimal && label.parent ? `<p class="pt-cap">${fractionLine(label, !full)}</p>` : '');
-  const open = `class="print-label print-thermal print-${template.id}${grow ? ' pt-grow' : ''}" style="--pt-scale:${scale}"`;
+  const open = `class="print-label print-thermal print-${template.id}${grow ? ' pt-grow' : ''}" style="--pt-scale:${scale};--pt-ds:${dateScale}"`;
   const title = `<h1 style="font-size:max(6pt, calc(${nameSize}pt * var(--pt-scale, 1)))">${esc(name)}</h1>`;
   const discard = `<div class="pt-discard"><span>Descartar em</span><strong>${esc(formatBR(label.discardAt))}</strong></div>`;
   if (!full) {
     const temp = esc(label.storageTemp);
+    // 50×30: armazenamento e validade do fabricante dividem uma linha de duas colunas.
     const storageItem = minimal
-      ? (storage ? `<div class="pt-wide"><dt>Armaz.</dt><dd>${label.storageType === 'REFRIGERADO' ? 'Refrig.' : 'Congel.'} ${temp}</dd></div>` : '')
+      ? (storage ? `<div><dd>${label.storageType === 'REFRIGERADO' ? 'Refrig.' : 'Congel.'} ${temp}</dd></div>` : '')
       : `<div class="pt-wide"><dt>Armazenamento</dt><dd>${storageLabel(label)}, ${temp}</dd></div>`;
+    // 60×40 com lote longo: o lote ocupa a linha toda e a validade do fabricante divide a linha da abertura.
+    const longLot = !minimal && label.lot.length > LONG_LOT_CHARS;
+    const expiryItem = expiry ? `<div${minimal || longLot ? '' : ' class="pt-wide"'}><dt>${minimal ? 'Val.' : 'Val. fab.'}</dt><dd>${expiry}</dd></div>` : '';
     return `
     <article ${open}>
       ${title}
       ${discard}
       <dl class="pt-grid">
-        <div><dt>Lote</dt><dd>${esc(label.lot)}</dd></div>
-        <div><dt>Abertura</dt><dd>${esc(formatBR(label.openedAt))}</dd></div>
-        ${storageItem}
+        <div${longLot ? ' class="pt-wide"' : ''}><dt>Lote</dt><dd>${esc(label.lot)}</dd></div>
+        <div><dt>${minimal ? 'Abert.' : 'Abertura'}</dt><dd>${esc(formatBR(label.openedAt))}</dd></div>
+        ${longLot ? expiryItem + storageItem : storageItem + expiryItem}
       </dl>
       ${fraction}
       <p class="pt-resp">${minimal ? 'Resp.' : 'Responsável'}: <strong>${esc(label.responsibleName || '—')}</strong></p>
-      <div class="pt-foot"><span class="pt-code">Cód: ${esc(label.shortCode)}</span></div>
+      <div class="pt-foot">${ruleShort(label, minimal)}<span class="pt-code">Cód: ${esc(label.shortCode)}</span></div>
     </article>`;
   }
   return `
@@ -156,6 +192,7 @@ function compactLabel(label: Label, template: LabelTemplate, logo: string, optio
         <div><dt>Abertura</dt><dd>${esc(formatBR(label.openedAt))}</dd></div>
         <div><dt>Armazenamento</dt><dd>${storageLabel(label)}</dd></div>
         <div><dt>Temperatura</dt><dd>${esc(label.storageTemp)}</dd></div>
+        ${expiry ? `<div><dt>Val. fab.</dt><dd>${expiry}</dd></div>` : ''}
       </dl>
       <p class="pt-rule">Prazo aplicado: ${esc(label.shelfLifeDays ?? '—')} dias. Fonte: ${esc(source)}.</p>
       ${fraction}
@@ -183,10 +220,10 @@ function fitCompact(label: Label, template: LabelTemplate, logo: string): Compac
   const stage = document.createElement('div');
   probe.append(limit, stage);
   document.body.appendChild(probe);
-  const tryFit = (storage: boolean): number | null => {
+  const tryFit = (storage: boolean, dateScale: number): number | null => {
     const maxHeight = limit.getBoundingClientRect().height;
     for (let scale = 1; scale >= SCALE_MIN - 1e-9; scale = Math.round((scale - SCALE_STEP) * 100) / 100) {
-      stage.innerHTML = compactLabel(label, template, logo, { scale, storage });
+      stage.innerHTML = compactLabel(label, template, logo, { scale, storage, dateScale });
       const article = stage.firstElementChild as HTMLElement;
       article.style.height = 'auto';
       if (article.getBoundingClientRect().height <= maxHeight + 0.5 && article.scrollWidth <= article.clientWidth + 1) return scale;
@@ -194,13 +231,17 @@ function fitCompact(label: Label, template: LabelTemplate, logo: string): Compac
     return null;
   };
   try {
-    const withStorage = tryFit(true);
-    if (withStorage !== null) return { options: { scale: withStorage, storage: true } };
-    if (template.variant === 'minimal') {
-      const without = tryFit(false);
-      if (without !== null) return { options: { scale: without, storage: false } };
+    // Ordem de cessão nos modelos pequenos: primeiro os outros textos encolhem; depois a data cai ao piso;
+    // só então (50×30) some o armazenamento.
+    const floor = DATE_FLOOR[template.variant];
+    const dateSteps = floor ? [1, floor] : [1];
+    for (const storage of template.variant === 'minimal' ? [true, false] : [true]) {
+      for (const dateScale of dateSteps) {
+        const scale = tryFit(storage, dateScale);
+        if (scale !== null) return { options: { scale, storage, dateScale } };
+      }
     }
-    return { options: { scale: SCALE_MIN, grow: true, storage: template.variant !== 'minimal' } };
+    return { options: { scale: SCALE_MIN, grow: true, storage: template.variant !== 'minimal', dateScale: floor ?? 1 } };
   } finally {
     probe.remove();
   }
