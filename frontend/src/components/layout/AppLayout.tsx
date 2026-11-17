@@ -74,8 +74,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
         <div className="flex items-center gap-3 px-5 h-20 border-b border-slate-100">
           <div className="relative w-11 h-11 rounded-2xl bg-slate-50 border border-slate-100 p-1.5 flex items-center justify-center shrink-0 shadow-sm">
             <img
-              src="/logo.png"
-              alt="GastroTag Logo"
+              src="/logo-icon.png"
+              alt=""
               className="w-full h-full object-contain"
               onError={(e) => {
                 // Fallback to Icon if image is loading
@@ -195,7 +195,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <Menu className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2">
-              <img src="/logo.png" alt="Logo" className="w-7 h-7 object-contain" />
+              <img src="/logo-icon.png" alt="" className="w-7 h-7 object-contain" />
               <span className="font-extrabold text-charcoal-800 text-base">Gastro<span className="text-brand-500">Tag</span></span>
             </div>
           </div>
