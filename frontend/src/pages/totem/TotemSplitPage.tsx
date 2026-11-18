@@ -53,7 +53,7 @@ export function TotemSplitPage() {
   const [done, setDone] = useState<Done | null>(null);
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:totem-split'));
 
   // Produto e etiquetas ATIVAS não vencidas (a data de "hoje" é a da cozinha, no servidor).
   useEffect(() => {

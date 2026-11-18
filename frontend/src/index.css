@@ -89,8 +89,8 @@
 
 @media print {
   @page { margin: 12mm; }
-  #root { display: none !important; }
-  #print-root { display: block !important; }
+  body.printing-label #root { display: none !important; }
+  body.printing-label #print-root { display: block !important; }
   .print-label {
     width: 9cm; margin: 0 auto; border: 1pt solid #000;
     font-family: Arial, sans-serif; page-break-inside: avoid; color: #111; background: #fff;

@@ -16,6 +16,8 @@ function safeLogoSource(value: string | null): string {
 }
 
 const PAGE_STYLE_ID = 'print-page-style';
+/** Classe do body enquanto há etiqueta na área de impressão; o CSS só esconde o app com ela. */
+export const PRINTING_CLASS = 'printing-label';
 const SAFETY_CLEANUP_MS = 120_000;
 
 let pendingCleanup: (() => void) | null = null;
@@ -25,6 +27,7 @@ function clearPrintArea(): void {
   pendingCleanup = null;
   document.getElementById('print-root')?.replaceChildren();
   document.getElementById(PAGE_STYLE_ID)?.remove();
+  document.body.classList.remove(PRINTING_CLASS);
 }
 
 function injectPageStyle(template: LabelTemplate): void {
@@ -267,6 +270,7 @@ export function printLabel(labelOrLabels: Label | Label[], logoUrl: string | nul
   const count = Math.min(Math.max(Math.trunc(copies) || 1, 1), 20);
   root.innerHTML = labels.flatMap((item) => Array.from({ length: count }, () => render(item))).join('');
   injectPageStyle(template);
+  document.body.classList.add(PRINTING_CLASS);
 
   // Em alguns navegadores (Chrome Android, modo quiosque) print() não bloqueia:
   // a área só pode ser limpa quando a impressão termina (afterprint), com um tempo de segurança como reserva.
@@ -277,6 +281,7 @@ export function printLabel(labelOrLabels: Label | Label[], logoUrl: string | nul
     if (pendingCleanup === cleanup) pendingCleanup = null;
     root.replaceChildren();
     document.getElementById(PAGE_STYLE_ID)?.remove();
+    document.body.classList.remove(PRINTING_CLASS);
   };
   function onAfterPrint() { cleanup(); }
   window.addEventListener('afterprint', onAfterPrint);

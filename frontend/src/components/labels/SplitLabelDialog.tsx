@@ -39,7 +39,7 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
   const [closeParent, setCloseParent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:split-dialog'));
 
   const temperature = parseTemperature(tempText);
   const tempInvalid = tempText.trim() !== '' && temperature === null;

@@ -61,11 +61,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const chefName = user?.name ? `Chef ${user.name.split(' ')[0]}` : 'Chef Operador';
 
   return (
-    <div className="flex h-[100dvh] min-h-[100svh] overflow-hidden bg-[#F8F9FA] text-slate-800">
+    <div className="flex h-[100dvh] min-h-[100svh] overflow-hidden bg-[#F8F9FA] text-slate-800 print:block print:h-auto print:min-h-0 print:overflow-visible">
 
       {/* ── Sidebar ─────────────────────────────────── */}
       <aside className={cn(
-        'fixed inset-y-0 left-0 z-40 flex flex-col w-64 bg-white border-r border-slate-200/80 shadow-card',
+        'fixed inset-y-0 left-0 z-40 flex flex-col w-64 bg-white border-r border-slate-200/80 shadow-card print:hidden',
         'transition-transform duration-200 ease-in-out',
         mobileOpen ? 'translate-x-0' : '-translate-x-full',
         'lg:relative lg:translate-x-0',
@@ -175,16 +175,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-xs lg:hidden"
+          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-xs lg:hidden print:hidden"
           onClick={() => setMobileOpen(false)}
         />
       )}
 
       {/* ── Main Layout ─────────────────────────────── */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden print:block print:overflow-visible">
 
         {/* Top Header */}
-        <header className="h-16 lg:h-20 bg-white border-b border-slate-200/80 px-4 lg:px-8 flex items-center justify-between gap-4 shrink-0 shadow-xs">
+        <header className="print:hidden h-16 lg:h-20 bg-white border-b border-slate-200/80 px-4 lg:px-8 flex items-center justify-between gap-4 shrink-0 shadow-xs">
           {/* Mobile menu trigger + Logo on mobile */}
           <div className="flex items-center gap-3 lg:hidden">
             <button
@@ -234,7 +234,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </header>
 
         {/* Page Content scrollable area */}
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto print:overflow-visible">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
             {children}
           </div>

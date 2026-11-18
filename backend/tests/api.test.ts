@@ -6,8 +6,17 @@ import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
 import { logger } from '../src/utils/logger';
-import { addMonths, kitchenToday } from '../src/utils/dateUtils';
+import { addMonths, generateShortCode, kitchenToday } from '../src/utils/dateUtils';
 import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
+
+// Sorteio do código curto observável: o teste força um código que já existe (colisão).
+vi.mock('../src/utils/dateUtils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/utils/dateUtils')>();
+  return { ...actual, generateShortCode: vi.fn(actual.generateShortCode) };
+});
+const drawShortCode = vi.mocked(generateShortCode);
+const realShortCode = async () =>
+  (await vi.importActual<typeof import('../src/utils/dateUtils')>('../src/utils/dateUtils')).generateShortCode;
 
 // Precisa valer antes de importar o app: simula a API atrás do nginx.
 vi.hoisted(() => { process.env.TRUST_PROXY_HOPS = '1'; });
@@ -1017,6 +1026,43 @@ describe('API integration flow', () => {
       expect([plainA.status, plainB.status]).toEqual([201, 201]);
       expect(plainA.body.data.id).not.toBe(plainB.body.data.id);
     });
+
+    it('draws another short code when the drawn one already exists, and the resend still replays', async () => {
+      const send = (requestId?: string) => request(app).post('/api/labels')
+        .set('Authorization', `Bearer ${accessToken}`).send({
+          productId: productIds[0], lot: 'LOT-COLISAO', originalExpiryDate: daysFromToday(30), responsibleName: 'Colisão',
+          storageType: 'REFRIGERADO', storageTemperature: 4, requestId,
+        });
+      const existing = await send();
+      expect(existing.status).toBe(201);
+      const taken = existing.body.data.shortCode as string;
+
+      const requestId = randomUUID();
+      drawShortCode.mockReturnValueOnce(taken).mockReturnValueOnce(taken);
+      const created = await send(requestId);
+      expect(created.status).toBe(201);
+      expect(created.body.data.shortCode).not.toBe(taken);
+      expect(drawShortCode.mock.results.slice(-3).map((result) => result.value)).toEqual([taken, taken, created.body.data.shortCode]);
+
+      // Reenvio: o requestId repetido continua devolvendo a mesma etiqueta, mesmo sorteando um código que existe.
+      drawShortCode.mockReturnValueOnce(taken);
+      const again = await send(requestId);
+      expect(again.status).toBe(200);
+      expect(again.body.data.id).toBe(created.body.data.id);
+      expect(await prisma.label.count({ where: { requestId } })).toBe(1);
+
+      // Só repete código: desiste depois das tentativas, com erro claro, sem gravar nada.
+      const before = await prisma.label.count({ where: { lot: 'LOT-COLISAO' } });
+      drawShortCode.mockImplementation(() => taken);
+      try {
+        const failed = await send(randomUUID());
+        expect(failed.status).toBe(503);
+        expect(failed.body.error.code).toBe('SHORT_CODE_UNAVAILABLE');
+      } finally {
+        drawShortCode.mockImplementation(await realShortCode());
+      }
+      expect(await prisma.label.count({ where: { lot: 'LOT-COLISAO' } })).toBe(before);
+    });
   });
 });
 
@@ -1282,6 +1328,42 @@ describe('closing and splitting labels', () => {
 
       // Origem com filhas não pode ser apagada.
       await expect(prisma.label.delete({ where: { id: parent.id } })).rejects.toThrow(/labels_parent_label_id_fkey/);
+    });
+
+    it('redoes the split transaction when a drawn short code already exists, and the resend still replays', async () => {
+      const parent = await newLabel();
+      const taken = parent.shortCode;
+      const requestId = randomUUID();
+      const fresh = (await realShortCode())();
+      // Primeira transação: a 2ª filha sorteia o código da origem e a transação aborta. A segunda tentativa grava.
+      drawShortCode.mockReturnValueOnce(fresh).mockReturnValueOnce(taken);
+      const created = await split(parent.id, { count: 2, closeParent: true, requestId });
+      expect(created.status).toBe(201);
+      const codes = created.body.data.children.map((child: { shortCode: string }) => child.shortCode);
+      expect(codes).toHaveLength(2);
+      expect(codes).not.toContain(taken);
+      expect(created.body.data.parent).toMatchObject({ status: 'ENCERRADA', outcome: 'USADO' });
+      // Nada da tentativa abortada ficou no banco.
+      expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(2);
+      expect(await prisma.label.count({ where: { shortCode: fresh } })).toBe(0);
+
+      const again = await split(parent.id, { count: 2, closeParent: true, requestId });
+      expect(again.status).toBe(200);
+      expect(again.body.data.children.map((child: { id: string }) => child.id).sort())
+        .toEqual(created.body.data.children.map((child: { id: string }) => child.id).sort());
+
+      // Só repete código: desiste depois das tentativas, sem filhas nem encerrar a origem.
+      const other = await newLabel();
+      drawShortCode.mockImplementation(() => other.shortCode);
+      try {
+        const failed = await split(other.id, { count: 1, closeParent: true });
+        expect(failed.status).toBe(503);
+        expect(failed.body.error.code).toBe('SHORT_CODE_UNAVAILABLE');
+      } finally {
+        drawShortCode.mockImplementation(await realShortCode());
+      }
+      expect(await prisma.label.count({ where: { parentLabelId: other.id } })).toBe(0);
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: other.id } })).status).toBe('ATIVA');
     });
 
     it('closes the parent as used when the package is finished, and a resend returns the same children', async () => {

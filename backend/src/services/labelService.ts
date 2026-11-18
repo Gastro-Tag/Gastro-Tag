@@ -263,16 +263,28 @@ function activeChildren(db: Db, parentLabelId: string) {
   });
 }
 
-async function uniqueShortCodes(db: Db, count: number) {
+/**
+ * Tentativas quando o código curto sorteado já existe. O código é gravado direto (sem consultar antes):
+ * consultar e depois inserir deixa uma janela em que outro pedido pega o mesmo código.
+ */
+const SHORT_CODE_ATTEMPTS = 5;
+
+/** P2002 no código curto (código sorteado já existe), não na chave do reenvio (`requestId`). */
+function isShortCodeCollision(error: unknown) {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') return false;
+  const target = error.meta?.target;
+  const fields = Array.isArray(target) ? target : typeof target === 'string' ? [target] : [];
+  return fields.some((field) => /short_?code/i.test(String(field)));
+}
+
+/** `count` códigos distintos entre si; a unicidade no banco é garantida pela chave única. */
+function distinctShortCodes(count: number) {
   const codes = new Set<string>();
-  for (let attempt = 0; codes.size < count; attempt++) {
-    if (attempt >= 10) throw Errors.internal();
-    const candidates = Array.from({ length: count - codes.size }, () => generateShortCode());
-    const taken = await db.label.findMany({ where: { shortCode: { in: candidates } }, select: { shortCode: true } });
-    const takenCodes = new Set(taken.map((row) => row.shortCode));
-    for (const code of candidates) if (!takenCodes.has(code)) codes.add(code);
+  for (let drawn = 0; codes.size < count; drawn++) {
+    if (drawn >= count * SHORT_CODE_ATTEMPTS) throw Errors.shortCodeUnavailable();
+    codes.add(generateShortCode());
   }
-  return [...codes].slice(0, count);
+  return [...codes];
 }
 
 async function splitResult(db: Db, parentId: string, childWhere: Prisma.LabelWhereInput) {
@@ -549,37 +561,38 @@ export const LabelService = {
     const preview = await computePreview(data);
     const lot = preview.lot?.code ?? data.lot;
     if (!lot) throw Errors.validation('Informe o lote da embalagem.');
-    let shortCode = '';
-    for (let attempt = 0; attempt < 10; attempt++) {
-      shortCode = generateShortCode();
-      if (!await prisma.label.findUnique({ where: { shortCode } })) break;
-      if (attempt === 9) throw Errors.internal();
-    }
-    try {
-      const label = await prisma.label.create({
-        data: {
-          shortCode, productId: data.productId, userId: data.userId, lot, lotId: preview.lot?.id,
-          openedAt: preview.openedAt, discardAt: preview.discardAt,
-          storageType: data.storageType as StorageType,
-          storageTemperature: preview.storageTemperature, storageTemp: preview.storageTemp!,
-          ruleId: preview.rule.id, shelfLifeDays: preview.rule.shelfLifeDays,
-          ruleVersion: preview.rule.version, ruleSource: preview.rule.source,
-          originalExpiryDate: preview.originalExpiryDate,
-          cappedByOriginalExpiry: preview.cappedByOriginalExpiry,
-          productName: preview.product.name, productBrand: preview.product.brand,
-          responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
-          requestId: data.requestId,
-        },
-        include: labelInclude,
-      });
-      return { label: serializeLabel(label), replayed: false };
-    } catch (error) {
-      // Dois envios simultâneos do mesmo pedido: o segundo perde na chave única e devolve o primeiro.
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const raced = await findReplay(data);
-        if (raced) return { label: serializeLabel(raced), replayed: true };
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const label = await prisma.label.create({
+          data: {
+            shortCode: generateShortCode(), productId: data.productId, userId: data.userId, lot, lotId: preview.lot?.id,
+            openedAt: preview.openedAt, discardAt: preview.discardAt,
+            storageType: data.storageType as StorageType,
+            storageTemperature: preview.storageTemperature, storageTemp: preview.storageTemp!,
+            ruleId: preview.rule.id, shelfLifeDays: preview.rule.shelfLifeDays,
+            ruleVersion: preview.rule.version, ruleSource: preview.rule.source,
+            originalExpiryDate: preview.originalExpiryDate,
+            cappedByOriginalExpiry: preview.cappedByOriginalExpiry,
+            productName: preview.product.name, productBrand: preview.product.brand,
+            responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
+            requestId: data.requestId,
+          },
+          include: labelInclude,
+        });
+        return { label: serializeLabel(label), replayed: false };
+      } catch (error) {
+        // Código curto repetido: sorteia outro. Fora de transação, o insert que falhou não deixa nada para trás.
+        if (isShortCodeCollision(error)) {
+          if (attempt < SHORT_CODE_ATTEMPTS) continue;
+          throw Errors.shortCodeUnavailable();
+        }
+        // Dois envios simultâneos do mesmo pedido: o segundo perde na chave única e devolve o primeiro.
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+          const raced = await findReplay(data);
+          if (raced) return { label: serializeLabel(raced), replayed: true };
+        }
+        throw error;
       }
-      throw error;
     }
   },
 
@@ -744,49 +757,58 @@ export const LabelService = {
     // Fora da transação: confere o token do operador sem segurar a trava da etiqueta.
     const responsible = await resolveResponsible();
 
-    return prisma.$transaction(async (tx) => {
-      await lockLabel(tx, id);
-      // Dois envios simultâneos do mesmo pedido: o segundo espera a trava e encontra as filhas do primeiro.
-      if (await hasReplay(tx)) return { ...await splitResult(tx, id, replayWhere!), replayed: true };
+    // Código curto repetido aborta a transação inteira no Postgres: refaz a transação do começo
+    // (trava, reenvio e cálculo de novo) com outros códigos.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          await lockLabel(tx, id);
+          // Dois envios simultâneos do mesmo pedido: o segundo espera a trava e encontra as filhas do primeiro.
+          if (await hasReplay(tx)) return { ...await splitResult(tx, id, replayWhere!), replayed: true };
 
-      const parent = await tx.label.findUnique({ where: { id } });
-      if (!parent) throw Errors.notFound('Etiqueta');
-      const calculation = await computeSplit(tx, parent, data);
-      const codes = await uniqueShortCodes(tx, data.count);
-      const fractionedAt = parseDateOnly(calculation.fractionedAt);
-      const childIds: string[] = [];
-      for (const shortCode of codes) {
-        const child = await tx.label.create({
-          data: {
-            shortCode, productId: parent.productId, userId: actor.id,
-            lot: parent.lot, lotId: parent.lotId,
-            openedAt: parent.openedAt, discardAt: calculation.discardAt,
-            storageType: data.storageType as StorageType,
-            storageTemperature: calculation.storageTemperature, storageTemp: calculation.storageTemp!,
-            ruleId: calculation.rule.id, shelfLifeDays: calculation.rule.shelfLifeDays,
-            ruleVersion: calculation.rule.version, ruleSource: calculation.rule.source,
-            originalExpiryDate: parent.originalExpiryDate,
-            cappedByOriginalExpiry: calculation.cappedByOriginalExpiry,
-            productName: parent.productName, productBrand: parent.productBrand,
-            responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
-            parentLabelId: parent.id, fractionedAt, splitRequestId: data.requestId,
-            cappedByParent: calculation.cappedByParent,
-          },
-          select: { id: true },
-        });
-        childIds.push(child.id);
+          const parent = await tx.label.findUnique({ where: { id } });
+          if (!parent) throw Errors.notFound('Etiqueta');
+          const calculation = await computeSplit(tx, parent, data);
+          const codes = distinctShortCodes(data.count);
+          const fractionedAt = parseDateOnly(calculation.fractionedAt);
+          const childIds: string[] = [];
+          for (const shortCode of codes) {
+            const child = await tx.label.create({
+              data: {
+                shortCode, productId: parent.productId, userId: actor.id,
+                lot: parent.lot, lotId: parent.lotId,
+                openedAt: parent.openedAt, discardAt: calculation.discardAt,
+                storageType: data.storageType as StorageType,
+                storageTemperature: calculation.storageTemperature, storageTemp: calculation.storageTemp!,
+                ruleId: calculation.rule.id, shelfLifeDays: calculation.rule.shelfLifeDays,
+                ruleVersion: calculation.rule.version, ruleSource: calculation.rule.source,
+                originalExpiryDate: parent.originalExpiryDate,
+                cappedByOriginalExpiry: calculation.cappedByOriginalExpiry,
+                productName: parent.productName, productBrand: parent.productBrand,
+                responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
+                parentLabelId: parent.id, fractionedAt, splitRequestId: data.requestId,
+                cappedByParent: calculation.cappedByParent,
+              },
+              select: { id: true },
+            });
+            childIds.push(child.id);
+          }
+          if (data.closeParent) {
+            await tx.label.update({
+              where: { id },
+              data: {
+                // Quem encerrou é o responsável do turno informado; a conta logada fica em closedById.
+                status: 'ENCERRADA', outcome: 'USADO', closedAt: new Date(),
+                closedById: actor.id, closedByName: responsible.responsibleName.trim(),
+              },
+            });
+          }
+          return { ...await splitResult(tx, id, { id: { in: childIds } }), replayed: false };
+        }, { timeout: 15_000 });
+      } catch (error) {
+        if (!isShortCodeCollision(error)) throw error;
+        if (attempt >= SHORT_CODE_ATTEMPTS) throw Errors.shortCodeUnavailable();
       }
-      if (data.closeParent) {
-        await tx.label.update({
-          where: { id },
-          data: {
-            // Quem encerrou é o responsável do turno informado; a conta logada fica em closedById.
-            status: 'ENCERRADA', outcome: 'USADO', closedAt: new Date(),
-            closedById: actor.id, closedByName: responsible.responsibleName.trim(),
-          },
-        });
-      }
-      return { ...await splitResult(tx, id, { id: { in: childIds } }), replayed: false };
-    }, { timeout: 15_000 });
+    }
   },
 };

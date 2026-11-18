@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Label } from '@/types';
-import { compactLabel, fullLabel } from './printLabel';
+import { PRINTING_CLASS, compactLabel, fullLabel, printLabel } from './printLabel';
 import { getLabelTemplate } from './labelTemplates';
 
 const base = {
@@ -84,5 +84,29 @@ describe('piso da data de descarte', () => {
   it('60x40 com lote longo põe o lote em linha própria', () => {
     const html = compactLabel({ ...base, lot: 'LOTE-2026-0915-ABC' } as Label, t('t60x40'), '/logo.png');
     expect(html).toMatch(/<div class="pt-wide"><dt>Lote<\/dt>/);
+  });
+});
+
+describe('classe do body durante a impressão de etiqueta (item 27 F1)', () => {
+  const label = { ...base } as Label;
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="root"></div><div id="print-root"></div>';
+    vi.restoreAllMocks();
+  });
+
+  it('adiciona printing-label ao imprimir e remove no afterprint', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => {});
+    printLabel(label, null);
+    expect(document.body.classList.contains(PRINTING_CLASS)).toBe(true);
+    window.dispatchEvent(new Event('afterprint'));
+    expect(document.body.classList.contains(PRINTING_CLASS)).toBe(false);
+    expect(document.getElementById('print-root')!.children).toHaveLength(0);
+  });
+
+  it('remove a classe se print() lançar erro', () => {
+    vi.spyOn(window, 'print').mockImplementation(() => { throw new Error('x'); });
+    expect(() => printLabel(label, null)).toThrow();
+    expect(document.body.classList.contains(PRINTING_CLASS)).toBe(false);
   });
 });

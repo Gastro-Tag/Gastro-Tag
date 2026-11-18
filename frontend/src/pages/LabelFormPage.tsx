@@ -41,7 +41,7 @@ export function LabelFormPage() {
   const [productTry, setProductTry] = useState(0);
   const [previewTry, setPreviewTry] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:label-form'));
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
@@ -174,6 +174,7 @@ export function LabelFormPage() {
       };
       const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
       createdLabel = data.data;
+      requests.reset();
       printLabel(createdLabel, logoUrl);
       try {
         await labelApi.registerPrint(createdLabel.id);

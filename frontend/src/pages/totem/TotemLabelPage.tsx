@@ -64,7 +64,7 @@ export function TotemLabelPage() {
   const [done, setDone] = useState<Done | null>(null);
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:totem-label'));
 
   // Produto + armazenamento do último uso. Com mais de um lote, quem está com a embalagem escolhe.
   useEffect(() => {

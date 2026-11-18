@@ -153,7 +153,7 @@ export function LabelsPage() {
             {meta.total} {meta.total === 1 ? 'etiqueta registrada' : 'etiquetas registradas'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 print:hidden">
           {isAdmin && (
             <button className="btn btn-outline shadow-sm" onClick={() => setExporting(true)}>
               <Download className="w-4 h-4 text-slate-500" />
@@ -246,7 +246,7 @@ export function LabelsPage() {
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
-        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4 pt-1">
+        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4 pt-1 print:hidden">
           <button
             type="button"
             aria-pressed={discardToday}
