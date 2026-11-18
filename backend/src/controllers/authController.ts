@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthService } from '../services/authService';
+import { SettingsService } from '../services/settingsService';
 import { kitchenToday, MAX_BACKDATE_DAYS } from '../utils/dateUtils';
 
 const loginSchema = z.object({
@@ -54,10 +55,14 @@ export const AuthController = {
 
   async me(req: Request, res: Response) {
     // Data da cozinha e limite para trás: o formulário limita a data de abertura (o servidor confere de novo).
+    // requireValidatedRule: a tela avisa antes; quem recusa a etiqueta sem regra é o servidor.
+    const { requireValidatedRule } = await SettingsService.get();
     res.json({
       success: true,
       data: req.user,
-      meta: { kitchenToday: kitchenToday().toISOString().slice(0, 10), maxBackdateDays: MAX_BACKDATE_DAYS },
+      meta: {
+        kitchenToday: kitchenToday().toISOString().slice(0, 10), maxBackdateDays: MAX_BACKDATE_DAYS, requireValidatedRule,
+      },
     });
   },
 };

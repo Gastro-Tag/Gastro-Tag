@@ -11,7 +11,8 @@ import { useToastContext } from '@/components/ui/Toast';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
 import { LoadError } from '@/components/ui/LoadError';
 import { formatBR } from '@/utils/date';
-import { extractError } from '@/services/api';
+import { extractError, extractErrorCode } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
 import { createRequestKeeper } from '@/utils/requestId';
@@ -43,6 +44,7 @@ export function LabelFormPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
+  const [previewErrorCode, setPreviewErrorCode] = useState<string | undefined>();
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
   const { templateId, explicit: templateChosen, choose: chooseTemplate } = useLabelTemplate();
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
@@ -114,6 +116,7 @@ export function LabelFormPage() {
     if (!product || !previewReady) {
       setPreview(null);
       setPreviewError('');
+      setPreviewErrorCode(undefined);
       setPreviewLoading(false);
       return;
     }
@@ -121,6 +124,7 @@ export function LabelFormPage() {
     const timer = window.setTimeout(async () => {
       setPreviewLoading(true);
       setPreviewError('');
+      setPreviewErrorCode(undefined);
       try {
         const { data } = await labelApi.preview({
           ...expirySource(form.source, form.originalExpiryDate),
@@ -136,7 +140,7 @@ export function LabelFormPage() {
           }
         }
       } catch (error) {
-        if (active) { setPreview(null); setPreviewError(extractError(error)); }
+        if (active) { setPreview(null); setPreviewError(extractError(error)); setPreviewErrorCode(extractErrorCode(error)); }
       } finally {
         if (active) setPreviewLoading(false);
       }
@@ -536,7 +540,9 @@ export function LabelFormPage() {
           </div>
 
           {previewError && (
-            <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-medium">
+            <div role="alert" className={previewErrorCode === RULE_REQUIRED_CODE
+              ? 'p-4 rounded-xl border-2 border-rose-300 bg-rose-50 text-rose-800 text-sm font-bold'
+              : 'p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-medium'}>
               <p>{previewError}</p>
               <button type="button" className="btn btn-outline btn-sm mt-3" onClick={() => setPreviewTry((n) => n + 1)}>
                 Tentar de novo

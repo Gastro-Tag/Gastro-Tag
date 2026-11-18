@@ -21,10 +21,11 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   labels        Label[]
-  closedLabels  Label[]         @relation("LabelClosedBy")
-  handledLabels Label[]         @relation("LabelHandler")
+  closedLabels  Label[]           @relation("LabelClosedBy")
+  handledLabels Label[]           @relation("LabelHandler")
   sessions      UserSession[]
-  createdRules  ShelfLifeRule[] @relation("RuleCreatedBy")
+  createdRules  ShelfLifeRule[]   @relation("RuleCreatedBy")
+  settingsEdits KitchenSettings[] @relation("SettingsUpdatedBy")
 
   @@map("users")
 }
@@ -45,6 +46,21 @@ model UserSession {
 
   @@index([userId])
   @@map("user_sessions")
+}
+
+// Configuração da cozinha: linha única (id 1). Sem linha, valem os padrões.
+// Na Fase 2 (várias cozinhas) vira uma linha por cliente.
+model KitchenSettings {
+  id                   Int      @id @default(1)
+  // Ligado: etiqueta sem regra ativa (prazo do produto, "sem regra validada") é recusada.
+  requireValidatedRule Boolean  @default(false) @map("require_validated_rule")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+  updatedById          String?  @map("updated_by_id")
+  updatedByName        String?  @map("updated_by_name") // cópia do nome de quem alterou
+
+  updatedBy User? @relation("SettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("kitchen_settings")
 }
 
 enum UserRole {

@@ -4,7 +4,7 @@ import type {
   Product, ProductLot, CreateProductDTO, ProductFilters,
   Label, CreateLabelDTO, LabelPreview, LabelPreviewDTO,
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
-  ShelfLifeRule, RuleFilters, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
+  ShelfLifeRule, RuleFilters, AppSettings, SettingsUpdateMeta, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
   DueLabelsResult, KitchenInfo, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
@@ -175,4 +175,14 @@ export const ruleApi = {
 export const dashboardApi = {
   getStats: () =>
     api.get<ApiResponse<DashboardStats>>('/dashboard/stats'),
+};
+
+// ── Configurações ───────────────────────────────────────
+export const settingsApi = {
+  get: () =>
+    api.get<ApiResponse<AppSettings>>('/settings'),
+
+  /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
+  update: (requireValidatedRule: boolean) =>
+    api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', { requireValidatedRule }),
 };

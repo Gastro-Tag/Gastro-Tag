@@ -1,6 +1,6 @@
 ﻿import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import app from '../src/app';
 import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
@@ -34,6 +34,8 @@ const ruleBody = {
 };
 
 beforeAll(async () => {
+  // Uma execução interrompida pode ter deixado o bloqueio ligado: começa sempre com ele desligado.
+  await prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false } });
   const user = await prisma.user.create({ data: {
     name: 'Teste de integração', email,
     passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
@@ -1570,7 +1572,7 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
     it('reports the kitchen date and the backdate limit in /auth/me', async () => {
       const me = await request(app).get('/api/auth/me').set('Authorization', asOperator).expect(200);
       expect(me.body.data.sub).toBe(operatorId);
-      expect(me.body.meta).toEqual({ kitchenToday: today(), maxBackdateDays: 2 });
+      expect(me.body.meta).toEqual({ kitchenToday: today(), maxBackdateDays: 2, requireValidatedRule: false });
     });
 
     it('accepts an opening 2 days ago and rejects 3 days ago and the future', async () => {
@@ -2177,5 +2179,178 @@ describe('categorias de produto', () => {
     expect(res.body.data).toEqual(expect.arrayContaining([free, fold(free).toUpperCase()]));
     expect((await categories('?withDefaults=false')).body.data).toEqual(res.body.data);
     expect((await categories('?withDefaults=sim')).status).toBe(422);
+  });
+});
+
+describe('bloqueio de etiqueta sem regra validada', () => {
+  const tag = suffix.slice(0, 8);
+  const category = `Bloqueio ${tag}`;
+  let adminToken = '';
+  let operatorAuth = '';
+  let noRuleId = '';
+  let productRuleId = '';
+  let categoryRuleId = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const turnOff = () => prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false } });
+  const setRequire = (value: unknown, token = asAdmin()) =>
+    request(app).put('/api/settings').set('Authorization', token).send({ requireValidatedRule: value });
+  const labelBody = (productId: string, body: object = {}) => ({
+    productId, lot: 'LOT-BLOQ', originalExpiryDate: daysFromToday(60), openedAt: today(),
+    responsibleName: 'Turno de teste', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+  });
+  const preview = (productId: string, body: object = {}) =>
+    request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send(labelBody(productId, body));
+  const create = (productId: string, body: object = {}) =>
+    request(app).post('/api/labels').set('Authorization', asAdmin()).send(labelBody(productId, body));
+  const splitBody = { count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' };
+  const splitPreview = (id: string, body: object = {}) => request(app).post(`/api/labels/${id}/split/preview`)
+    .set('Authorization', asAdmin()).send({ storageType: 'REFRIGERADO', storageTemperature: 4, ...body });
+  const split = (id: string, body: object = {}) =>
+    request(app).post(`/api/labels/${id}/split`).set('Authorization', asAdmin()).send({ ...splitBody, ...body });
+  const newLabel = async (productId: string, body: object = {}) => {
+    const res = await create(productId, body);
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string };
+  };
+  const expectRuleRequired = (res: request.Response) => {
+    expect(res.status).toBe(422);
+    expect(res.body.error).toEqual({
+      code: 'RULE_REQUIRED',
+      message: 'Produto sem prazo validado para este armazenamento. Chame o gerente para cadastrar a regra.',
+    });
+  };
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.60')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operatorLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.61')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operatorLogin.body.data.accessToken}`;
+    // Prazos fictícios, só para o teste.
+    const product = async (name: string, data: { category?: string } = {}) => {
+      const created = await prisma.product.create({
+        data: { name: `${name} ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30, ...data },
+      });
+      productIds.push(created.id);
+      return created.id;
+    };
+    noRuleId = await product('Bloqueio sem regra');
+    productRuleId = await product('Bloqueio regra produto');
+    categoryRuleId = await product('Bloqueio regra categoria', { category });
+    for (const body of [{ productId: productRuleId }, { category }]) {
+      const res = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+        .send({ ...ruleBody, shelfLifeDays: 5, storageType: 'REFRIGERADO', ...body });
+      expect(res.status).toBe(201);
+      ruleIds.push(res.body.data.id);
+    }
+  });
+
+  // Cada teste que liga o bloqueio desliga no fim, para não mudar o resultado dos outros.
+  afterEach(turnOff);
+  afterAll(turnOff);
+
+  it('keeps the current behavior while the option is off (the default)', async () => {
+    const settings = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(settings.status).toBe(200);
+    expect(settings.body.data.requireValidatedRule).toBe(false);
+
+    const me = await request(app).get('/api/auth/me').set('Authorization', asAdmin());
+    expect(me.body.meta).toMatchObject({ kitchenToday: today(), requireValidatedRule: false });
+
+    const res = await preview(noRuleId);
+    expect(res.status).toBe(200);
+    expect(res.body.data.rule.validated).toBe(false);
+    const label = await newLabel(noRuleId);
+    expect((await splitPreview(label.id)).status).toBe(200);
+    expect((await split(label.id)).status).toBe(201);
+  });
+
+  it('only lets an ADMIN change the option, with a strict body', async () => {
+    expect((await setRequire(true, operatorAuth)).status).toBe(403);
+    expect((await request(app).put('/api/settings').send({ requireValidatedRule: true })).status).toBe(401);
+    expect((await request(app).get('/api/settings')).status).toBe(401);
+    expect((await setRequire('true')).status).toBe(422);
+    expect((await request(app).put('/api/settings').set('Authorization', asAdmin()).send({})).status).toBe(422);
+    const extra = await request(app).put('/api/settings').set('Authorization', asAdmin())
+      .send({ requireValidatedRule: true, updatedByName: 'Outro' });
+    expect(extra.status).toBe(422);
+    const settings = await request(app).get('/api/settings').set('Authorization', asAdmin());
+    expect(settings.body.data.requireValidatedRule).toBe(false);
+  });
+
+  it('turns the option on with who changed it, the blocked counts and /auth/me', async () => {
+    const res = await setRequire(true);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ requireValidatedRule: true, updatedByName: 'Teste de integração' });
+    expect(typeof res.body.data.updatedAt).toBe('string');
+    const withoutRule = await request(app).get('/api/products/without-rule').set('Authorization', asAdmin());
+    expect(res.body.meta).toEqual({
+      blockedProducts: withoutRule.body.meta.total, blockedCombinations: withoutRule.body.meta.missingCount,
+    });
+    // Os produtos deste bloco: sem regra (2 armazenamentos), regra só no refrigerado (1 cada).
+    expect(res.body.meta.blockedProducts).toBeGreaterThanOrEqual(3);
+    expect(res.body.meta.blockedCombinations).toBeGreaterThanOrEqual(4);
+    expect(await prisma.kitchenSettings.findUnique({ where: { id: 1 } })).toMatchObject({ updatedById: userId });
+
+    const me = await request(app).get('/api/auth/me').set('Authorization', operatorAuth);
+    expect(me.body.meta.requireValidatedRule).toBe(true);
+    const settings = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(settings.body.data).toMatchObject({ requireValidatedRule: true, updatedByName: 'Teste de integração' });
+  });
+
+  it('with the option on, refuses the 4 endpoints without a rule and accepts product or category rules', async () => {
+    const parentNoRule = await newLabel(noRuleId);
+    expect((await setRequire(true)).status).toBe(200);
+    const before = await prisma.label.count({ where: { productId: noRuleId } });
+
+    expectRuleRequired(await preview(noRuleId));
+    expectRuleRequired(await preview(noRuleId, { storageTemperature: undefined }));
+    expectRuleRequired(await create(noRuleId, { requestId: randomUUID() }));
+    expectRuleRequired(await splitPreview(parentNoRule.id));
+    expectRuleRequired(await split(parentNoRule.id, { requestId: randomUUID(), closeParent: true }));
+    expect(await prisma.label.count({ where: { productId: noRuleId } })).toBe(before);
+    expect((await prisma.label.findUniqueOrThrow({ where: { id: parentNoRule.id } })).status).toBe('ATIVA');
+    // A regra vale por armazenamento: só refrigerado tem regra, congelado é recusado.
+    expectRuleRequired(await preview(productRuleId, { storageType: 'CONGELADO', storageTemperature: -18 }));
+
+    for (const productId of [productRuleId, categoryRuleId]) {
+      const ok = await preview(productId);
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.rule).toMatchObject({ validated: true, shelfLifeDays: 5 });
+      const parent = await newLabel(productId);
+      expect((await splitPreview(parent.id)).status).toBe(200);
+      expect((await split(parent.id)).status).toBe(201);
+    }
+
+    expect((await setRequire(false)).status).toBe(200);
+    expect((await preview(noRuleId)).status).toBe(200);
+  });
+
+  it('still resolves idempotent resends, close, reprint and list with the option on', async () => {
+    const requestId = randomUUID();
+    const label = await newLabel(noRuleId, { requestId });
+    const splitRequestId = randomUUID();
+    const first = await split(label.id, { requestId: splitRequestId });
+    expect(first.status).toBe(201);
+    const other = await newLabel(noRuleId);
+    expect((await setRequire(true)).status).toBe(200);
+
+    const resent = await create(noRuleId, { requestId });
+    expect(resent.status).toBe(200);
+    expect(resent.body.data.id).toBe(label.id);
+    const resplit = await split(label.id, { requestId: splitRequestId });
+    expect(resplit.status).toBe(200);
+    expect(resplit.body.data.children.map((child: { id: string }) => child.id))
+      .toEqual(first.body.data.children.map((child: { id: string }) => child.id));
+
+    expect((await request(app).patch(`/api/labels/${other.id}/print`).set('Authorization', asAdmin())).status).toBe(200);
+    const list = await request(app).get('/api/labels').query({ productId: noRuleId, limit: '100' }).set('Authorization', asAdmin());
+    expect(list.status).toBe(200);
+    expect(list.body.data.some((item: { id: string }) => item.id === other.id)).toBe(true);
+    const closed = await request(app).post(`/api/labels/${other.id}/close`).set('Authorization', operatorAuth)
+      .send({ outcome: 'USADO' });
+    expect(closed.status).toBe(200);
+    expect(closed.body.data).toMatchObject({ status: 'ENCERRADA', outcome: 'USADO' });
   });
 });

@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, BookOpenCheck, ChevronDown, ChevronUp, History, Info, Plus, Power, RefreshCw, Refrigerator, Snowflake, Thermometer,
 } from 'lucide-react';
-import { productApi, ruleApi } from '@/services';
+import { productApi, ruleApi, settingsApi } from '@/services';
 import { extractError } from '@/services/api';
 import type {
-  CreateRuleDTO, Product, ProductWithoutRule, ProductsWithoutRuleMeta, RuleFilters, RuleSourceType, RuleVersionDTO, ShelfLifeRule, StorageType,
+  CreateRuleDTO, Product, ProductWithoutRule, ProductsWithoutRuleMeta, RuleFilters, RuleSourceType, RuleVersionDTO, ShelfLifeRule, StorageType, AppSettings,
 } from '@/types';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { LoadError } from '@/components/ui/LoadError';
@@ -17,7 +17,7 @@ import { useToastContext } from '@/components/ui/Toast';
 import { formatBR, formatDateTimeBR } from '@/utils/date';
 import { formatTemperatureRange } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
-import { semRegraResumo, usaDiasDoCadastro } from '@/utils/semRegra';
+import { BLOQUEADO_NAO_IMPRIME, confirmaBloqueio, semRegraResumo, toastBloqueio, usaDiasDoCadastro } from '@/utils/semRegra';
 
 const SOURCE_TYPE_LABEL: Record<RuleSourceType, string> = {
   NORMA_LEGAL: 'Norma legal',
@@ -33,6 +33,7 @@ type Dialog =
   | { kind: 'version'; rule: ShelfLifeRule }
   | { kind: 'history'; rule: ShelfLifeRule }
   | { kind: 'deactivate'; rule: ShelfLifeRule }
+  | { kind: 'enable-block'; counts: { total: number; missingCount: number } | null }
   | null;
 
 interface RulePrefill { productId: string; productLabel: string; storageType: StorageType }
@@ -71,7 +72,54 @@ export function ShelfLifeRulesPage() {
   const [missingLoading, setMissingLoading] = useState(true);
   const [missingError, setMissingError] = useState('');
 
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsBusy, setSettingsBusy] = useState(false);
+
   const missingRequest = useRef(0);
+
+  const fetchSettings = useCallback(async () => {
+    setSettingsError('');
+    try {
+      const { data } = await settingsApi.get();
+      setSettings(data.data);
+    } catch (error) {
+      setSettingsError(extractError(error));
+    }
+  }, []);
+
+  useEffect(() => { void fetchSettings(); }, [fetchSettings]);
+
+  /** Busca a contagem atual antes de confirmar; sem dados, o diálogo fica neutro (nunca diz 0). */
+  async function askEnable() {
+    setSettingsBusy(true);
+    let counts: { total: number; missingCount: number } | null = null;
+    try {
+      const { data } = await productApi.withoutRule();
+      counts = { total: data.meta.total, missingCount: data.meta.missingCount };
+      setMissing(data.data);
+      setMissingMeta(data.meta);
+    } catch { /* counts fica null */ }
+    setSettingsBusy(false);
+    setDialog({ kind: 'enable-block', counts });
+  }
+
+  async function saveRequirement(next: boolean) {
+    setSettingsBusy(true);
+    try {
+      const { data } = await settingsApi.update(next);
+      setSettings(data.data);
+      toast(toastBloqueio(next, data.meta.blockedProducts, data.meta.blockedCombinations), 'success');
+      setDialog(null);
+      void fetchMissing();
+    } catch (error) {
+      toast(extractError(error), 'error');
+      setDialog(null);
+      void fetchSettings(); // a resposta pode ter se perdido: o interruptor volta a refletir o servidor
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
 
   const fetchMissing = useCallback(async () => {
     const request = ++missingRequest.current;
@@ -176,7 +224,20 @@ export function ShelfLifeRulesPage() {
         </span>
       </div>
 
+      <RequireRuleCard
+        settings={settings}
+        error={settingsError}
+        busy={settingsBusy}
+        onRetry={() => void fetchSettings()}
+        onToggle={() => {
+          if (!settings || settingsBusy) return;
+          if (settings.requireValidatedRule) void saveRequirement(false);
+          else void askEnable();
+        }}
+      />
+
       <MissingRulesSection
+        blocking={settings?.requireValidatedRule === true}
         items={missing}
         meta={missingMeta}
         loading={missingLoading}
@@ -275,14 +336,29 @@ export function ShelfLifeRulesPage() {
       )}
       {dialog?.kind === 'history' && <HistoryDialog rule={dialog.rule} onClose={() => setDialog(null)} />}
       <ConfirmDialog
+        open={dialog?.kind === 'enable-block'}
+        title="Exigir regra validada?"
+        body={(
+          <>
+            {dialog?.kind === 'enable-block' ? confirmaBloqueio(dialog.counts) : ''} O operador será orientado a chamar o gerente
+            para cadastrar a regra.
+          </>
+        )}
+        confirmLabel={settingsBusy ? 'Ligando…' : 'Ligar exigência'}
+        onCancel={() => { if (!settingsBusy) setDialog(null); }}
+        onConfirm={() => { if (!settingsBusy) void saveRequirement(true); }}
+      />
+      <ConfirmDialog
         open={dialog?.kind === 'deactivate'}
         danger
         title="Desativar regra?"
         body={dialog?.kind === 'deactivate' ? (
           <>
             A regra de <strong>{targetName(dialog.rule)}</strong> ({STORAGE_LABEL[dialog.rule.storageType]}) deixa de valer
-            para novas etiquetas. As etiquetas já geradas continuam guardadas. Sem outra regra, o cálculo volta ao prazo
-            do cadastro do produto, com aviso de prazo sem regra validada.
+            para novas etiquetas. As etiquetas já geradas continuam guardadas.{' '}
+            {settings?.requireValidatedRule
+              ? 'Com o bloqueio ligado, o produto deixa de imprimir até ter outra regra.'
+              : 'Sem outra regra, o cálculo volta ao prazo do cadastro do produto, com aviso de prazo sem regra validada.'}
           </>
         ) : null}
         confirmLabel={busy ? 'Desativando…' : 'Desativar'}
@@ -294,7 +370,60 @@ export function ShelfLifeRulesPage() {
 }
 
 // ── Produtos sem regra validada ───────────────────────────
-function MissingRulesSection({ items, meta, loading, error, onRetry, onCreate }: {
+function RequireRuleCard({ settings, error, busy, onRetry, onToggle }: {
+  settings: AppSettings | null;
+  error: string;
+  busy: boolean;
+  onRetry: () => void;
+  onToggle: () => void;
+}) {
+  if (error && !settings) return <LoadError title="Não foi possível carregar a configuração." message={error} onRetry={onRetry} />;
+  if (!settings) return <InlineLoader text="Carregando configuração…" />;
+  const on = settings.requireValidatedRule;
+  return (
+    <section className="card bg-white p-4 sm:p-5" aria-labelledby="exigir-regra-titulo">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 id="exigir-regra-titulo" className="text-base font-bold text-charcoal-800">Exigir regra validada para imprimir</h2>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+            {on
+              ? 'Ligado: a etiqueta de produto sem regra validada é recusada e o operador é orientado a chamar o gerente. Dividir etiquetas de produtos removidos do catálogo e sem regra também fica bloqueado.'
+              : 'Desligado: a etiqueta de produto sem regra validada sai com aviso, usando os dias do cadastro do produto.'}
+          </p>
+          {settings.updatedAt && settings.updatedByName && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Alterado por {settings.updatedByName} em {formatDateBRManaus(settings.updatedAt)}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-labelledby="exigir-regra-titulo"
+          disabled={busy}
+          onClick={onToggle}
+          className={cn(
+            'relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:opacity-60',
+            on ? 'bg-brand-500' : 'bg-slate-300',
+          )}
+        >
+          <span className={cn('inline-block h-6 w-6 rounded-full bg-white shadow transition-transform', on ? 'translate-x-7' : 'translate-x-1')} />
+          <span className="sr-only">{on ? 'Ligado' : 'Desligado'}</span>
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function formatDateBRManaus(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Manaus' }).format(date);
+}
+
+function MissingRulesSection({ blocking, items, meta, loading, error, onRetry, onCreate }: {
+  blocking: boolean;
   items: ProductWithoutRule[];
   meta: ProductsWithoutRuleMeta;
   loading: boolean;
@@ -338,7 +467,9 @@ function MissingRulesSection({ items, meta, loading, error, onRetry, onCreate }:
       {items.length > 0 && (
         <div id="sem-regra-lista" className="mt-4 space-y-3" hidden={!open}>
           <p className="text-xs leading-relaxed text-slate-500">
-            Estes produtos imprimem etiqueta com aviso de prazo sem regra validada, usando os dias do cadastro do produto.
+            {blocking
+              ? 'Estes produtos não imprimem etiqueta enquanto a exigência de regra validada estiver ligada.'
+              : 'Estes produtos imprimem etiqueta com aviso de prazo sem regra validada, usando os dias do cadastro do produto.'}
           </p>
           <ul className="space-y-2">
             {visible.map((item) => (
@@ -355,7 +486,9 @@ function MissingRulesSection({ items, meta, loading, error, onRetry, onCreate }:
                         <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
                           <Icon className={cn('h-3.5 w-3.5', entry.storageType === 'REFRIGERADO' ? 'text-sky-600' : 'text-indigo-600')} aria-hidden="true" />
                           <strong>{STORAGE_LABEL[entry.storageType]}</strong>
-                          <span>{usaDiasDoCadastro(entry.productDays)}</span>
+                          {blocking
+                            ? <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-1.5 py-0.5 font-bold text-red-700"><AlertTriangle className="h-3 w-3" aria-hidden="true" />{BLOQUEADO_NAO_IMPRIME}</span>
+                            : <span>{usaDiasDoCadastro(entry.productDays)}</span>}
                         </span>
                         <button
                           type="button"

@@ -8,6 +8,7 @@ import { DashboardController } from '../controllers/dashboardController';
 import { UserController } from '../controllers/userController';
 import { RuleController } from '../controllers/ruleController';
 import { TotemController } from '../controllers/totemController';
+import { SettingsController } from '../controllers/settingsController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
@@ -113,6 +114,9 @@ router.patch('/labels/:id/print', authenticate, LabelController.registerPrint);
 router.post('/labels/:id/close', authenticate, LabelController.close);
 router.post('/labels/:id/split/preview', authenticate, LabelController.splitPreview);
 router.post('/labels/:id/split', authenticate, LabelController.split);
+
+router.get('/settings', authenticate, SettingsController.get);
+router.put('/settings', authenticate, requireAdmin, SettingsController.update);
 
 router.get('/dashboard/stats', authenticate, DashboardController.getStats);
 

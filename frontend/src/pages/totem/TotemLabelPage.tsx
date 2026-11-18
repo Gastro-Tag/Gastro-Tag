@@ -5,7 +5,8 @@ import {
   Printer, Refrigerator, Scissors, Snowflake, Thermometer, User,
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
-import { extractError } from '@/services/api';
+import { extractError, extractErrorCode } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
 import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
@@ -29,7 +30,7 @@ const MAX_COPIES = 9;
 type PreviewState =
   | { status: 'loading' }
   | { status: 'ok'; data: LabelPreview }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string; code?: string };
 
 type Sheet = 'lot' | 'temp' | 'expiry' | null;
 type Done = { label: Label; printed: boolean };
@@ -104,7 +105,7 @@ export function TotemLabelPage() {
           setPreviews((current) => ({ ...current, [type]: { status: 'ok', data: data.data } }));
         })
         .catch((err) => {
-          if (active) setPreviews((current) => ({ ...current, [type]: { status: 'error', message: extractError(err) } }));
+          if (active) setPreviews((current) => ({ ...current, [type]: { status: 'error', message: extractError(err), code: extractErrorCode(err) } }));
         });
     }
     return () => { active = false; };
@@ -338,6 +339,13 @@ export function TotemLabelPage() {
         ))}
       </div>
 
+      {selectedPreview?.status === 'error' && selectedPreview.code === RULE_REQUIRED_CODE && (
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-4 border-rose-400 bg-rose-50 p-4 text-xl font-extrabold leading-snug text-rose-800 sm:p-5 sm:text-2xl">
+          <AlertTriangle className="mt-1 h-8 w-8 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 break-words">{selectedPreview.message}</span>
+        </div>
+      )}
+
       {selectedPreview?.status === 'ok' && selectedPreview.data.cappedByOriginalExpiry && (
         <div className="flex items-start gap-3 rounded-2xl border-2 border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-900 sm:p-4 sm:text-lg">
           <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-600" />
@@ -565,7 +573,7 @@ function StorageCard({ type, temp, suggested, selected, state, waiting, onSelect
         {waiting ? (
           <p className="text-lg font-bold leading-snug text-slate-400">Escolha a embalagem para calcular o descarte.</p>
         ) : state?.status === 'error' ? (
-          <p className="text-lg font-bold leading-snug text-rose-700">{state.message}</p>
+          <p className="text-lg font-bold leading-snug text-rose-700">{state.code === RULE_REQUIRED_CODE ? 'Sem prazo validado. Chame o gerente.' : state.message}</p>
         ) : ok ? (
           <>
             <div className="text-sm font-bold uppercase tracking-wider text-slate-400">Descartar em</div>

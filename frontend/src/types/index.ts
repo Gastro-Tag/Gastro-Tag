@@ -273,6 +273,7 @@ export interface VerifyOperatorResult {
 export interface KitchenInfo {
   kitchenToday:    string;
   maxBackdateDays: number;
+  requireValidatedRule?: boolean;
 }
 
 export interface LabelPreview {
@@ -370,6 +371,19 @@ export interface ProductWithoutRule {
 export interface ProductsWithoutRuleMeta {
   total:        number;
   missingCount: number;
+}
+
+/** GET/PUT /settings: configuração da cozinha (PUT só ADMIN). */
+export interface AppSettings {
+  requireValidatedRule: boolean;
+  updatedAt:            string | null;
+  updatedByName:        string | null;
+}
+
+/** meta do PUT /settings: o que fica bloqueado com a exigência ligada. */
+export interface SettingsUpdateMeta {
+  blockedProducts:     number;
+  blockedCombinations: number;
 }
 
 export interface RuleFilters {

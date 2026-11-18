@@ -21,6 +21,9 @@ export const Errors = {
     new AppError(msg, 409, 'CONFLICT'),
   validation: (msg: string) =>
     new AppError(msg, 422, 'VALIDATION_ERROR'),
+  // Bloqueio ligado em /settings e prazo viria do produto (sem regra ativa de produto nem de categoria).
+  ruleRequired: () =>
+    new AppError('Produto sem prazo validado para este armazenamento. Chame o gerente para cadastrar a regra.', 422, 'RULE_REQUIRED'),
   internal: () =>
     new AppError('Erro interno do servidor.', 500, 'INTERNAL_ERROR'),
 };

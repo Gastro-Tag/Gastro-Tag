@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
 import { extractError } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
 import type { Label, Product, SplitResult, StorageType } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
@@ -346,7 +347,16 @@ export function TotemSplitPage() {
       <div className="rounded-3xl border-2 border-slate-200 bg-white p-4 sm:p-5" aria-live="polite">
         <div className="text-sm font-bold uppercase tracking-wider text-slate-400">Descartar as filhas em</div>
         {preview.status === 'loading' && <div className="mt-1 flex items-center gap-3 text-xl font-semibold text-slate-400"><Spinner size="sm" /> Calculando…</div>}
-        {preview.status === 'error' && <p role="alert" className="mt-1 text-lg font-bold text-rose-700">{preview.message}</p>}
+        {preview.status === 'error' && (
+          preview.code === RULE_REQUIRED_CODE
+            ? (
+              <div role="alert" className="mt-2 flex items-start gap-3 rounded-2xl border-4 border-rose-400 bg-rose-50 p-4 text-xl font-extrabold leading-snug text-rose-800 sm:text-2xl">
+                <AlertTriangle className="mt-1 h-8 w-8 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 break-words">{preview.message}</span>
+              </div>
+            )
+            : <p role="alert" className="mt-1 text-lg font-bold text-rose-700">{preview.message}</p>
+        )}
         {preview.status === 'ok' && (
           <>
             <div className="text-4xl font-extrabold leading-none text-charcoal-800 sm:text-5xl">{formatBR(preview.data.discardAt)}</div>

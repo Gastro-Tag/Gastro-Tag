@@ -9,6 +9,7 @@ import { calculateDiscard, calculateSplitDiscard, parseDateOnly } from '../domai
 import { formatTemperature, roundTemperature } from '../domain/temperature';
 import { LotService } from './lotService';
 import { serializeRule } from './ruleService';
+import { SettingsService } from './settingsService';
 
 const capToOriginalExpiry = process.env.CAP_DISCARD_TO_ORIGINAL_EXPIRY !== 'false';
 
@@ -162,13 +163,31 @@ function resolveShelfLifeDays(
   rule: ShelfLifeRule | null,
   product: { daysValidRefrigerated: number; daysValidFrozen: number },
   storageType: StorageType,
+  requireValidatedRule: boolean,
 ) {
   const fallbackDays = productShelfLifeDays(product, storageType);
   const shelfLifeDays = rule?.shelfLifeDays ?? fallbackDays;
   if (shelfLifeDays <= 0) {
     throw Errors.validation(`Produto não possui validade configurada para ${storageType.toLowerCase()}.`);
   }
+  // Mesma condição de `rule.validated === false` e de `listWithoutRule` (que não conta 0 dias, recusado acima).
+  if (!rule && requireValidatedRule) throw Errors.ruleRequired();
   return shelfLifeDays;
+}
+
+/**
+ * Regra e prazo para a prévia, a etiqueta e o Dividir: ponto único da busca da regra e do bloqueio
+ * "exigir regra validada". A configuração é lida aqui, uma vez por pedido, com o mesmo `db` (a
+ * transação do Dividir, quando houver).
+ */
+async function resolveShelfLife(
+  db: Db,
+  product: { id: string; category: string | null; daysValidRefrigerated: number; daysValidFrozen: number },
+  storageType: StorageType,
+) {
+  const rule = await findActiveRule(db, product, storageType);
+  const settings = await SettingsService.get(db);
+  return { rule, shelfLifeDays: resolveShelfLifeDays(rule, product, storageType, settings.requireValidatedRule) };
 }
 
 /** Arredonda a medição e confere a faixa da regra. Sem medição (só nas prévias), não confere. */
@@ -214,8 +233,7 @@ async function computeSplit(
   const product = await db.product.findUnique({ where: { id: parent.productId } });
   if (!product) throw Errors.notFound('Produto');
   const storageType = data.storageType as StorageType;
-  const rule = await findActiveRule(db, product, storageType);
-  const shelfLifeDays = resolveShelfLifeDays(rule, product, storageType);
+  const { rule, shelfLifeDays } = await resolveShelfLife(db, product, storageType);
   const storageTemperature = checkTemperature(rule, data.storageTemperature);
   const calculation = calculateSplitDiscard({
     parentDiscardAt: parent.discardAt,
@@ -348,8 +366,7 @@ export const LabelService = {
     const originalExpiryDate = parseDateOnly(expiry, 'Validade original');
 
     const storageType = data.storageType as StorageType;
-    const rule = await findActiveRule(prisma, product, storageType);
-    const shelfLifeDays = resolveShelfLifeDays(rule, product, storageType);
+    const { rule, shelfLifeDays } = await resolveShelfLife(prisma, product, storageType);
     const storageTemperature = checkTemperature(rule, data.storageTemperature);
 
     const today = kitchenToday();

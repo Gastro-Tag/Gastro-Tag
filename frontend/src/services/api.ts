@@ -74,6 +74,12 @@ function logout() {
   window.location.href = window.location.pathname.startsWith('/totem') ? '/totem/login' : '/login';
 }
 
+/** Código do erro da API (`error.code`), ex.: RULE_REQUIRED; undefined sem resposta. */
+export function extractErrorCode(err: unknown): string | undefined {
+  if (axios.isAxiosError(err)) return (err.response?.data as any)?.error?.code;
+  return undefined;
+}
+
 export function extractError(err: unknown): string {
   if (axios.isAxiosError(err)) {
     if (!err.response) return 'Sem conexão com o servidor. Verifique a rede e tente novamente.';

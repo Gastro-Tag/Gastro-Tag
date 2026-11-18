@@ -5,6 +5,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/store/authStore';
 import { labelApi } from '@/services';
 import { extractError } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
 import { useSplitPreview } from '@/hooks/useSplitPreview';
 import type { Label, SplitResult, StorageType } from '@/types';
 import { formatBR } from '@/utils/date';
@@ -175,7 +176,16 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" aria-live="polite">
           <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Descarte previsto das filhas</p>
           {preview.status === 'loading' && <p className="mt-1 flex items-center gap-2 text-sm text-slate-500"><Spinner size="sm" /> Calculando…</p>}
-          {preview.status === 'error' && <p role="alert" className="mt-1 text-sm font-semibold text-rose-700">{preview.message}</p>}
+          {preview.status === 'error' && (
+            <p
+              role="alert"
+              className={preview.code === RULE_REQUIRED_CODE
+                ? 'mt-1 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800'
+                : 'mt-1 text-sm font-semibold text-rose-700'}
+            >
+              {preview.message}
+            </p>
+          )}
           {preview.status === 'ok' && (
             <>
               <p className="mt-1 text-2xl font-extrabold text-charcoal-800">{formatBR(preview.data.discardAt)}</p>
