@@ -7,6 +7,7 @@ import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
 import { logger } from '../src/utils/logger';
 import { kitchenToday } from '../src/utils/dateUtils';
+import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
 
 // Precisa valer antes de importar o app: simula a API atrás do nginx.
 vi.hoisted(() => { process.env.TRUST_PROXY_HOPS = '1'; });
@@ -1930,7 +1931,8 @@ describe('produtos sem regra validada', () => {
     ruleIds.push(res.body.data.id);
     return res.body.data.id as string;
   };
-  const entry = (body: { data: { id: string }[] }, key: string) => body.data.find((item) => item.id === ids[key]);
+  type Entry = { id: string; missing: { storageType: string; productDays: number }[] };
+  const entry = (body: { data: Entry[] }, key: string) => body.data.find((item) => item.id === ids[key]);
 
   beforeAll(async () => {
     const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.40')
@@ -2018,5 +2020,162 @@ describe('produtos sem regra validada', () => {
       .send({ email: operatorEmail, password: 'TestPassword123!' });
     expect((await withoutRule(`Bearer ${login.body.data.accessToken}`)).status).toBe(403);
     expect((await request(app).get('/api/products/without-rule')).status).toBe(401);
+  });
+});
+
+describe('categorias de produto', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  // Categorias da lista padrão sem produto ativo nem regra ativa equivalente no início do bloco.
+  let free = '';
+  let free2 = '';
+  let free3 = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const createViaApi = async (category: unknown) => {
+    const res = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Categoria ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 0,
+      ...(category !== undefined && { category }),
+    });
+    expect(res.status).toBe(201);
+    productIds.push(res.body.data.id);
+    return res.body.data as { id: string; category: string | null };
+  };
+  const createLegacy = async (name: string, category: string) => {
+    // Gravado direto no banco, como os produtos de antes da lista (grafia sem normalizar).
+    const product = await prisma.product.create({ data: {
+      name: `${name} ${tag}`, brand: 'Teste', category, daysValidRefrigerated: 3, daysValidFrozen: 0,
+    } });
+    productIds.push(product.id);
+    return product;
+  };
+  const createCategoryRule = async (category: string) => {
+    const res = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+      .send({ ...ruleBody, category, storageType: 'REFRIGERADO', shelfLifeDays: 2 });
+    expect(res.status).toBe(201);
+    ruleIds.push(res.body.data.id);
+    return res.body.data as { id: string; category: string };
+  };
+  const previewRule = async (productId: string) => {
+    const res = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId, originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO', storageTemperature: 4,
+    });
+    expect(res.status).toBe(200);
+    return res.body.data.rule as { id: string | null; validated: boolean };
+  };
+  const categories = (query = '') =>
+    request(app).get(`/api/products/categories${query}`).set('Authorization', asAdmin());
+  const fold = (value: string) => categoryKey(value);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.50')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+
+    // O banco descartável pode ter dados de outras execuções: escolhe categorias padrão ainda livres.
+    const [used, rules] = await Promise.all([
+      prisma.product.findMany({ where: { active: true, category: { not: null } }, select: { category: true } }),
+      prisma.shelfLifeRule.findMany({ where: { active: true, category: { not: null } }, select: { category: true } }),
+    ]);
+    const taken = new Set([...used, ...rules].map((row) => fold(row.category!)));
+    [free = '', free2 = '', free3 = ''] = DEFAULT_CATEGORIES.filter((item) => !taken.has(fold(item)));
+    expect([free, free2, free3].every(Boolean)).toBe(true);
+  });
+
+  it('uses the default spelling when no active product has an equivalent category, then the one in use', async () => {
+    expect((await createViaApi(fold(free))).category).toBe(free); // ex.: "laticinios" → "Laticínios"
+    expect((await createViaApi(`  ${free.toUpperCase()} `)).category).toBe(free); // já em uso: mesma grafia
+  });
+
+  it('prefers the most used spelling among active products over the default list', async () => {
+    for (const key of ['a', 'b', 'c']) await createLegacy(`Categoria legada ${key}`, fold(free).toUpperCase());
+    // 3 com a grafia antiga contra 2 com a da lista: vale a mais usada.
+    expect((await createViaApi(free.toLowerCase())).category).toBe(fold(free).toUpperCase());
+  });
+
+  it('keeps a new text with collapsed spaces, and empty or null means no category', async () => {
+    expect((await createViaApi(`  Nova   categoria \t ${tag}  `)).category).toBe(`Nova categoria ${tag}`);
+    expect((await createViaApi('')).category).toBeNull();
+    expect((await createViaApi('   ')).category).toBeNull();
+    expect((await createViaApi(null)).category).toBeNull();
+    expect((await createViaApi(undefined)).category).toBeNull();
+    const tooLong = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Categoria ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 0, category: 'x'.repeat(61),
+    });
+    expect(tooLong.status).toBe(422);
+  });
+
+  it('normalizes on update too, keeping the current spelling when equivalent', async () => {
+    const product = await createViaApi(`Única ${tag}`);
+    const put = (body: object) => request(app).put(`/api/products/${product.id}`).set('Authorization', asAdmin()).send(body);
+
+    const same = await put({ category: `  ÚNICA   ${tag} ` });
+    expect(same.status).toBe(200);
+    expect(same.body.data.category).toBe(`Única ${tag}`);
+
+    expect((await put({ category: fold(free2) })).body.data.category).toBe(free2);
+    expect((await put({ name: `Categoria ${tag} editada` })).body.data.category).toBe(free2); // sem category, não mexe
+    expect((await put({ category: '' })).body.data.category).toBeNull();
+  });
+
+  it('keeps the old spelling of the only product with a category rule when it is edited', async () => {
+    const legacySpelling = fold(free3).toUpperCase(); // diferente da grafia da lista padrão
+    const product = await createLegacy('Categoria com regra', legacySpelling);
+    const rule = await createCategoryRule(legacySpelling);
+    expect(rule.category).toBe(legacySpelling);
+    const put = (body: object) => request(app).put(`/api/products/${product.id}`).set('Authorization', asAdmin()).send(body);
+
+    // O formulário manda a categoria junto; mesmo na grafia da lista, fica a atual.
+    expect((await put({ name: `Categoria com regra ${tag} editado`, category: free3 })).body.data.category).toBe(legacySpelling);
+    expect((await put({ name: `Categoria com regra ${tag} de novo` })).body.data.category).toBe(legacySpelling);
+    expect(await previewRule(product.id)).toMatchObject({ id: rule.id, validated: true });
+  });
+
+  it('gives a new equivalent product the spelling of the active category rule, even if most products use another', async () => {
+    const ruleSpelling = `mistura ${tag}`;
+    await createLegacy('Mistura regra', ruleSpelling);
+    const rule = await createCategoryRule(ruleSpelling);
+    for (const key of ['a', 'b', 'c']) await createLegacy(`Mistura maioria ${key}`, `MISTURA ${tag}`);
+
+    const created = await createViaApi(`Mistura ${tag}`);
+    expect(created.category).toBe(ruleSpelling);
+    expect(await previewRule(created.id)).toMatchObject({ id: rule.id, validated: true });
+  });
+
+  it('treats inner double spaces as the same category and keeps the stored spelling', async () => {
+    const stored = `Dupla  ${tag}`; // dois espaços, de antes da limpeza
+    await createLegacy('Espaço duplo', stored);
+    const rule = await createCategoryRule(stored);
+    expect(rule.category).toBe(stored);
+
+    const created = await createViaApi(`dupla ${tag}`);
+    expect(created.category).toBe(stored);
+    expect(await previewRule(created.id)).toMatchObject({ id: rule.id, validated: true });
+
+    const list = (await categories('?withDefaults=true')).body.data as string[];
+    expect(list.filter((item) => fold(item) === fold(stored))).toEqual([stored]);
+  });
+
+  it('lists the default categories with ?withDefaults=true, without equivalent duplicates', async () => {
+    const res = await categories('?withDefaults=true');
+    expect(res.status).toBe(200);
+    const list = res.body.data as string[];
+    expect(new Set(list.map(fold)).size).toBe(list.length);
+    expect(list).toEqual([...list].sort((a, b) => a.localeCompare(b, 'pt-BR')));
+    const keys = new Set(list.map(fold));
+    expect(DEFAULT_CATEGORIES.every((item) => keys.has(fold(item)))).toBe(true);
+    expect(list).toContain(`Nova categoria ${tag}`);
+    expect(list.filter((item) => fold(item) === fold(free))).toHaveLength(1);
+  });
+
+  it('keeps the previous behavior without the parameter, and validates the query', async () => {
+    const res = await categories();
+    expect(res.status).toBe(200);
+    const rows = await prisma.product.findMany({
+      where: { active: true, category: { not: null } }, select: { category: true }, distinct: ['category'], orderBy: { category: 'asc' },
+    });
+    expect(res.body.data).toEqual(rows.map((row) => row.category));
+    expect(res.body.data).toEqual(expect.arrayContaining([free, fold(free).toUpperCase()]));
+    expect((await categories('?withDefaults=false')).body.data).toEqual(res.body.data);
+    expect((await categories('?withDefaults=sim')).status).toBe(422);
   });
 });

@@ -3,6 +3,8 @@ import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import { kitchenToday } from '../utils/dateUtils';
 import { parseDateOnly } from '../domain/shelfLife';
+import { pickUsedSpelling } from '../domain/categories';
+import { activeCategoryUsage } from './categoryService';
 
 /** Conteúdo de uma versão. Alvo (produto ou categoria) e armazenamento não mudam entre versões. */
 export interface RuleVersionInput {
@@ -98,25 +100,15 @@ async function lockTarget(
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
 }
 
-/** Compara categorias sem diferenciar maiúsculas, acentos e espaços nas pontas. */
-const normalizeCategory = (value: string) =>
-  value.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
-
 /**
  * Devolve o texto da categoria como está nos produtos ativos ("laticínios" → "Laticínios"),
  * para a busca exata do preview, o 409 e o lock usarem o mesmo valor.
  */
 async function canonicalCategory(category: string) {
-  const wanted = normalizeCategory(category);
-  const rows = await prisma.product.groupBy({
-    by: ['category'], where: { active: true, category: { not: null } }, _count: { _all: true },
-  });
   // Grafias diferentes da mesma categoria: vale a mais usada.
-  const match = rows
-    .filter((row) => row.category !== null && normalizeCategory(row.category) === wanted)
-    .sort((a, b) => b._count._all - a._count._all || a.category!.localeCompare(b.category!))[0];
-  if (!match?.category) throw Errors.validation('Categoria não encontrada entre os produtos ativos.');
-  return match.category;
+  const match = pickUsedSpelling(category, await activeCategoryUsage());
+  if (!match) throw Errors.validation('Categoria não encontrada entre os produtos ativos.');
+  return match;
 }
 
 const activeConflict = () =>

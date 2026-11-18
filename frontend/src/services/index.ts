@@ -78,8 +78,11 @@ export const productApi = {
   remove: (id: string) =>
     api.delete<ApiResponse<null>>(`/products/${id}`),
 
-  getCategories: () =>
-    api.get<ApiResponse<string[]>>('/products/categories'),
+  /** Sem opções: só as categorias em uso. Com `withDefaults`: lista padrão + em uso, sem duplicatas. */
+  getCategories: (opts?: { withDefaults?: boolean }) =>
+    api.get<ApiResponse<string[]>>('/products/categories', {
+      params: opts?.withDefaults ? { withDefaults: true } : undefined,
+    }),
 
   /** ADMIN: produtos ativos que ainda imprimem etiqueta sem regra validada. */
   withoutRule: () =>

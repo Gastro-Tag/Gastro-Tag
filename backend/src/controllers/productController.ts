@@ -7,7 +7,8 @@ import { ProductService, ProductFilters } from '../services/productService';
 const productFields = z.object({
   name: z.string().min(2).max(120),
   brand: z.string().min(1).max(120),
-  category: z.string().max(60).optional(),
+  // Texto livre; o serviço limpa os espaços e grava a grafia em uso ou a da lista padrão. Vazio ou null: sem categoria.
+  category: z.string().max(60).refine((value) => !value.includes('\u0000'), 'Categoria inválida.').nullable().optional(),
   daysValidRefrigerated: z.number().int().min(0).max(365),
   daysValidFrozen: z.number().int().min(0).max(1095),
   unit: z.string().max(20).optional(),
@@ -34,6 +35,10 @@ const listQuerySchema = z.object({
   order: z.enum(['asc', 'desc']).optional(),
   page: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().positive().max(100).optional(),
+});
+
+const categoriesQuerySchema = z.object({
+  withDefaults: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
 });
 
 export const ProductController = {
@@ -80,7 +85,8 @@ export const ProductController = {
   },
 
   async getCategories(req: Request, res: Response) {
-    const categories = await ProductService.getCategories();
+    const { withDefaults } = categoriesQuerySchema.parse(req.query);
+    const categories = await ProductService.getCategories({ withDefaults });
 
     res.json({ success: true, data: categories });
   },

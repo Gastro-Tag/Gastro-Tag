@@ -88,7 +88,8 @@ export interface Product {
 export interface CreateProductDTO {
   name:                   string;
   brand:                  string;
-  category?:              string;
+  /** `null` remove a categoria (edição). */
+  category?:              string | null;
   daysValidRefrigerated:  number;
   daysValidFrozen:        number;
   unit?:                  string;
