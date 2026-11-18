@@ -23,7 +23,7 @@ Sistema web para identificar alimentos, acompanhar validade após abertura e ger
 
 1. Copie `.env.example` para `.env`.
 2. Configure `POSTGRES_PASSWORD` e gere dois segredos JWT aleatórios e diferentes, cada um com pelo menos 32 caracteres.
-3. Configure `ADMIN_EMAIL` e `ADMIN_PASSWORD` (mínimo de 12 caracteres) para provisionar o administrador. A API sincroniza a senha e o papel dessa conta com essas variáveis ao iniciar. Sem ambas, não cria administrador automaticamente.
+3. Configure `ADMIN_EMAIL` e `ADMIN_PASSWORD` (mínimo de 12 caracteres) para provisionar o administrador. Ao iniciar, a API só cria o administrador quando ele ainda não existe; não altera a senha nem o papel de uma conta existente. Para ressincronizar senha, papel e situação ativa (revogando as sessões da conta), use `ADMIN_SYNC_ON_BOOT=true` temporariamente (as sessões da conta só são revogadas se a senha ou o papel mudarem). Sem ambas, não cria administrador automaticamente.
 4. Inicie os serviços:
 
 ```bash
@@ -47,6 +47,8 @@ docker compose down
 ```
 
 Os dados do PostgreSQL ficam no volume `postgres_data`.
+
+Os logs dos containers ficam limitados a cerca de 30 MB por serviço (driver `json-file`, 3 arquivos de 10 MB com rotação), e `docker compose logs` continua funcionando normalmente. A mudança vale para cada container quando ele é recriado (`docker compose up -d` recria os que mudaram).
 
 ## Executar em desenvolvimento local
 
@@ -259,7 +261,7 @@ Detalhes e restauração em [`scripts/README.md`](scripts/README.md). Os backups
 
 ## Modo totem
 
-A interface de totem para a bancada fica em `http://localhost/totem`: grade de produtos, data de descarte já calculada e impressão em 2 toques. Detalhes de uso, instalação em modo quiosque e limitações em [`docs/TOTEM.md`](docs/TOTEM.md).
+A interface de totem para a bancada fica em `http://localhost/totem`: grade de produtos, data de descarte já calculada e impressão em 4 toques no caso simples. Detalhes de uso, instalação em modo quiosque e limitações em [`docs/TOTEM.md`](docs/TOTEM.md).
 
 ## Roteiro da demonstração
 
@@ -274,7 +276,7 @@ A interface de totem para a bancada fica em `http://localhost/totem`: grade de p
 
 - O cálculo usa os prazos cadastrados no produto ou, quando houver, uma regra de validade versionada, cadastrada na tela `/rules` (somente ADMIN), com fonte e responsável pela validação. Ainda não existe um catálogo normativo validado; os valores precisam ser confirmados pelo responsável técnico antes de uso operacional.
 - O dia da abertura conta como dia 1: um prazo de 3 dias com abertura em 01/09 vai até 03/09. O servidor recusa abertura futura e etiqueta que já nasceria vencida.
-- A impressão é feita pelo navegador, com quatro modelos de etiqueta: folha A4 / papel comum (9 cm de largura) e 100×60 mm, ambos com todas as informações; térmica 60×40 mm, resumida (sem logo, marca, prazo/fonte, aviso do fabricante e assinatura); e térmica 50×30 mm, mínima (produto, descarte, abertura, lote, responsável e código; armazenamento e temperatura só se couberem). Nas térmicas a fonte diminui sozinha (nunca abaixo de 6 pt) e, se mesmo assim não couber, o texto continua na etiqueta seguinte, sem cortar nada. O modelo é escolhido por aparelho na tela de gerar etiqueta (guardado em `localStorage`, chave `gastrotag_label_template`) e o totem usa o modelo salvo no aparelho. Na térmica, o `@page` define o tamanho; o papel configurado no driver da impressora deve ter o mesmo tamanho. **Ainda não houve teste em impressora térmica física**; o modelo térmico não foi validado em papel. Integração direta com impressoras térmicas não faz parte do TCC atual.
-- O sistema não envia e-mail: o "Esqueci minha senha" dos logins do painel e do totem apenas orienta que a senha seja redefinida por um administrador em **Usuários → Senha**. A senha da conta de `ADMIN_EMAIL` é sincronizada pelo servidor na inicialização. Os campos de senha têm botão de olho para mostrar o que foi digitado.
+- A impressão é feita pelo navegador, com quatro modelos de etiqueta: folha A4 / papel comum (9 cm de largura) e 100×60 mm, ambos com todas as informações; térmica 60×40 mm, resumida (sem logo, marca e assinatura; mostra a validade do fabricante e o prazo com o tipo da fonte, ou SEM REGRA VALIDADA); e térmica 50×30 mm, mínima (produto, descarte, abertura, lote, validade do fabricante, responsável e código, com S/ REGRA quando não há regra; armazenamento e temperatura só se couberem). A validade do fabricante sai em todos os modelos quando existe. Nas térmicas os textos diminuem sozinhos (nunca abaixo de 6 pt); a data de descarte é o maior elemento nos modelos pequenos e só cai a um piso (18 pt no 60×40, 14 pt no 50×30) quando, sem isso, não caberia. Se mesmo assim não couber, o texto continua na etiqueta seguinte, sem cortar nada. O modelo é escolhido por aparelho na tela de gerar etiqueta ou no menu do administrador do totem (guardado em `localStorage`, chave `gastrotag_label_template`) e o totem usa o modelo salvo no aparelho; sem escolha, a impressão sai em A4 e as telas avisam. Na térmica, o `@page` define o tamanho; o papel configurado no driver da impressora deve ter o mesmo tamanho. **Ainda não houve teste em impressora térmica física**; o modelo térmico não foi validado em papel. Integração direta com impressoras térmicas não faz parte do TCC atual.
+- O sistema não envia e-mail: o "Esqueci minha senha" dos logins do painel e do totem apenas orienta que a senha seja redefinida por um administrador em **Usuários → Senha**. A senha da conta de `ADMIN_EMAIL` só é sincronizada na inicialização com `ADMIN_SYNC_ON_BOOT=true`. Os campos de senha têm botão de olho para mostrar o que foi digitado.
 - O sistema está direcionado a uma cozinha/unidade; multiempresa, multiunidade e operação SaaS ficam para uma etapa futura.
 - O seed é opcional e cria dados demonstrativos com datas relativas à execução. A inicialização normal não exige executar o seed.

@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import {
-  Printer, Refrigerator, Snowflake, Tag, Scissors, CheckCircle2, GitBranch, ShieldCheck,
+  Printer, Refrigerator, Snowflake, Tag, Scissors, CheckCircle2, GitBranch, ShieldCheck, PackageOpen,
 } from 'lucide-react';
 import { labelApi } from '@/services';
 import { extractError } from '@/services/api';
 import type { Label, LabelChild } from '@/types';
 import { daysUntil, formatBR, formatDateTimeBR } from '@/utils/date';
 import { outcomeText } from '@/utils/labelStatus';
+import { isOtherPackage } from '@/utils/lotSource';
 import { cn } from '@/utils/cn';
 
 interface Props {
@@ -91,6 +92,11 @@ export function LabelCard({ label, onReprint, onSplit, onCloseLabel, onSearchCod
             <span className="font-medium text-slate-600">{productBrand}</span>
             <span>• Lote: <strong className="text-charcoal-800">{label.lot}</strong></span>
             <span>• Manipulador: <strong className="text-charcoal-800">{label.responsibleName ?? 'Não informado'}</strong></span>
+            {isOtherPackage(label) && (
+              <span className="badge badge-neutral gap-1" title="Validade digitada na hora, sem lote cadastrado">
+                <PackageOpen className="h-3 w-3 shrink-0" aria-hidden="true" /> Outra embalagem
+              </span>
+            )}
             {label.handlerVerified && (
               <span className="badge badge-valid gap-1" title="O responsável confirmou o PIN no totem">
                 <ShieldCheck className="h-3 w-3 shrink-0" /> Operador confirmado
@@ -150,6 +156,14 @@ export function LabelCard({ label, onReprint, onSplit, onCloseLabel, onSearchCod
                 : <span className="font-semibold text-amber-700">Prazo do produto (sem regra validada)</span>}
               {label.cappedByOriginalExpiry && ' • (Teto: validade original)'}
               {label.cappedByParent && ' • Data limitada pela etiqueta de origem'}
+            </div>
+          )}
+
+          {(label.flowMs != null || label.temperatureSource) && (
+            <div className="mt-1 text-[11px] text-slate-400">
+              {label.flowMs != null && <>Tempo no aparelho: {(label.flowMs / 1000).toFixed(1).replace('.', ',')} s</>}
+              {label.flowMs != null && label.temperatureSource && ' • '}
+              {label.temperatureSource && <>Temperatura: {label.temperatureSource === 'SUGERIDO' ? 'sugerida confirmada' : 'digitada'}</>}
             </div>
           )}
 

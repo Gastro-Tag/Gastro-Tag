@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import {
   AlertTriangle, ArrowLeft, CalendarDays, Check, CheckCircle2, Hash, Minus, Plus,
   Printer, Refrigerator, Scissors, Snowflake, Thermometer, User,
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
-import { extractError } from '@/services/api';
-import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType } from '@/types';
+import { extractError, extractErrorCode } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
+import { expiryWarningText, needsExpiryConfirmation } from '@/utils/expiryWarning';
+import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType, TemperatureSource } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { useTotemStore } from '@/store/totemStore';
@@ -16,8 +18,10 @@ import {
   DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft,
   getHandlerToken, getLastStorage, getOperator, parseDateDraft, rememberChoices, weekdayShort,
 } from '@/utils/totem';
-import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft } from '@/utils/temperature';
+import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, resolveTemperatureSource, temperatureDraft } from '@/utils/temperature';
+import { elapsedFlowMs, flowStartFromState } from '@/utils/flowTime';
 import { cn } from '@/utils/cn';
+import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
 import { createRequestKeeper } from '@/utils/requestId';
 import { isHandlerInvalid } from '@/utils/handler';
 
@@ -28,7 +32,7 @@ const MAX_COPIES = 9;
 type PreviewState =
   | { status: 'loading' }
   | { status: 'ok'; data: LabelPreview }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string; code?: string };
 
 type Sheet = 'lot' | 'temp' | 'expiry' | null;
 type Done = { label: Label; printed: boolean };
@@ -40,7 +44,25 @@ function logo(): string | null {
 export function TotemLabelPage() {
   const { productId = '' } = useParams<{ productId: string }>();
   const navigate = useNavigate();
-  const { operator, openOperatorSheet, syncOperator, invalidateOperator } = useTotemStore();
+  const location = useLocation();
+  // Início do fluxo: o toque no produto (passado pela lista). Sem ele (link direto, recarga) o tempo não é enviado.
+  const flowStart = useRef(flowStartFromState(location.state));
+  const { operator, operatorSheetOpen, openOperatorSheet, syncOperator, invalidateOperator } = useTotemStore();
+
+  // Consome o state: voltar/avançar e recarregar não reaproveitam o início.
+  useEffect(() => {
+    if (location.state != null) navigate(location.pathname, { replace: true, state: null });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Identificar o operador (PIN/nome) não conta no tempo: ao fechar a folha com sucesso, o relógio recomeça.
+  const sheetWasOpen = useRef(false);
+  useEffect(() => {
+    if (operatorSheetOpen) { sheetWasOpen.current = true; return; }
+    if (sheetWasOpen.current) {
+      sheetWasOpen.current = false;
+      if (operator && flowStart.current !== undefined) flowStart.current = performance.now();
+    }
+  }, [operatorSheetOpen, operator]);
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -48,6 +70,9 @@ export function TotemLabelPage() {
   // Só vale a temperatura que o operador confirmou NESTA etiqueta. O valor de DEFAULT_TEMP é apenas sugestão
   // e a tela é remontada a cada etiqueta, então a próxima sempre pede a confirmação de novo.
   const [temps, setTemps] = useState<Partial<Record<StorageType, number>>>({});
+  const [tempSources, setTempSources] = useState<Partial<Record<StorageType, TemperatureSource>>>({});
+  // O operador tocou no teclado enquanto a janela de temperatura estava aberta.
+  const tempEdited = useRef(false);
   // Lote cadastrado ou validade digitada a partir da embalagem em mãos.
   const [source, setSource] = useState<ExpirySource | null>(null);
   const [packageExpiry, setPackageExpiry] = useState('');
@@ -55,12 +80,13 @@ export function TotemLabelPage() {
   const [copies, setCopies] = useState(1);
   const [previews, setPreviews] = useState<Partial<Record<StorageType, PreviewState>>>({});
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [expiryConfirmed, setExpiryConfirmed] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [done, setDone] = useState<Done | null>(null);
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:totem-label'));
 
   // Produto + armazenamento do último uso. Com mais de um lote, quem está com a embalagem escolhe.
   useEffect(() => {
@@ -103,7 +129,7 @@ export function TotemLabelPage() {
           setPreviews((current) => ({ ...current, [type]: { status: 'ok', data: data.data } }));
         })
         .catch((err) => {
-          if (active) setPreviews((current) => ({ ...current, [type]: { status: 'error', message: extractError(err) } }));
+          if (active) setPreviews((current) => ({ ...current, [type]: { status: 'error', message: extractError(err), code: extractErrorCode(err) } }));
         });
     }
     return () => { active = false; };
@@ -124,7 +150,10 @@ export function TotemLabelPage() {
   const isPackage = Boolean(source?.originalExpiryDate);
   const lotReady = !isPackage || Boolean(lot.trim());
   const confirmedTemp = storage ? temps[storage] : undefined;
-  const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lotReady && !submitting);
+  const expiryWarning = selectedPreview?.status === 'ok' ? selectedPreview.data.expiryWarning ?? null : null;
+  const typedExpiry = selectedPreview?.status === 'ok' ? selectedPreview.data.originalExpiryDate : '';
+  const expiryPending = needsExpiryConfirmation(expiryWarning, `${productId}|${typedExpiry}`, expiryConfirmed);
+  const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lotReady && !submitting && !expiryPending);
 
   async function registerPrints(label: Label, count: number) {
     try {
@@ -139,7 +168,7 @@ export function TotemLabelPage() {
     // Lê de novo no toque: o turno pode ter expirado desde a última sincronização.
     const responsible = getOperator();
     if (!responsible) { syncOperator(); openOperatorSheet(); return; }
-    if (!source || selectedPreview?.status !== 'ok' || !lotReady) return;
+    if (!source || selectedPreview?.status !== 'ok' || !lotReady || expiryPending) return;
     // Imprimir só depois de o operador confirmar a temperatura no teclado numérico.
     const temperature = temps[storage];
     if (temperature === undefined) { setSheet('temp'); return; }
@@ -157,9 +186,10 @@ export function TotemLabelPage() {
         storageType: storage,
         storageTemperature: temperature,
       };
+      const flowMs = elapsedFlowMs(flowStart.current, performance.now());
       // Com PIN confirmado o servidor usa o nome do operador do token; sem ele vale o nome digitado.
       const handlerToken = getHandlerToken() || undefined;
-      const { data } = await labelApi.create({ ...payload, handlerToken, requestId: requests.idFor(payload) });
+      const { data } = await labelApi.create({ ...payload, handlerToken, flowMs, temperatureSource: tempSources[storage], requestId: requests.idFor(payload) });
       const label: Label = data.data;
       created = label;
       requests.reset(); // a próxima etiqueta, mesmo igual, é outro pedido
@@ -337,12 +367,39 @@ export function TotemLabelPage() {
         ))}
       </div>
 
+      {selectedPreview?.status === 'error' && selectedPreview.code === RULE_REQUIRED_CODE && (
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-4 border-rose-400 bg-rose-50 p-4 text-xl font-extrabold leading-snug text-rose-800 sm:p-5 sm:text-2xl">
+          <AlertTriangle className="mt-1 h-8 w-8 shrink-0" aria-hidden="true" />
+          <span className="min-w-0 break-words">{selectedPreview.message}</span>
+        </div>
+      )}
+
       {selectedPreview?.status === 'ok' && selectedPreview.data.cappedByOriginalExpiry && (
         <div className="flex items-start gap-3 rounded-2xl border-2 border-amber-300 bg-amber-50 p-3 text-base font-semibold text-amber-900 sm:p-4 sm:text-lg">
           <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-amber-600" />
           <span className="min-w-0">
             Data limitada pela validade original do fabricante ({formatBR(selectedPreview.data.originalExpiryDate)}).
           </span>
+        </div>
+      )}
+
+      {expiryWarning && (
+        <div role="alert" className="rounded-2xl border-4 border-amber-400 bg-amber-50 p-4 sm:p-5">
+          <div className="flex items-start gap-3 text-xl font-extrabold leading-snug text-amber-900 sm:text-2xl">
+            <AlertTriangle className="mt-1 h-8 w-8 shrink-0 text-amber-600" aria-hidden="true" />
+            <span className="min-w-0 break-words">{expiryWarningText(expiryWarning, typedExpiry)}</span>
+          </div>
+          {expiryPending ? (
+            <button
+              type="button"
+              onClick={() => setExpiryConfirmed(`${productId}|${typedExpiry}`)}
+              className="btn btn-primary mt-4 h-auto min-h-[64px] w-full touch-manipulation rounded-2xl px-4 text-xl font-extrabold sm:text-2xl"
+            >
+              <Check className="h-7 w-7 shrink-0" aria-hidden="true" /> Conferi na embalagem
+            </button>
+          ) : (
+            <p className="mt-3 flex items-center gap-2 text-lg font-bold text-emerald-700 sm:text-xl"><CheckCircle2 className="h-6 w-6" aria-hidden="true" /> Conferido na embalagem</p>
+          )}
         </div>
       )}
 
@@ -392,6 +449,7 @@ export function TotemLabelPage() {
       )}
 
       <div className="sticky bottom-0 -mx-3 mt-auto bg-gradient-to-t from-[#F3F4F6] via-[#F3F4F6] to-transparent px-3 pb-3 pt-3 sm:-mx-5 sm:px-5 sm:pb-5 sm:pt-4">
+        <LabelTemplateStatus large className="mb-2 [@media(max-height:500px)]:mb-1" />
         <button
           type="button"
           disabled={!canPrint}
@@ -447,7 +505,7 @@ export function TotemLabelPage() {
           maxLength={8}
           displayValue={formatDateDraft}
           confirmLabel="Usar esta validade"
-          onCancel={() => setSheet(null)}
+          onCancel={() => { tempEdited.current = false; setSheet(null); }}
           onConfirm={(value) => {
             const expiry = parseDateDraft(value);
             if (!expiry) return 'Digite uma data real: dia, mês e ano.';
@@ -469,11 +527,15 @@ export function TotemLabelPage() {
           layout="numeric"
           maxLength={6}
           confirmLabel="Confirmar temperatura"
-          onCancel={() => setSheet(null)}
+          onLiveChange={() => { tempEdited.current = true; }}
+          onCancel={() => { tempEdited.current = false; setSheet(null); }}
           onConfirm={(value) => {
             const temperature = parseTemperature(value);
             if (temperature === null) return 'Digite uma temperatura válida, em °C (de −50 a 30).';
+            const source = resolveTemperatureSource({ value: temperature, suggested: DEFAULT_TEMP[storage], edited: tempEdited.current, previous: tempSources[storage] });
             setTemps((current) => ({ ...current, [storage]: temperature }));
+            setTempSources((current) => ({ ...current, [storage]: source }));
+            tempEdited.current = false;
             setSubmitError('');
             setSheet(null);
           }}
@@ -563,7 +625,7 @@ function StorageCard({ type, temp, suggested, selected, state, waiting, onSelect
         {waiting ? (
           <p className="text-lg font-bold leading-snug text-slate-400">Escolha a embalagem para calcular o descarte.</p>
         ) : state?.status === 'error' ? (
-          <p className="text-lg font-bold leading-snug text-rose-700">{state.message}</p>
+          <p className="text-lg font-bold leading-snug text-rose-700">{state.code === RULE_REQUIRED_CODE ? 'Sem prazo validado. Chame o gerente.' : state.message}</p>
         ) : ok ? (
           <>
             <div className="text-sm font-bold uppercase tracking-wider text-slate-400">Descartar em</div>

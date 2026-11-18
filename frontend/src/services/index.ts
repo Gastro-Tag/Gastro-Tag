@@ -4,9 +4,9 @@ import type {
   Product, ProductLot, CreateProductDTO, ProductFilters,
   Label, CreateLabelDTO, LabelPreview, LabelPreviewDTO,
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
-  ShelfLifeRule, RuleFilters, RuleVersionDTO, CreateRuleDTO,
+  ShelfLifeRule, RuleFilters, AppSettings, SettingsUpdateMeta, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
-  DueLabelsResult, KitchenInfo, LabelExportParams, TotemOperator, VerifyOperatorResult,
+  DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
 
 // ── Auth ────────────────────────────────────────────────
@@ -78,8 +78,15 @@ export const productApi = {
   remove: (id: string) =>
     api.delete<ApiResponse<null>>(`/products/${id}`),
 
-  getCategories: () =>
-    api.get<ApiResponse<string[]>>('/products/categories'),
+  /** Sem opções: só as categorias em uso. Com `withDefaults`: lista padrão + em uso, sem duplicatas. */
+  getCategories: (opts?: { withDefaults?: boolean }) =>
+    api.get<ApiResponse<string[]>>('/products/categories', {
+      params: opts?.withDefaults ? { withDefaults: true } : undefined,
+    }),
+
+  /** ADMIN: produtos ativos que ainda imprimem etiqueta sem regra validada. */
+  withoutRule: () =>
+    api.get<ApiResponse<ProductWithoutRule[]> & { meta: ProductsWithoutRuleMeta }>('/products/without-rule'),
 };
 
 // ── Lots ────────────────────────────────────────────────
@@ -118,6 +125,10 @@ export const labelApi = {
   /** Etiquetas ATIVAS vencidas, que vencem hoje e amanhã (data da cozinha). */
   due: () =>
     api.get<DueLabelsResult>('/labels/due'),
+
+  /** Números da cozinha (ADMIN): tempo do fluxo e origem da temperatura. Sem datas, últimos 7 dias. */
+  metrics: (params?: LabelMetricsParams) =>
+    api.get<ApiResponse<LabelMetrics>>('/labels/metrics', { params }),
 
   /** CSV (ADMIN) com os filtros da lista + período de criação. Devolve o arquivo e o nome sugerido. */
   exportCsv: async (params: LabelExportParams): Promise<{ blob: Blob; filename: string }> => {
@@ -168,4 +179,14 @@ export const ruleApi = {
 export const dashboardApi = {
   getStats: () =>
     api.get<ApiResponse<DashboardStats>>('/dashboard/stats'),
+};
+
+// ── Configurações ───────────────────────────────────────
+export const settingsApi = {
+  get: () =>
+    api.get<ApiResponse<AppSettings>>('/settings'),
+
+  /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
+  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null }) =>
+    api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', changes),
 };

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertTriangle, BookOpenCheck, History, Info, Plus, Power, RefreshCw, Refrigerator, Snowflake, Thermometer,
+  AlertTriangle, BookOpenCheck, ChevronDown, ChevronUp, History, Info, Plus, Power, RefreshCw, Refrigerator, Snowflake, Thermometer,
 } from 'lucide-react';
-import { productApi, ruleApi } from '@/services';
+import { productApi, ruleApi, settingsApi } from '@/services';
 import { extractError } from '@/services/api';
 import type {
-  CreateRuleDTO, Product, RuleFilters, RuleSourceType, RuleVersionDTO, ShelfLifeRule, StorageType,
+  CreateRuleDTO, Product, ProductWithoutRule, ProductsWithoutRuleMeta, RuleFilters, RuleSourceType, RuleVersionDTO, ShelfLifeRule, StorageType, AppSettings,
 } from '@/types';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { LoadError } from '@/components/ui/LoadError';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Modal } from '@/components/ui/Modal';
 import { Pagination } from '@/components/ui/Pagination';
@@ -16,6 +17,8 @@ import { useToastContext } from '@/components/ui/Toast';
 import { formatBR, formatDateTimeBR } from '@/utils/date';
 import { formatTemperatureRange } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
+import { EXPIRY_MONTHS_MAX, EXPIRY_MONTHS_MIN, parseExpiryMonths, toastAvisoValidade } from '@/utils/expiryWarning';
+import { BLOQUEADO_NAO_IMPRIME, confirmaBloqueio, semRegraResumo, toastBloqueio, usaDiasDoCadastro } from '@/utils/semRegra';
 
 const SOURCE_TYPE_LABEL: Record<RuleSourceType, string> = {
   NORMA_LEGAL: 'Norma legal',
@@ -27,11 +30,17 @@ const SOURCE_TYPES = Object.keys(SOURCE_TYPE_LABEL) as RuleSourceType[];
 const STORAGE_LABEL: Record<StorageType, string> = { REFRIGERADO: 'Refrigerado', CONGELADO: 'Congelado' };
 
 type Dialog =
-  | { kind: 'create' }
+  | { kind: 'create'; prefill?: RulePrefill }
   | { kind: 'version'; rule: ShelfLifeRule }
   | { kind: 'history'; rule: ShelfLifeRule }
   | { kind: 'deactivate'; rule: ShelfLifeRule }
+  | { kind: 'enable-block'; counts: { total: number; missingCount: number } | null }
   | null;
+
+interface RulePrefill { productId: string; productLabel: string; storageType: StorageType }
+
+/** Quantos produtos aparecem antes de "Mostrar todos". */
+const MISSING_PREVIEW = 5;
 
 function todayLocal(): string {
   const now = new Date();
@@ -59,6 +68,93 @@ export function ShelfLifeRulesPage() {
   const [categories, setCategories] = useState<string[]>([]);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [busy, setBusy] = useState(false);
+  const [missing, setMissing] = useState<ProductWithoutRule[]>([]);
+  const [missingMeta, setMissingMeta] = useState<ProductsWithoutRuleMeta>({ total: 0, missingCount: 0 });
+  const [missingLoading, setMissingLoading] = useState(true);
+  const [missingError, setMissingError] = useState('');
+
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [settingsError, setSettingsError] = useState('');
+  const [settingsBusy, setSettingsBusy] = useState(false);
+
+  const missingRequest = useRef(0);
+
+  async function saveExpiryMonths(value: number | null) {
+    setSettingsBusy(true);
+    try {
+      const { data } = await settingsApi.update({ expiryWarningMonths: value });
+      setSettings(data.data);
+      toast(toastAvisoValidade(data.data.expiryWarningMonths ?? null), 'success');
+    } catch (error) {
+      toast(extractError(error), 'error');
+      void fetchSettings();
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  const fetchSettings = useCallback(async () => {
+    setSettingsError('');
+    try {
+      const { data } = await settingsApi.get();
+      setSettings(data.data);
+    } catch (error) {
+      setSettingsError(extractError(error));
+    }
+  }, []);
+
+  useEffect(() => { void fetchSettings(); }, [fetchSettings]);
+
+  /** Busca a contagem atual antes de confirmar; sem dados, o diálogo fica neutro (nunca diz 0). */
+  async function askEnable() {
+    setSettingsBusy(true);
+    let counts: { total: number; missingCount: number } | null = null;
+    try {
+      const { data } = await productApi.withoutRule();
+      counts = { total: data.meta.total, missingCount: data.meta.missingCount };
+      setMissing(data.data);
+      setMissingMeta(data.meta);
+    } catch { /* counts fica null */ }
+    setSettingsBusy(false);
+    setDialog({ kind: 'enable-block', counts });
+  }
+
+  async function saveRequirement(next: boolean) {
+    setSettingsBusy(true);
+    try {
+      const { data } = await settingsApi.update({ requireValidatedRule: next });
+      setSettings(data.data);
+      toast(toastBloqueio(next, data.meta.blockedProducts, data.meta.blockedCombinations), 'success');
+      setDialog(null);
+      void fetchMissing();
+    } catch (error) {
+      toast(extractError(error), 'error');
+      setDialog(null);
+      void fetchSettings(); // a resposta pode ter se perdido: o interruptor volta a refletir o servidor
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
+  const fetchMissing = useCallback(async () => {
+    const request = ++missingRequest.current;
+    setMissingLoading(true);
+    setMissingError('');
+    try {
+      const { data } = await productApi.withoutRule();
+      if (request !== missingRequest.current) return; // resposta antiga: descarta
+      setMissing(data.data);
+      setMissingMeta(data.meta);
+    } catch (error) {
+      if (request !== missingRequest.current) return;
+      setMissing([]);
+      setMissingError(extractError(error));
+    } finally {
+      if (request === missingRequest.current) setMissingLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void fetchMissing(); }, [fetchMissing]);
 
   useEffect(() => {
     // O backend limita a 100 por página: percorre todas para o filtro e o formulário.
@@ -109,6 +205,7 @@ export function ShelfLifeRulesPage() {
       toast('Regra desativada. As etiquetas já geradas continuam guardadas.', 'success');
       setDialog(null);
       void fetchRules();
+      void fetchMissing();
     } catch (error) {
       toast(extractError(error), 'error');
       setDialog(null);
@@ -141,6 +238,33 @@ export function ShelfLifeRulesPage() {
           pelo responsável pela validação que você informar em cada regra.
         </span>
       </div>
+
+      <RequireRuleCard
+        settings={settings}
+        error={settingsError}
+        busy={settingsBusy}
+        onRetry={() => void fetchSettings()}
+        onToggle={() => {
+          if (!settings || settingsBusy) return;
+          if (settings.requireValidatedRule) void saveRequirement(false);
+          else void askEnable();
+        }}
+      />
+
+      {settings && <ExpiryWarningCard settings={settings} busy={settingsBusy} onSave={(value) => void saveExpiryMonths(value)} />}
+
+      <MissingRulesSection
+        blocking={settings?.requireValidatedRule === true}
+        items={missing}
+        meta={missingMeta}
+        loading={missingLoading}
+        error={missingError}
+        onRetry={() => void fetchMissing()}
+        onCreate={(item, storage) => setDialog({
+          kind: 'create',
+          prefill: { productId: item.id, productLabel: `${item.name} — ${item.brand}`, storageType: storage },
+        })}
+      />
 
       <div className="card grid grid-cols-1 gap-3 bg-white p-4 sm:p-5 md:grid-cols-2 xl:grid-cols-5">
         <select className="input text-xs" aria-label="Filtrar por produto" value={productId} onChange={(e) => setProductId(e.target.value)}>
@@ -220,13 +344,27 @@ export function ShelfLifeRulesPage() {
       {(dialog?.kind === 'create' || dialog?.kind === 'version') && (
         <RuleFormDialog
           rule={dialog.kind === 'version' ? dialog.rule : null}
+          prefill={dialog.kind === 'create' ? dialog.prefill : undefined}
           products={products}
           categories={categories}
           onClose={() => setDialog(null)}
-          onSaved={(message) => { toast(message, 'success'); setDialog(null); void fetchRules(); }}
+          onSaved={(message) => { toast(message, 'success'); setDialog(null); void fetchRules(); void fetchMissing(); }}
         />
       )}
       {dialog?.kind === 'history' && <HistoryDialog rule={dialog.rule} onClose={() => setDialog(null)} />}
+      <ConfirmDialog
+        open={dialog?.kind === 'enable-block'}
+        title="Exigir regra validada?"
+        body={(
+          <>
+            {dialog?.kind === 'enable-block' ? confirmaBloqueio(dialog.counts) : ''} O operador será orientado a chamar o gerente
+            para cadastrar a regra.
+          </>
+        )}
+        confirmLabel={settingsBusy ? 'Ligando…' : 'Ligar exigência'}
+        onCancel={() => { if (!settingsBusy) setDialog(null); }}
+        onConfirm={() => { if (!settingsBusy) void saveRequirement(true); }}
+      />
       <ConfirmDialog
         open={dialog?.kind === 'deactivate'}
         danger
@@ -234,8 +372,10 @@ export function ShelfLifeRulesPage() {
         body={dialog?.kind === 'deactivate' ? (
           <>
             A regra de <strong>{targetName(dialog.rule)}</strong> ({STORAGE_LABEL[dialog.rule.storageType]}) deixa de valer
-            para novas etiquetas. As etiquetas já geradas continuam guardadas. Sem outra regra, o cálculo volta ao prazo
-            do cadastro do produto, com aviso de prazo sem regra validada.
+            para novas etiquetas. As etiquetas já geradas continuam guardadas.{' '}
+            {settings?.requireValidatedRule
+              ? 'Com o bloqueio ligado, o produto deixa de imprimir até ter outra regra.'
+              : 'Sem outra regra, o cálculo volta ao prazo do cadastro do produto, com aviso de prazo sem regra validada.'}
           </>
         ) : null}
         confirmLabel={busy ? 'Desativando…' : 'Desativar'}
@@ -243,6 +383,206 @@ export function ShelfLifeRulesPage() {
         onConfirm={() => { if (dialog?.kind === 'deactivate' && !busy) void deactivate(dialog.rule); }}
       />
     </div>
+  );
+}
+
+// ── Produtos sem regra validada ───────────────────────────
+function RequireRuleCard({ settings, error, busy, onRetry, onToggle }: {
+  settings: AppSettings | null;
+  error: string;
+  busy: boolean;
+  onRetry: () => void;
+  onToggle: () => void;
+}) {
+  if (error && !settings) return <LoadError title="Não foi possível carregar a configuração." message={error} onRetry={onRetry} />;
+  if (!settings) return <InlineLoader text="Carregando configuração…" />;
+  const on = settings.requireValidatedRule;
+  return (
+    <section className="card bg-white p-4 sm:p-5" aria-labelledby="exigir-regra-titulo">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h2 id="exigir-regra-titulo" className="text-base font-bold text-charcoal-800">Exigir regra validada para imprimir</h2>
+          <p className="mt-1 text-xs leading-relaxed text-slate-600">
+            {on
+              ? 'Ligado: a etiqueta de produto sem regra validada é recusada e o operador é orientado a chamar o gerente. Dividir etiquetas de produtos removidos do catálogo e sem regra também fica bloqueado.'
+              : 'Desligado: a etiqueta de produto sem regra validada sai com aviso, usando os dias do cadastro do produto.'}
+          </p>
+          {settings.updatedAt && settings.updatedByName && (
+            <p className="mt-1 text-[11px] text-slate-400">
+              Configurações alteradas por {settings.updatedByName} em {formatDateBRManaus(settings.updatedAt)}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-labelledby="exigir-regra-titulo"
+          disabled={busy}
+          onClick={onToggle}
+          className={cn(
+            'relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 disabled:opacity-60',
+            on ? 'bg-brand-500' : 'bg-slate-300',
+          )}
+        >
+          <span className={cn('inline-block h-6 w-6 rounded-full bg-white shadow transition-transform', on ? 'translate-x-7' : 'translate-x-1')} />
+          <span className="sr-only">{on ? 'Ligado' : 'Desligado'}</span>
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ExpiryWarningCard({ settings, busy, onSave }: {
+  settings: AppSettings;
+  busy: boolean;
+  onSave: (value: number | null) => void;
+}) {
+  const saved = settings.expiryWarningMonths ?? null;
+  const [text, setText] = useState(saved === null ? '' : String(saved));
+  const [touched, setTouched] = useState(false);
+  useEffect(() => { setText(saved === null ? '' : String(saved)); setTouched(false); }, [saved]);
+  const { value, error } = parseExpiryMonths(text);
+  const unchanged = !error && value === saved;
+  return (
+    <section className="card bg-white p-4 sm:p-5" aria-labelledby="aviso-validade-titulo">
+      <h2 id="aviso-validade-titulo" className="text-base font-bold text-charcoal-800">Aviso de validade digitada distante</h2>
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">
+        Quando o operador digita a validade da embalagem, o sistema avisa se ela passa deste limite e pede para conferir a
+        data. O número é uma escolha da cozinha, não um limite regulatório. Vazio = desligado.
+      </p>
+      <form
+        className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          setTouched(true);
+          if (!error && !unchanged && !busy) onSave(value);
+        }}
+      >
+        <div className="sm:w-80">
+          <label htmlFor="aviso-validade-meses" className="mb-1 block text-xs font-semibold text-slate-600">
+            Avisar quando a validade digitada passar de (meses)
+          </label>
+          <input
+            id="aviso-validade-meses"
+            className="input"
+            type="text"
+            inputMode="numeric"
+            placeholder={`Vazio = desligado (${EXPIRY_MONTHS_MIN} a ${EXPIRY_MONTHS_MAX})`}
+            value={text}
+            disabled={busy}
+            aria-invalid={touched && Boolean(error)}
+            aria-describedby={touched && error ? 'aviso-validade-erro' : undefined}
+            onChange={(event) => { setText(event.target.value); setTouched(true); }}
+          />
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={busy || unchanged || Boolean(error)}>
+          {busy ? <Spinner size="sm" className="text-white" /> : <span>Salvar</span>}
+        </button>
+      </form>
+      {touched && error && <p id="aviso-validade-erro" role="alert" className="mt-1.5 text-xs font-medium text-rose-600">{error}</p>}
+    </section>
+  );
+}
+
+function formatDateBRManaus(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Manaus' }).format(date);
+}
+
+function MissingRulesSection({ blocking, items, meta, loading, error, onRetry, onCreate }: {
+  blocking: boolean;
+  items: ProductWithoutRule[];
+  meta: ProductsWithoutRuleMeta;
+  loading: boolean;
+  error: string;
+  onRetry: () => void;
+  onCreate: (item: ProductWithoutRule, storage: StorageType) => void;
+}) {
+  const [showAll, setShowAll] = useState(false);
+  const [open, setOpen] = useState(true);
+  const visible = showAll ? items : items.slice(0, MISSING_PREVIEW);
+
+  if (loading && items.length === 0 && !error) return <InlineLoader text="Carregando produtos sem regra…" />;
+  if (error) return <LoadError title="Não foi possível carregar os produtos sem regra." message={error} onRetry={onRetry} />;
+
+  return (
+    <section className="card bg-white p-4 sm:p-5" aria-labelledby="sem-regra-titulo" aria-busy={loading}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 id="sem-regra-titulo" className="text-base font-bold text-charcoal-800">Produtos sem regra validada</h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            {items.length === 0
+              ? 'Todos os produtos ativos têm regra validada para os armazenamentos em uso.'
+              : semRegraResumo(meta.total, meta.missingCount)}
+            {loading && <span className="ml-2 text-slate-400">Atualizando…</span>}
+          </p>
+        </div>
+        {items.length > 0 && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm gap-1.5"
+            aria-expanded={open}
+            aria-controls="sem-regra-lista"
+            onClick={() => setOpen((value) => !value)}
+          >
+            {open ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+            <span>{open ? 'Recolher' : 'Expandir'}</span>
+          </button>
+        )}
+      </div>
+
+      {items.length > 0 && (
+        <div id="sem-regra-lista" className="mt-4 space-y-3" hidden={!open}>
+          <p className="text-xs leading-relaxed text-slate-500">
+            {blocking
+              ? 'Estes produtos não imprimem etiqueta enquanto a exigência de regra validada estiver ligada.'
+              : 'Estes produtos imprimem etiqueta com aviso de prazo sem regra validada, usando os dias do cadastro do produto.'}
+          </p>
+          <ul className="space-y-2">
+            {visible.map((item) => (
+              <li key={item.id} className="rounded-xl border border-slate-200 p-3">
+                <p className="break-words text-sm font-bold text-charcoal-800">
+                  {item.name} <span className="font-medium text-slate-500">· {item.brand}</span>
+                </p>
+                <p className="text-[11px] text-slate-400">{item.category ?? 'Sem categoria'}</p>
+                <ul className="mt-2 space-y-2">
+                  {item.missing.map((entry) => {
+                    const Icon = entry.storageType === 'REFRIGERADO' ? Refrigerator : Snowflake;
+                    return (
+                      <li key={entry.storageType} className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-600">
+                          <Icon className={cn('h-3.5 w-3.5', entry.storageType === 'REFRIGERADO' ? 'text-sky-600' : 'text-indigo-600')} aria-hidden="true" />
+                          <strong>{STORAGE_LABEL[entry.storageType]}</strong>
+                          {blocking
+                            ? <span className="inline-flex items-center gap-1 rounded-md bg-red-50 px-1.5 py-0.5 font-bold text-red-700"><AlertTriangle className="h-3 w-3" aria-hidden="true" />{BLOQUEADO_NAO_IMPRIME}</span>
+                            : <span>{usaDiasDoCadastro(entry.productDays)}</span>}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-sm gap-1.5 self-start sm:self-auto"
+                          aria-label={`Criar regra para ${item.name} (${item.brand}), ${STORAGE_LABEL[entry.storageType].toLowerCase()}`}
+                          onClick={() => onCreate(item, entry.storageType)}
+                        >
+                          <Plus className="h-3.5 w-3.5" aria-hidden="true" /> Criar regra
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </li>
+            ))}
+          </ul>
+          {items.length > MISSING_PREVIEW && (
+            <button type="button" className="btn btn-ghost btn-sm" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
+              {showAll ? 'Mostrar menos' : `Mostrar todos (${items.length})`}
+            </button>
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -329,8 +669,9 @@ function parseOptionalTemp(text: string): number | null | undefined {
   return value >= -50 && value <= 100 ? value : undefined;
 }
 
-function RuleFormDialog({ rule, products, categories, onClose, onSaved }: {
+function RuleFormDialog({ rule, prefill, products, categories, onClose, onSaved }: {
   rule: ShelfLifeRule | null;
+  prefill?: RulePrefill;
   products: Product[];
   categories: string[];
   onClose: () => void;
@@ -340,9 +681,9 @@ function RuleFormDialog({ rule, products, categories, onClose, onSaved }: {
   const today = useMemo(todayLocal, []);
   const [form, setForm] = useState<FormState>(() => ({
     target: rule?.category ? 'category' : 'product',
-    productId: rule?.productId ?? '',
+    productId: rule?.productId ?? prefill?.productId ?? '',
     category: rule?.category ?? '',
-    storageType: rule?.storageType ?? 'REFRIGERADO',
+    storageType: rule?.storageType ?? prefill?.storageType ?? 'REFRIGERADO',
     shelfLifeDays: rule ? String(rule.shelfLifeDays) : '',
     minTemperature: tempText(rule?.minTemperature),
     maxTemperature: tempText(rule?.maxTemperature),
@@ -445,6 +786,9 @@ function RuleFormDialog({ rule, products, categories, onClose, onSaved }: {
             {form.target === 'product' ? (
               <select className="input" aria-label="Produto" value={form.productId} onChange={(e) => set('productId', e.target.value)}>
                 <option value="">Selecione o produto</option>
+                {prefill && !products.some((product) => product.id === prefill.productId) && (
+                  <option value={prefill.productId}>{prefill.productLabel}</option>
+                )}
                 {products.map((product) => <option key={product.id} value={product.id}>{product.name} — {product.brand}</option>)}
               </select>
             ) : (

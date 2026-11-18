@@ -8,6 +8,7 @@ import { DashboardController } from '../controllers/dashboardController';
 import { UserController } from '../controllers/userController';
 import { RuleController } from '../controllers/ruleController';
 import { TotemController } from '../controllers/totemController';
+import { SettingsController } from '../controllers/settingsController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
@@ -86,6 +87,8 @@ router.post('/totem/operators/verify', authenticate, verifyPinRateLimit, TotemCo
 
 router.get('/products', authenticate, ProductController.list);
 router.get('/products/categories', authenticate, ProductController.getCategories);
+// Antes de /products/:id, senão "without-rule" seria lido como id.
+router.get('/products/without-rule', authenticate, requireAdmin, ProductController.withoutRule);
 router.get('/products/:id', authenticate, ProductController.getById);
 router.post('/products', authenticate, requireAdmin, ProductController.create);
 router.put('/products/:id', authenticate, requireAdmin, ProductController.update);
@@ -101,9 +104,10 @@ router.put('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.c
 router.delete('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.deactivate);
 
 router.get('/labels', authenticate, LabelController.list);
-// Antes de /labels/:id, senão "due" e "export.csv" seriam lidos como id.
+// Antes de /labels/:id, senão "due", "export.csv" e "metrics" seriam lidos como id.
 router.get('/labels/due', authenticate, LabelController.due);
 router.get('/labels/export.csv', authenticate, requireAdmin, LabelController.exportCsv);
+router.get('/labels/metrics', authenticate, requireAdmin, LabelController.metrics);
 router.get('/labels/:id', authenticate, LabelController.getById);
 router.post('/labels/preview', authenticate, LabelController.preview);
 router.post('/labels', authenticate, LabelController.create);
@@ -111,6 +115,9 @@ router.patch('/labels/:id/print', authenticate, LabelController.registerPrint);
 router.post('/labels/:id/close', authenticate, LabelController.close);
 router.post('/labels/:id/split/preview', authenticate, LabelController.splitPreview);
 router.post('/labels/:id/split', authenticate, LabelController.split);
+
+router.get('/settings', authenticate, SettingsController.get);
+router.put('/settings', authenticate, requireAdmin, SettingsController.update);
 
 router.get('/dashboard/stats', authenticate, DashboardController.getStats);
 

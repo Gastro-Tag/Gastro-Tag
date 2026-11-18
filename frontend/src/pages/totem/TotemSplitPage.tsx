@@ -5,7 +5,8 @@ import {
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
 import { extractError } from '@/services/api';
-import type { Label, Product, SplitResult, StorageType } from '@/types';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
+import type { Label, Product, SplitResult, StorageType, TemperatureSource } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { Centered, FieldButton, TempButton, storagesOf } from '@/pages/totem/TotemLabelPage';
@@ -14,10 +15,11 @@ import { useTotemStore } from '@/store/totemStore';
 import { formatBR } from '@/utils/date';
 import { DEFAULT_TEMP, STORAGE_LABEL, getHandlerToken, getOperator, weekdayShort } from '@/utils/totem';
 import { printSplitChildren } from '@/utils/split';
-import { formatTemperatureRange, formatTemperatureShort, parseTemperature, temperatureDraft } from '@/utils/temperature';
+import { formatTemperatureRange, formatTemperatureShort, parseTemperature, resolveTemperatureSource, temperatureDraft } from '@/utils/temperature';
 import { createRequestKeeper } from '@/utils/requestId';
 import { isHandlerInvalid } from '@/utils/handler';
 import { cn } from '@/utils/cn';
+import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
 
 const SUCCESS_SECONDS = 10;
 const MAX_COUNT = 20;
@@ -44,6 +46,8 @@ export function TotemSplitPage() {
   const [storage, setStorage] = useState<StorageType>('REFRIGERADO');
   // Só vale a temperatura confirmada NESTA divisão; a sugestão nunca é gravada sozinha.
   const [temps, setTemps] = useState<Partial<Record<StorageType, number>>>({});
+  const [tempSources, setTempSources] = useState<Partial<Record<StorageType, TemperatureSource>>>({});
+  const tempEdited = useRef(false);
   const [closeParent, setCloseParent] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -51,7 +55,7 @@ export function TotemSplitPage() {
   const [done, setDone] = useState<Done | null>(null);
   const [seconds, setSeconds] = useState(SUCCESS_SECONDS);
   const lock = useRef(false);
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:totem-split'));
 
   // Produto e etiquetas ATIVAS não vencidas (a data de "hoje" é a da cozinha, no servidor).
   useEffect(() => {
@@ -96,6 +100,7 @@ export function TotemSplitPage() {
     const options = product ? storagesOf(product) : [];
     setStorage(options.includes(label.storageType) ? label.storageType : (options[0] ?? label.storageType));
     setTemps({});
+    setTempSources({});
     setCount(2);
     setCloseParent(false);
     setSubmitError('');
@@ -114,7 +119,7 @@ export function TotemSplitPage() {
     let created: SplitResult | null = null;
     try {
       const payload = { count, storageType: storage, storageTemperature: temperature, responsibleName: responsible, closeParent };
-      const { data } = await labelApi.split(parent.id, { ...payload, handlerToken: getHandlerToken() || undefined, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
+      const { data } = await labelApi.split(parent.id, { ...payload, handlerToken: getHandlerToken() || undefined, temperatureSource: tempSources[storage], requestId: requests.idFor({ ...payload, parentId: parent.id }) });
       created = data.data;
       requests.reset(); // a próxima divisão, mesmo igual, é outro pedido
       await printSplitChildren(created, logo(), preview.data.fractionedAt);
@@ -345,7 +350,16 @@ export function TotemSplitPage() {
       <div className="rounded-3xl border-2 border-slate-200 bg-white p-4 sm:p-5" aria-live="polite">
         <div className="text-sm font-bold uppercase tracking-wider text-slate-400">Descartar as filhas em</div>
         {preview.status === 'loading' && <div className="mt-1 flex items-center gap-3 text-xl font-semibold text-slate-400"><Spinner size="sm" /> Calculando…</div>}
-        {preview.status === 'error' && <p role="alert" className="mt-1 text-lg font-bold text-rose-700">{preview.message}</p>}
+        {preview.status === 'error' && (
+          preview.code === RULE_REQUIRED_CODE
+            ? (
+              <div role="alert" className="mt-2 flex items-start gap-3 rounded-2xl border-4 border-rose-400 bg-rose-50 p-4 text-xl font-extrabold leading-snug text-rose-800 sm:text-2xl">
+                <AlertTriangle className="mt-1 h-8 w-8 shrink-0" aria-hidden="true" />
+                <span className="min-w-0 break-words">{preview.message}</span>
+              </div>
+            )
+            : <p role="alert" className="mt-1 text-lg font-bold text-rose-700">{preview.message}</p>
+        )}
         {preview.status === 'ok' && (
           <>
             <div className="text-4xl font-extrabold leading-none text-charcoal-800 sm:text-5xl">{formatBR(preview.data.discardAt)}</div>
@@ -393,6 +407,7 @@ export function TotemSplitPage() {
       )}
 
       <div className="sticky bottom-0 -mx-3 mt-auto bg-gradient-to-t from-[#F3F4F6] via-[#F3F4F6] to-transparent px-3 pb-3 pt-3 sm:-mx-5 sm:px-5 sm:pb-5 sm:pt-4">
+        <LabelTemplateStatus large className="mb-2 [@media(max-height:500px)]:mb-1" />
         <button
           type="button" disabled={!canPrint} onClick={() => void handlePrint()}
           className="btn btn-accent flex h-auto min-h-[84px] w-full flex-col gap-0 rounded-3xl px-3 py-2 text-xl font-extrabold shadow-lg sm:h-28 sm:text-3xl [@media(max-height:500px)]:h-auto [@media(max-height:500px)]:min-h-[64px] [@media(max-height:500px)]:text-xl"
@@ -423,11 +438,15 @@ export function TotemSplitPage() {
           layout="numeric"
           maxLength={6}
           confirmLabel="Confirmar temperatura"
-          onCancel={() => setSheet(false)}
+          onLiveChange={() => { tempEdited.current = true; }}
+          onCancel={() => { tempEdited.current = false; setSheet(false); }}
           onConfirm={(value) => {
             const temperature = parseTemperature(value);
             if (temperature === null) return 'Digite uma temperatura válida, em °C (de −50 a 30).';
+            const source = resolveTemperatureSource({ value: temperature, suggested: DEFAULT_TEMP[storage], edited: tempEdited.current, previous: tempSources[storage] });
             setTemps((current) => ({ ...current, [storage]: temperature }));
+            setTempSources((current) => ({ ...current, [storage]: source }));
+            tempEdited.current = false;
             setSubmitError('');
             setSheet(false);
           }}

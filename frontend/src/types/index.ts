@@ -88,7 +88,8 @@ export interface Product {
 export interface CreateProductDTO {
   name:                   string;
   brand:                  string;
-  category?:              string;
+  /** `null` remove a categoria (edição). */
+  category?:              string | null;
   daysValidRefrigerated:  number;
   daysValidFrozen:        number;
   unit?:                  string;
@@ -124,6 +125,8 @@ export interface Label {
   /** Fonte da regra no momento da etiqueta (ou aviso de prazo sem regra validada). */
   ruleSource?: string | null;
   lotId?: string | null;
+  /** Só vem em GET /labels (lista). Ausente em getById, /labels/due e nas respostas de criar/dividir/encerrar. */
+  lotSource?: LotSource;
   ruleId?: string | null;
   shelfLifeDays?: number;
   originalExpiryDate?: string;
@@ -131,7 +134,7 @@ export interface Label {
   productName?: string;
   productBrand?: string;
   responsibleName?: string | null;
-  rule?: { id: string; shelfLifeDays: number; source: string; observation?: string | null } | null;
+  rule?: { id: string; shelfLifeDays: number; source: string; sourceType?: RuleSourceType | null; observation?: string | null } | null;
   printedAt?:  string;
   printCount:  number;
   createdAt:   string;
@@ -158,6 +161,10 @@ export interface Label {
   handlerId?:       string | null;
   /** O responsável foi confirmado por PIN no totem. */
   handlerVerified?: boolean;
+  /** Tempo do fluxo no aparelho (ms), do toque no produto até imprimir; nulo nas etiquetas antigas. */
+  flowMs?:            number | null;
+  /** Origem da temperatura confirmada; nulo nas etiquetas antigas. */
+  temperatureSource?: TemperatureSource | null;
 }
 
 export type LabelStatus  = 'ATIVA' | 'ENCERRADA';
@@ -210,6 +217,8 @@ export interface SplitLabelDTO {
   storageTemperature: number;
   responsibleName:    string;
   closeParent?:       boolean;
+  flowMs?:            number;
+  temperatureSource?: TemperatureSource;
   requestId?:         string;
   handlerToken?:      string;
 }
@@ -219,12 +228,16 @@ export interface SplitResult {
   children: Label[];
 }
 
+/** Origem do lote: cadastrado, "Outra embalagem" (validade digitada) ou anterior ao cadastro de lotes. */
+export type LotSource = 'cadastrado' | 'informado' | 'anterior';
+
 export interface LabelListParams {
   productId?: string; userId?: string; page?: number; limit?: number;
   q?: string; from?: string; to?: string; storageType?: string;
   status?: LabelStatus;
   /** Só com status ATIVA. */
   due?: 'expired' | 'today' | 'upcoming';
+  lotSource?: LotSource;
   parentLabelId?: string;
 }
 
@@ -233,6 +246,7 @@ export interface LabelExportParams {
   q?: string; from?: string; to?: string; storageType?: string;
   status?: LabelStatus;
   due?: 'expired' | 'today' | 'upcoming';
+  lotSource?: LotSource;
   productId?: string;
   parentLabelId?: string;
 }
@@ -272,6 +286,7 @@ export interface VerifyOperatorResult {
 export interface KitchenInfo {
   kitchenToday:    string;
   maxBackdateDays: number;
+  requireValidatedRule?: boolean;
 }
 
 export interface LabelPreview {
@@ -286,6 +301,15 @@ export interface LabelPreview {
   storageTemp: string | null;
   originalExpiryDate: string;
   cappedByOriginalExpiry: boolean;
+  /** Só com validade digitada (embalagem na mão); nulo com lote cadastrado. */
+  expiryWarning?: ExpiryWarning | null;
+}
+
+export interface ExpiryWarning {
+  reason: 'ABOVE_HISTORY' | 'ABOVE_LIMIT';
+  typedDays: number;
+  referenceDays: number;
+  limitMonths: number | null;
 }
 
 export interface PreviewRule {
@@ -330,6 +354,8 @@ export type CreateLabelDTO = ExpirySource & LabelBaseDTO & {
   requestId?:  string;
   /** Operador confirmado por PIN (totem). Quando válido, o servidor usa o nome dele. */
   handlerToken?: string;
+  flowMs?: number;
+  temperatureSource?: TemperatureSource;
 };
 
 // ── Regras de validade ──────────────────────────────────
@@ -355,6 +381,35 @@ export interface ShelfLifeRule {
   createdAt:         string;
   product:           Pick<Product, 'id' | 'name' | 'brand'> | null;
   createdBy:         { name: string } | null;
+}
+
+/** Produto ativo que ainda imprime etiqueta "sem regra validada" (GET /products/without-rule, ADMIN). */
+export interface ProductWithoutRule {
+  id:       string;
+  name:     string;
+  brand:    string;
+  category: string | null;
+  missing:  { storageType: StorageType; productDays: number }[];
+}
+
+export interface ProductsWithoutRuleMeta {
+  total:        number;
+  missingCount: number;
+}
+
+/** GET/PUT /settings: configuração da cozinha (PUT só ADMIN). */
+export interface AppSettings {
+  requireValidatedRule: boolean;
+  /** Meses acima dos quais a validade digitada gera aviso; null = desligado. */
+  expiryWarningMonths:  number | null;
+  updatedAt:            string | null;
+  updatedByName:        string | null;
+}
+
+/** meta do PUT /settings: o que fica bloqueado com a exigência ligada. */
+export interface SettingsUpdateMeta {
+  blockedProducts:     number | null;
+  blockedCombinations: number | null;
 }
 
 export interface RuleFilters {
@@ -402,3 +457,32 @@ export interface DashboardStats {
   };
   topProducts: { id: string; name: string; brand: string; labelCount: number }[];
 }
+
+// ── Números da cozinha (GET /labels/metrics, ADMIN) ──────
+export type TemperatureSource = 'SUGERIDO' | 'DIGITADO';
+
+export interface LabelMetricsDay {
+  date: string;
+  total: number;
+  flowMedianMs: number | null;
+  suggestedCount: number;
+  typedCount: number;
+}
+
+export interface LabelMetrics {
+  from: string;
+  to: string;
+  total: number;
+  /** Conta ações (um Dividir é 1), não etiquetas. */
+  withFlow: number;
+  /** Medições acima do teto (10 min) ignoradas pelo servidor; pode não vir em versões antigas. */
+  discardedFlows?: number;
+  flowMedianMs: number | null;
+  flowP90Ms: number | null;
+  withTemperatureSource: number;
+  suggestedCount: number;
+  typedCount: number;
+  byDay: LabelMetricsDay[];
+}
+
+export interface LabelMetricsParams { from?: string; to?: string }

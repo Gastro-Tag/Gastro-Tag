@@ -5,6 +5,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { useAuthStore } from '@/store/authStore';
 import { labelApi } from '@/services';
 import { extractError } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
 import { useSplitPreview } from '@/hooks/useSplitPreview';
 import type { Label, SplitResult, StorageType } from '@/types';
 import { formatBR } from '@/utils/date';
@@ -34,11 +35,13 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
   const [storage, setStorage] = useState<StorageType>(parent.storageType);
   // A sugestão não é medição: o campo começa vazio e o operador digita ou confirma o valor.
   const [tempText, setTempText] = useState('');
+  // SUGERIDO só se o valor veio do botão "Usar" e não foi mexido depois.
+  const [tempFromSuggestion, setTempFromSuggestion] = useState(false);
   const [responsible, setResponsible] = useState(userName);
   const [closeParent, setCloseParent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [requests] = useState(createRequestKeeper);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:split-dialog'));
 
   const temperature = parseTemperature(tempText);
   const tempInvalid = tempText.trim() !== '' && temperature === null;
@@ -66,7 +69,8 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
     let result: SplitResult;
     try {
       // Mesmo requestId se o pedido for reenviado (rede caiu, toque repetido): o servidor devolve as filhas já criadas.
-      const { data } = await labelApi.split(parent.id, { ...payload, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
+      const temperatureSource = tempFromSuggestion && temperature === suggested ? 'SUGERIDO' : 'DIGITADO';
+      const { data } = await labelApi.split(parent.id, { ...payload, temperatureSource, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
       result = data.data;
       requests.reset();
     } catch (err) {
@@ -149,7 +153,7 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
             <input
               id="split-temperature" className={cn('input min-h-[44px] pl-10', tempInvalid && 'border-rose-400')}
               inputMode="decimal" autoComplete="off" maxLength={10} placeholder="Ex.: 4 ou -18"
-              value={tempText} onChange={(e) => { setTempText(e.target.value); setError(''); }}
+              value={tempText} onChange={(e) => { setTempText(e.target.value); setTempFromSuggestion(false); setError(''); }}
               aria-invalid={tempInvalid} aria-describedby="split-temperature-help"
             />
           </div>
@@ -162,7 +166,7 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
             {temperature !== suggested && (
               <p className="flex flex-wrap items-center gap-2 text-slate-500">
                 <span>Sugestão: {formatTemperatureShort(suggested)} (não é medição).</span>
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => setTempText(temperatureDraft(suggested))}>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => { setTempText(temperatureDraft(suggested)); setTempFromSuggestion(true); }}>
                   Usar {formatTemperatureShort(suggested)}
                 </button>
               </p>
@@ -175,7 +179,16 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" aria-live="polite">
           <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Descarte previsto das filhas</p>
           {preview.status === 'loading' && <p className="mt-1 flex items-center gap-2 text-sm text-slate-500"><Spinner size="sm" /> Calculando…</p>}
-          {preview.status === 'error' && <p role="alert" className="mt-1 text-sm font-semibold text-rose-700">{preview.message}</p>}
+          {preview.status === 'error' && (
+            <p
+              role="alert"
+              className={preview.code === RULE_REQUIRED_CODE
+                ? 'mt-1 rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm font-bold text-rose-800'
+                : 'mt-1 text-sm font-semibold text-rose-700'}
+            >
+              {preview.message}
+            </p>
+          )}
           {preview.status === 'ok' && (
             <>
               <p className="mt-1 text-2xl font-extrabold text-charcoal-800">{formatBR(preview.data.discardAt)}</p>

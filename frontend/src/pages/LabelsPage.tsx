@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { CalendarDays, Download, RefreshCw, Search, Tag, AlarmClock } from 'lucide-react';
 import { labelApi } from '@/services';
-import type { CloseLabelResult, Label, LabelExportParams, LabelListParams, LabelStatus, SplitResult, StorageType } from '@/types';
+import type { CloseLabelResult, Label, LabelExportParams, LabelListParams, LabelStatus, LotSource, SplitResult, StorageType } from '@/types';
 import { LabelCard } from '@/components/labels/LabelCard';
 import { CloseLabelDialog } from '@/components/labels/CloseLabelDialog';
 import { SplitLabelDialog } from '@/components/labels/SplitLabelDialog';
@@ -17,6 +17,7 @@ import { useDebounce } from '@/hooks/useDebounce';
 import { formatBR } from '@/utils/date';
 import { cn } from '@/utils/cn';
 import { extractError } from '@/services/api';
+import { LOT_SOURCE_OPTIONS, lotSourceText, parseLotSource } from '@/utils/lotSource';
 import { printLabel } from '@/utils/printLabel';
 
 export function LabelsPage() {
@@ -40,6 +41,7 @@ export function LabelsPage() {
     const value = searchParams.get('due');
     return searchParams.get('status') === 'ATIVA' && (value === 'expired' || value === 'today' || value === 'upcoming') ? value : '';
   });
+  const [lotSource, setLotSource] = useState<LotSource | ''>(() => parseLotSource(searchParams.get('lotSource')));
   // Atalho: ativas vencidas ou que vencem hoje (duas consultas, pois o filtro de vencimento é único).
   const [discardToday, setDiscardToday] = useState(false);
   const [truncated, setTruncated] = useState(false);
@@ -50,7 +52,7 @@ export function LabelsPage() {
   const isAdmin = useAuthStore((state) => state.user?.role) === 'ADMIN';
   const debouncedSearch = useDebounce(search, 400);
 
-  useEffect(() => { setPage(1); }, [debouncedSearch, from, to, storageType, status, due, discardToday]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, from, to, storageType, status, due, lotSource, discardToday]);
 
   const fetchLabels = useCallback(async () => {
     if (from && to && from > to) {
@@ -67,6 +69,7 @@ export function LabelsPage() {
         q: debouncedSearch.trim() || undefined,
         from: from || undefined, to: to || undefined,
         storageType: storageType || undefined,
+        lotSource: lotSource || undefined,
       };
       if (discardToday) {
         const [expired, today] = await Promise.all([
@@ -93,7 +96,7 @@ export function LabelsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, from, to, storageType, status, due, discardToday, toast]);
+  }, [page, debouncedSearch, from, to, storageType, status, due, lotSource, discardToday, toast]);
 
   useEffect(() => { void fetchLabels(); }, [fetchLabels]);
 
@@ -133,9 +136,9 @@ export function LabelsPage() {
     void fetchLabels();
   }
 
-  const hasFilters = Boolean(search || from || to || storageType || status || due || discardToday);
+  const hasFilters = Boolean(search || from || to || storageType || status || due || lotSource || discardToday);
   const clearFilters = () => {
-    setSearch(''); setFrom(''); setTo(''); setStorageType(''); setStatus(''); setDue(''); setDiscardToday(false);
+    setSearch(''); setFrom(''); setTo(''); setStorageType(''); setStatus(''); setDue(''); setLotSource(''); setDiscardToday(false);
   };
 
   return (
@@ -150,7 +153,7 @@ export function LabelsPage() {
             {meta.total} {meta.total === 1 ? 'etiqueta registrada' : 'etiquetas registradas'}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 print:hidden">
           {isAdmin && (
             <button className="btn btn-outline shadow-sm" onClick={() => setExporting(true)}>
               <Download className="w-4 h-4 text-slate-500" />
@@ -233,7 +236,17 @@ export function LabelsPage() {
           <option value="today">Vencem hoje</option>
           <option value="upcoming">Próximas</option>
         </select>
-        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4 pt-1">
+        <select
+          className="input text-xs"
+          aria-label="Embalagem"
+          value={lotSource}
+          onChange={(e) => setLotSource(parseLotSource(e.target.value))}
+        >
+          {LOT_SOURCE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+        <div className="flex flex-wrap items-center gap-2 md:col-span-2 xl:col-span-4 pt-1 print:hidden">
           <button
             type="button"
             aria-pressed={discardToday}
@@ -319,6 +332,7 @@ export function LabelsPage() {
           filters={{
             q: debouncedSearch.trim() || undefined,
             storageType: storageType || undefined,
+            lotSource: lotSource || undefined,
             status: status || undefined,
             due: status === 'ATIVA' && due ? due : undefined,
           }}
@@ -347,6 +361,7 @@ function ExportDialog({ filters, shortcutActive, openedFrom, openedTo, onClose }
     filters.q && `busca “${filters.q}”`,
     filters.storageType && (filters.storageType === 'REFRIGERADO' ? 'refrigerado' : 'congelado'),
     filters.status && (filters.status === 'ATIVA' ? 'ativas' : 'encerradas'),
+    lotSourceText(filters.lotSource ?? '') && `embalagem: ${lotSourceText(filters.lotSource ?? '')}`,
     filters.due && { expired: 'vencidas', today: 'vencem hoje', upcoming: 'próximas' }[filters.due],
   ].filter(Boolean).join(' · ');
 

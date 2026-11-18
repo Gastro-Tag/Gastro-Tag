@@ -1,10 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ArrowLeft, Save, AlertCircle, Refrigerator, Snowflake, FileText, Package } from 'lucide-react';
 import { productApi } from '@/services';
 import { useToastContext } from '@/components/ui/Toast';
 import { Spinner, PageLoader } from '@/components/ui/Spinner';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { extractError } from '@/services/api';
+import {
+  CATEGORY_MAX_LENGTH, OTHER_CATEGORY, buildCategoryOptions, findSimilarCategory, isSameCategory,
+} from '@/utils/categories';
 
 export function ProductFormPage() {
   const { id }   = useParams<{ id: string }>();
@@ -15,6 +19,12 @@ export function ProductFormPage() {
   const [loading,    setLoading]    = useState(isEdit);
   const [submitting, setSubmitting] = useState(false);
 
+  const [categories,  setCategories]  = useState<string[]>([]);
+  const [otherText,   setOtherText]   = useState('');
+  const [otherError,  setOtherError]  = useState('');
+  const [newCategory, setNewCategory] = useState<string | null>(null); // aguardando confirmação
+  const otherRef = useRef<HTMLInputElement>(null);
+
   const [form, setForm] = useState({
     name:                  '',
     brand:                 '',
@@ -24,6 +34,13 @@ export function ProductFormPage() {
     unit:                  '',
     notes:                 '',
   });
+
+  // Lista padrão + categorias em uso (se falhar, ainda dá para usar "Outra…")
+  useEffect(() => {
+    productApi.getCategories({ withDefaults: true })
+      .then((r) => setCategories(r.data.data))
+      .catch(() => undefined);
+  }, []);
 
   // Load for edit
   useEffect(() => {
@@ -46,6 +63,30 @@ export function ProductFormPage() {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
+  // Na edição, a categoria atual do produto sempre aparece, mesmo fora da lista.
+  const options = useMemo(
+    () => buildCategoryOptions(categories, form.category),
+    [categories, form.category],
+  );
+
+  const isOther = form.category === OTHER_CATEGORY;
+  const similar = isOther ? findSimilarCategory(otherText, options) : null;
+  const errorId   = 'categoria-outra-erro';
+  const similarId = 'categoria-outra-sugestao';
+  const describedBy = [otherError && errorId, similar && similarId].filter(Boolean).join(' ') || undefined;
+
+  function onCategoryChange(value: string) {
+    set('category', value);
+    setOtherError('');
+    if (value !== OTHER_CATEGORY) setOtherText('');
+  }
+
+  function useSimilar(option: string) {
+    set('category', option);
+    setOtherText('');
+    setOtherError('');
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
@@ -56,10 +97,30 @@ export function ProductFormPage() {
       return;
     }
 
+    let category = form.category;
+    if (isOther) {
+      const typed = otherText.trim();
+      if (!typed) {
+        setOtherError('Digite o nome da categoria ou escolha outra opção.');
+        otherRef.current?.focus();
+        return;
+      }
+      const equivalent = options.find((c) => isSameCategory(c, typed));
+      if (equivalent) {
+        category = equivalent;
+      } else {
+        setNewCategory(typed);
+        return;
+      }
+    }
+    await save(category, ref, cong);
+  }
+
+  async function save(category: string, ref: number, cong: number) {
     const payload = {
       name:                  form.name,
       brand:                 form.brand,
-      category:              form.category || undefined,
+      category:              category || null,
       daysValidRefrigerated: ref,
       daysValidFrozen:       cong,
       unit:                  form.unit || undefined,
@@ -136,13 +197,50 @@ export function ProductFormPage() {
               />
             </Field>
 
-            <Field label="Categoria">
-              <input
+            <Field label="Categoria" htmlFor="categoria">
+              <select
+                id="categoria"
                 value={form.category}
-                onChange={(e) => set('category', e.target.value)}
+                onChange={(e) => onCategoryChange(e.target.value)}
                 className="input"
-                placeholder="Ex: Laticínios, Carnes, Molhos"
-              />
+              >
+                <option value="">Sem categoria</option>
+                {options.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option value={OTHER_CATEGORY}>Outra…</option>
+              </select>
+              {isOther && (
+                <div className="mt-2">
+                  <label htmlFor="categoria-outra" className="sr-only">Nome da nova categoria</label>
+                  <input
+                    id="categoria-outra"
+                    ref={otherRef}
+                    autoFocus
+                    aria-required="true"
+                    maxLength={CATEGORY_MAX_LENGTH}
+                    value={otherText}
+                    onChange={(e) => { setOtherText(e.target.value); setOtherError(''); }}
+                    className="input"
+                    placeholder="Nome da nova categoria"
+                    aria-invalid={otherError ? true : undefined}
+                    aria-describedby={describedBy}
+                  />
+                  {otherError && (
+                    <p id={errorId} role="alert" className="text-xs font-semibold text-rose-600 mt-1">{otherError}</p>
+                  )}
+                  {similar && (
+                    <p id={similarId} className="text-xs text-slate-600 mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span>Parecida com: <strong>{similar}</strong>. Usar essa?</span>
+                      <button
+                        type="button"
+                        onClick={() => useSimilar(similar)}
+                        className="btn btn-outline text-xs px-3 py-2 min-h-[44px]"
+                      >
+                        Usar {similar}
+                      </button>
+                    </p>
+                  )}
+                </div>
+              )}
             </Field>
 
             <Field label="Unidade de Medida">
@@ -251,17 +349,30 @@ export function ProductFormPage() {
           </button>
         </div>
       </form>
+
+      <ConfirmDialog
+        open={newCategory !== null}
+        title="Nova categoria"
+        body={`Criar a categoria '${newCategory ?? ''}'?`}
+        confirmLabel="Criar categoria"
+        onConfirm={() => {
+          const typed = newCategory ?? '';
+          setNewCategory(null);
+          void save(typed, Number(form.daysValidRefrigerated) || 0, Number(form.daysValidFrozen) || 0);
+        }}
+        onCancel={() => setNewCategory(null)}
+      />
     </div>
   );
 }
 
 // ── Field wrapper ─────────────────────────────────────────
-function Field({ label, required, children }: {
-  label: string; required?: boolean; children: React.ReactNode;
+function Field({ label, required, htmlFor, children }: {
+  label: string; required?: boolean; htmlFor?: string; children: React.ReactNode;
 }) {
   return (
     <div>
-      <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
+      <label htmlFor={htmlFor} className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1.5">
         {label} {required && <span className="text-rose-500">*</span>}
       </label>
       {children}

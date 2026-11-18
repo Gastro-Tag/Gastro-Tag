@@ -1,9 +1,18 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, StorageType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
+import { hasActiveRuleFor, productShelfLifeDays } from './labelService';
+import { activeCategoryUsage, activeRuleCategories } from './categoryService';
+import { mergeWithDefaults, resolveCategory } from '../domain/categories';
 import {
   PENDING_LOT_CODE, addDays, daysUntil, getExpiryStatus, kitchenToday, kitchenWeekAgo, summarizeLots,
 } from '../utils/dateUtils';
+
+/** Fontes para escolher a grafia da categoria (ver `resolveCategory`). */
+const categorySources = async () => {
+  const [usage, ruleCategories] = await Promise.all([activeCategoryUsage(), activeRuleCategories()]);
+  return { usage, ruleCategories };
+};
 
 export type ProductStatus = 'all' | 'valid' | 'expiring' | 'expired' | 'recent' | 'no_lot';
 export type ProductSort   = 'name' | 'brand' | 'date' | 'created';
@@ -147,19 +156,20 @@ export const ProductService = {
   async create(data: {
     name: string;
     brand: string;
-    category?: string;
+    category?: string | null;
     daysValidRefrigerated: number;
     daysValidFrozen: number;
     unit?: string;
     notes?: string;
   }) {
-    return prisma.product.create({ data });
+    const category = resolveCategory(data.category, await categorySources());
+    return prisma.product.create({ data: { ...data, category } });
   },
 
   async update(id: string, data: Partial<{
     name: string;
     brand: string;
-    category: string;
+    category: string | null;
     daysValidRefrigerated: number;
     daysValidFrozen: number;
     unit: string;
@@ -171,6 +181,10 @@ export const ProductService = {
       (data.daysValidRefrigerated ?? current.daysValidRefrigerated) <= 0 &&
       (data.daysValidFrozen ?? current.daysValidFrozen) <= 0
     ) throw Errors.validation('O produto precisa manter ao menos um tipo de validade pós-abertura.');
+    // Sem `category` no corpo, a categoria fica como está. Equivalente à atual, também (não perde a regra).
+    if (data.category !== undefined) {
+      data = { ...data, category: resolveCategory(data.category, { ...await categorySources(), current: current.category }) };
+    }
     return prisma.product.update({ where: { id }, data });
   },
 
@@ -180,7 +194,47 @@ export const ProductService = {
     return prisma.product.update({ where: { id }, data: { active: false } });
   },
 
-  async getCategories() {
+  /**
+   * Produtos ativos que, em algum armazenamento, gerariam etiqueta "sem regra validada": nenhuma regra
+   * ativa do produto nem da categoria, então vale o prazo do produto. Com 0 dias no produto a etiqueta
+   * é recusada (422 em `resolveShelfLifeDays`), então esse armazenamento não entra.
+   */
+  async listWithoutRule() {
+    const [products, activeRules] = await Promise.all([
+      prisma.product.findMany({
+        where: { active: true },
+        select: { id: true, name: true, brand: true, category: true, daysValidRefrigerated: true, daysValidFrozen: true },
+        orderBy: [{ name: 'asc' }, { brand: 'asc' }, { id: 'asc' }],
+      }),
+      prisma.shelfLifeRule.findMany({
+        where: { active: true },
+        select: { productId: true, category: true, storageType: true },
+      }),
+    ]);
+    const storageTypes: StorageType[] = ['REFRIGERADO', 'CONGELADO'];
+    const data = products
+      .map(({ daysValidRefrigerated, daysValidFrozen, ...product }) => ({
+        ...product,
+        missing: storageTypes
+          .map((storageType) => ({
+            storageType,
+            productDays: productShelfLifeDays({ daysValidRefrigerated, daysValidFrozen }, storageType),
+          }))
+          .filter(({ storageType, productDays }) => productDays > 0 && !hasActiveRuleFor(activeRules, product, storageType)),
+      }))
+      .filter((product) => product.missing.length > 0);
+    return {
+      data,
+      meta: { total: data.length, missingCount: data.reduce((sum, product) => sum + product.missing.length, 0) },
+    };
+  },
+
+  /** Sem `withDefaults`, só as categorias em uso; com ele, unidas à lista padrão (ver `mergeWithDefaults`). */
+  async getCategories(options: { withDefaults?: boolean } = {}) {
+    if (options.withDefaults) {
+      const { usage, ruleCategories } = await categorySources();
+      return mergeWithDefaults(usage, ruleCategories);
+    }
     const rows = await prisma.product.findMany({
       where:   { active: true, category: { not: null } },
       select:  { category: true },

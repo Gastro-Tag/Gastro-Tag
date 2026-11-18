@@ -1,12 +1,22 @@
 ﻿import { randomUUID } from 'node:crypto';
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import app from '../src/app';
 import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
 import { logger } from '../src/utils/logger';
-import { kitchenToday } from '../src/utils/dateUtils';
+import { addMonths, generateShortCode, kitchenToday } from '../src/utils/dateUtils';
+import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
+
+// Sorteio do código curto observável: o teste força um código que já existe (colisão).
+vi.mock('../src/utils/dateUtils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/utils/dateUtils')>();
+  return { ...actual, generateShortCode: vi.fn(actual.generateShortCode) };
+});
+const drawShortCode = vi.mocked(generateShortCode);
+const realShortCode = async () =>
+  (await vi.importActual<typeof import('../src/utils/dateUtils')>('../src/utils/dateUtils')).generateShortCode;
 
 // Precisa valer antes de importar o app: simula a API atrás do nginx.
 vi.hoisted(() => { process.env.TRUST_PROXY_HOPS = '1'; });
@@ -33,6 +43,8 @@ const ruleBody = {
 };
 
 beforeAll(async () => {
+  // Uma execução interrompida pode ter deixado o bloqueio ou o limite do aviso ligados: começa sempre desligado.
+  await prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false, expiryWarningMonths: null } });
   const user = await prisma.user.create({ data: {
     name: 'Teste de integração', email,
     passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
@@ -1014,6 +1026,43 @@ describe('API integration flow', () => {
       expect([plainA.status, plainB.status]).toEqual([201, 201]);
       expect(plainA.body.data.id).not.toBe(plainB.body.data.id);
     });
+
+    it('draws another short code when the drawn one already exists, and the resend still replays', async () => {
+      const send = (requestId?: string) => request(app).post('/api/labels')
+        .set('Authorization', `Bearer ${accessToken}`).send({
+          productId: productIds[0], lot: 'LOT-COLISAO', originalExpiryDate: daysFromToday(30), responsibleName: 'Colisão',
+          storageType: 'REFRIGERADO', storageTemperature: 4, requestId,
+        });
+      const existing = await send();
+      expect(existing.status).toBe(201);
+      const taken = existing.body.data.shortCode as string;
+
+      const requestId = randomUUID();
+      drawShortCode.mockReturnValueOnce(taken).mockReturnValueOnce(taken);
+      const created = await send(requestId);
+      expect(created.status).toBe(201);
+      expect(created.body.data.shortCode).not.toBe(taken);
+      expect(drawShortCode.mock.results.slice(-3).map((result) => result.value)).toEqual([taken, taken, created.body.data.shortCode]);
+
+      // Reenvio: o requestId repetido continua devolvendo a mesma etiqueta, mesmo sorteando um código que existe.
+      drawShortCode.mockReturnValueOnce(taken);
+      const again = await send(requestId);
+      expect(again.status).toBe(200);
+      expect(again.body.data.id).toBe(created.body.data.id);
+      expect(await prisma.label.count({ where: { requestId } })).toBe(1);
+
+      // Só repete código: desiste depois das tentativas, com erro claro, sem gravar nada.
+      const before = await prisma.label.count({ where: { lot: 'LOT-COLISAO' } });
+      drawShortCode.mockImplementation(() => taken);
+      try {
+        const failed = await send(randomUUID());
+        expect(failed.status).toBe(503);
+        expect(failed.body.error.code).toBe('SHORT_CODE_UNAVAILABLE');
+      } finally {
+        drawShortCode.mockImplementation(await realShortCode());
+      }
+      expect(await prisma.label.count({ where: { lot: 'LOT-COLISAO' } })).toBe(before);
+    });
   });
 });
 
@@ -1279,6 +1328,42 @@ describe('closing and splitting labels', () => {
 
       // Origem com filhas não pode ser apagada.
       await expect(prisma.label.delete({ where: { id: parent.id } })).rejects.toThrow(/labels_parent_label_id_fkey/);
+    });
+
+    it('redoes the split transaction when a drawn short code already exists, and the resend still replays', async () => {
+      const parent = await newLabel();
+      const taken = parent.shortCode;
+      const requestId = randomUUID();
+      const fresh = (await realShortCode())();
+      // Primeira transação: a 2ª filha sorteia o código da origem e a transação aborta. A segunda tentativa grava.
+      drawShortCode.mockReturnValueOnce(fresh).mockReturnValueOnce(taken);
+      const created = await split(parent.id, { count: 2, closeParent: true, requestId });
+      expect(created.status).toBe(201);
+      const codes = created.body.data.children.map((child: { shortCode: string }) => child.shortCode);
+      expect(codes).toHaveLength(2);
+      expect(codes).not.toContain(taken);
+      expect(created.body.data.parent).toMatchObject({ status: 'ENCERRADA', outcome: 'USADO' });
+      // Nada da tentativa abortada ficou no banco.
+      expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(2);
+      expect(await prisma.label.count({ where: { shortCode: fresh } })).toBe(0);
+
+      const again = await split(parent.id, { count: 2, closeParent: true, requestId });
+      expect(again.status).toBe(200);
+      expect(again.body.data.children.map((child: { id: string }) => child.id).sort())
+        .toEqual(created.body.data.children.map((child: { id: string }) => child.id).sort());
+
+      // Só repete código: desiste depois das tentativas, sem filhas nem encerrar a origem.
+      const other = await newLabel();
+      drawShortCode.mockImplementation(() => other.shortCode);
+      try {
+        const failed = await split(other.id, { count: 1, closeParent: true });
+        expect(failed.status).toBe(503);
+        expect(failed.body.error.code).toBe('SHORT_CODE_UNAVAILABLE');
+      } finally {
+        drawShortCode.mockImplementation(await realShortCode());
+      }
+      expect(await prisma.label.count({ where: { parentLabelId: other.id } })).toBe(0);
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: other.id } })).status).toBe('ATIVA');
     });
 
     it('closes the parent as used when the package is finished, and a resend returns the same children', async () => {
@@ -1569,7 +1654,7 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
     it('reports the kitchen date and the backdate limit in /auth/me', async () => {
       const me = await request(app).get('/api/auth/me').set('Authorization', asOperator).expect(200);
       expect(me.body.data.sub).toBe(operatorId);
-      expect(me.body.meta).toEqual({ kitchenToday: today(), maxBackdateDays: 2 });
+      expect(me.body.meta).toEqual({ kitchenToday: today(), maxBackdateDays: 2, requireValidatedRule: false });
     });
 
     it('accepts an opening 2 days ago and rejects 3 days ago and the future', async () => {
@@ -1675,8 +1760,8 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect([...body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
 
       const rows = rowsOf(body);
-      expect(rows[0].split(';')).toHaveLength(22);
-      expect(rows[0]).toContain('"Código";"Produto";"Marca";"Lote"');
+      expect(rows[0].split(';')).toHaveLength(25);
+      expect(rows[0]).toContain('"Código";"Produto";"Marca";"Lote";"Lote cadastrado";"Validade do fabricante"');
       const row = rows.find((line) => line.startsWith(`"${formula.shortCode}"`))!;
       expect(row).toBeTruthy();
       expect(row).toContain(`"'=1+1"`);
@@ -1708,6 +1793,90 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect(rowsOf((await exportCsv({ productId, to: daysFromToday(-1) })).body)).toHaveLength(1);
       expect((await exportCsv({ from: today(), to: daysFromToday(-1) })).status).toBe(422);
       expect((await exportCsv({ due: 'ontem' })).status).toBe(422);
+    });
+
+    it('filters by lot source (registered lot or "Outra embalagem") in the list and the export', async () => {
+      const lot = await request(app).post(`/api/products/${productId}/lots`).set('Authorization', asAdmin())
+        .send({ code: `LOTE-CAD-${suffix.slice(0, 6)}`, expiryDate: daysFromToday(60) }).expect(201);
+      const registered = await newLabel({ lot: undefined, originalExpiryDate: undefined, lotId: lot.body.data.id });
+      const typed = await newLabel();
+      // Etiqueta de antes da migração dos lotes: lot_id nulo e criada antes do fim da migração.
+      const [migration] = await prisma.$queryRaw<{ finished_at: Date }[]>`
+        SELECT finished_at FROM _prisma_migrations WHERE migration_name = '20261103000000_product_lots'`;
+      expect(migration?.finished_at).toBeTruthy();
+      const legacy = await newLabel();
+      await prisma.label.update({
+        where: { id: legacy.id }, data: { createdAt: new Date(migration.finished_at.getTime() - 86_400_000) },
+      });
+      // A filha do Dividir nasce depois do corte, mas herda a embalagem da origem anterior.
+      const split = await request(app).post(`/api/labels/${legacy.id}/split`).set('Authorization', asAdmin())
+        .send({ count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' });
+      expect(split.status).toBe(201);
+      const legacyChild = split.body.data.children[0] as { id: string; shortCode: string };
+      const legacyIds = [legacy.id, legacyChild.id];
+
+      const list = (query: Record<string, string>) =>
+        request(app).get('/api/labels').query({ productId, limit: '100', ...query }).set('Authorization', asAdmin());
+      const idsOf = (res: { body: { data: { id: string }[] } }) => res.body.data.map((label: { id: string }) => label.id) as string[];
+
+      const all = await list({});
+      expect(all.status).toBe(200);
+      const byId = (id: string) => all.body.data.find((label: { id: string }) => label.id === id);
+      expect(byId(registered.id).lotId).toBe(lot.body.data.id);
+      expect(byId(typed.id).lotId).toBeNull();
+      expect(byId(registered.id).lotSource).toBe('cadastrado');
+      expect(byId(typed.id).lotSource).toBe('informado');
+      expect(byId(legacy.id)).toMatchObject({ lotId: null, lotSource: 'anterior' });
+      expect(byId(legacyChild.id)).toMatchObject({ lotId: null, lotSource: 'anterior', parentLabelId: legacy.id });
+
+      const cadastrado = await list({ lotSource: 'cadastrado' });
+      const informado = await list({ lotSource: 'informado' });
+      const anterior = await list({ lotSource: 'anterior' });
+      expect(cadastrado.status).toBe(200);
+      expect(informado.status).toBe(200);
+      expect(anterior.status).toBe(200);
+      expect(idsOf(cadastrado)).toContain(registered.id);
+      expect(idsOf(cadastrado)).not.toContain(typed.id);
+      expect(idsOf(informado)).toContain(typed.id);
+      expect(idsOf(informado)).not.toContain(registered.id);
+      expect(idsOf(anterior).sort()).toEqual([...legacyIds].sort());
+      for (const id of legacyIds) {
+        expect(idsOf(informado)).not.toContain(id);
+        expect(idsOf(cadastrado)).not.toContain(id);
+      }
+      const sourcesOf = (res: { body: { data: { lotSource: string }[] } }) => new Set(res.body.data.map((l) => l.lotSource));
+      expect([...sourcesOf(cadastrado)]).toEqual(['cadastrado']);
+      expect([...sourcesOf(informado)]).toEqual(['informado']);
+      expect([...sourcesOf(anterior)]).toEqual(['anterior']);
+      // Sem o filtro, nada muda: os três grupos somam a lista inteira.
+      expect(cadastrado.body.meta.total + informado.body.meta.total + anterior.body.meta.total)
+        .toBe(all.body.meta.total);
+      expect((await list({ lotSource: 'outro' })).status).toBe(422);
+      expect((await list({ lotSource: 'Cadastrado' })).status).toBe(422);
+
+      const csvAll = rowsOf((await exportCsv({ productId })).body);
+      const csvCad = rowsOf((await exportCsv({ productId, lotSource: 'cadastrado' })).body);
+      const csvInf = rowsOf((await exportCsv({ productId, lotSource: 'informado' })).body);
+      const rowOf = (rows: string[], code: string) => rows.find((line) => line.startsWith(`"${code}"`));
+      // Coluna "Lote cadastrado" (5ª), logo depois de "Lote".
+      expect(rowOf(csvAll, registered.shortCode)!.split(';')[4]).toBe('"Sim"');
+      expect(rowOf(csvAll, typed.shortCode)!.split(';')[4]).toBe('"Não"');
+      expect(rowOf(csvAll, legacyChild.shortCode)!.split(';')[4]).toBe('"Anterior aos lotes"');
+      // A origem anterior tem criação antes do corte: some do período de hoje, mas sai sem período.
+      const csvAnt = rowsOf((await exportCsv({ lotSource: 'anterior', q: legacy.shortCode })).body);
+      expect(csvAnt).toHaveLength(2);
+      expect(csvAnt[1].split(';')[4]).toBe('"Anterior aos lotes"');
+      expect(rowOf(rowsOf((await exportCsv({ productId, lotSource: 'informado' })).body), legacyChild.shortCode))
+        .toBeUndefined();
+      expect(rowOf(csvCad, registered.shortCode)).toBeTruthy();
+      expect(rowOf(csvCad, typed.shortCode)).toBeUndefined();
+      expect(rowOf(csvInf, typed.shortCode)).toBeTruthy();
+      expect(rowOf(csvInf, registered.shortCode)).toBeUndefined();
+      expect(csvCad.slice(1).every((line) => line.split(';')[4] === '"Sim"')).toBe(true);
+      expect(csvInf.slice(1).every((line) => line.split(';')[4] === '"Não"')).toBe(true);
+      const csvAntAll = rowsOf((await exportCsv({ productId, lotSource: 'anterior' })).body);
+      expect(csvCad.length - 1 + csvInf.length - 1 + csvAntAll.length - 1).toBe(csvAll.length - 1);
+      expect((await exportCsv({ lotSource: 'qualquer' })).status).toBe(422);
     });
   });
 
@@ -1906,6 +2075,927 @@ describe('etapa G2a: e-mail sem diferenciar maiúsculas, admin no boot e mensage
       });
       expect(rule.status).toBe(422);
       expect(rule.body.error.message).toBe('Informe a temperatura em número (°C).');
+    });
+  });
+});
+
+describe('produtos sem regra validada', () => {
+  const tag = suffix.slice(0, 8);
+  const category = `Sem regra ${tag}`;
+  let adminToken = '';
+  const ids: Record<string, string> = {};
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const withoutRule = (token = asAdmin()) =>
+    request(app).get('/api/products/without-rule').set('Authorization', token);
+  const createProduct = async (key: string, data: { category?: string; daysValidRefrigerated: number; daysValidFrozen: number }) => {
+    const product = await prisma.product.create({ data: { name: `Sem regra ${tag} ${key}`, brand: 'Teste', ...data } });
+    productIds.push(product.id);
+    ids[key] = product.id;
+  };
+  const createRule = async (body: object) => {
+    const res = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+      .send({ ...ruleBody, shelfLifeDays: 5, ...body });
+    expect(res.status).toBe(201);
+    ruleIds.push(res.body.data.id);
+    return res.body.data.id as string;
+  };
+  type Entry = { id: string; missing: { storageType: string; productDays: number }[] };
+  const entry = (body: { data: Entry[] }, key: string) => body.data.find((item) => item.id === ids[key]);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.40')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+
+    await createProduct('a-sem-regra', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('b-regra-produto', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('c-regra-categoria', { category, daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('d-regra-desativada', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('e-zero-dias', { daysValidRefrigerated: 4, daysValidFrozen: 0 });
+    await createProduct('g-inativo', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('h-regra-so-refrigerado', { daysValidRefrigerated: 3, daysValidFrozen: 45 });
+    await prisma.product.update({ where: { id: ids['g-inativo'] }, data: { active: false } });
+
+    await createRule({ productId: ids['b-regra-produto'], storageType: 'REFRIGERADO' });
+    await createRule({ productId: ids['b-regra-produto'], storageType: 'CONGELADO', shelfLifeDays: 20 });
+    await createRule({ category, storageType: 'REFRIGERADO' });
+    await createRule({ category, storageType: 'CONGELADO', shelfLifeDays: 20 });
+    await createRule({ productId: ids['h-regra-so-refrigerado'], storageType: 'REFRIGERADO' });
+    const deactivated = await createRule({ productId: ids['d-regra-desativada'], storageType: 'REFRIGERADO' });
+    await request(app).delete(`/api/shelf-life-rules/${deactivated}`).set('Authorization', asAdmin()).expect(200);
+    // Depois das regras: a regra de categoria usa o texto do cadastro, e este difere só na caixa.
+    await createProduct('f-categoria-outra-caixa', { category: category.toUpperCase(), daysValidRefrigerated: 2, daysValidFrozen: 0 });
+  });
+
+  it('lists the storage types that fall back to the product days, with totals', async () => {
+    const res = await withoutRule();
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(entry(res.body, 'a-sem-regra')).toEqual({
+      id: ids['a-sem-regra'], name: `Sem regra ${tag} a-sem-regra`, brand: 'Teste', category: null,
+      missing: [{ storageType: 'REFRIGERADO', productDays: 3 }, { storageType: 'CONGELADO', productDays: 30 }],
+    });
+    expect(res.body.meta).toEqual({
+      total: res.body.data.length,
+      missingCount: res.body.data.reduce((sum: number, item: { missing: unknown[] }) => sum + item.missing.length, 0),
+    });
+    expect(res.body.data.every((item: { missing: unknown[] }) => item.missing.length > 0)).toBe(true);
+    const mine = res.body.data.filter((item: { name: string }) => item.name.startsWith(`Sem regra ${tag}`))
+      .map((item: { name: string }) => item.name);
+    expect(mine).toEqual([...mine].sort());
+  });
+
+  it('leaves out products covered by a product or category rule, and inactive products', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'b-regra-produto')).toBeUndefined();
+    expect(entry(res.body, 'c-regra-categoria')).toBeUndefined();
+    expect(entry(res.body, 'g-inativo')).toBeUndefined();
+  });
+
+  it('lists only the storage type the product rule does not cover', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'h-regra-so-refrigerado')?.missing).toEqual([{ storageType: 'CONGELADO', productDays: 45 }]);
+  });
+
+  it('does not count a deactivated rule', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'd-regra-desativada')?.missing).toEqual([
+      { storageType: 'REFRIGERADO', productDays: 3 }, { storageType: 'CONGELADO', productDays: 30 },
+    ]);
+  });
+
+  it('leaves out a storage type with 0 days, where the label is refused instead', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'e-zero-dias')?.missing).toEqual([{ storageType: 'REFRIGERADO', productDays: 4 }]);
+    const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: ids['e-zero-dias'], originalExpiryDate: daysFromToday(30), storageType: 'CONGELADO',
+    });
+    expect(preview.status).toBe(422);
+  });
+
+  it('compares the category exactly, like the label calculation', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'f-categoria-outra-caixa')?.missing).toEqual([{ storageType: 'REFRIGERADO', productDays: 2 }]);
+    const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: ids['f-categoria-outra-caixa'], originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO',
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.body.data.rule.validated).toBe(false);
+  });
+
+  it('is only for administrators', async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.41')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    expect((await withoutRule(`Bearer ${login.body.data.accessToken}`)).status).toBe(403);
+    expect((await request(app).get('/api/products/without-rule')).status).toBe(401);
+  });
+});
+
+describe('categorias de produto', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  // Categorias da lista padrão sem produto ativo nem regra ativa equivalente no início do bloco.
+  let free = '';
+  let free2 = '';
+  let free3 = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const createViaApi = async (category: unknown) => {
+    const res = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Categoria ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 0,
+      ...(category !== undefined && { category }),
+    });
+    expect(res.status).toBe(201);
+    productIds.push(res.body.data.id);
+    return res.body.data as { id: string; category: string | null };
+  };
+  const createLegacy = async (name: string, category: string) => {
+    // Gravado direto no banco, como os produtos de antes da lista (grafia sem normalizar).
+    const product = await prisma.product.create({ data: {
+      name: `${name} ${tag}`, brand: 'Teste', category, daysValidRefrigerated: 3, daysValidFrozen: 0,
+    } });
+    productIds.push(product.id);
+    return product;
+  };
+  const createCategoryRule = async (category: string) => {
+    const res = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+      .send({ ...ruleBody, category, storageType: 'REFRIGERADO', shelfLifeDays: 2 });
+    expect(res.status).toBe(201);
+    ruleIds.push(res.body.data.id);
+    return res.body.data as { id: string; category: string };
+  };
+  const previewRule = async (productId: string) => {
+    const res = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId, originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO', storageTemperature: 4,
+    });
+    expect(res.status).toBe(200);
+    return res.body.data.rule as { id: string | null; validated: boolean };
+  };
+  const categories = (query = '') =>
+    request(app).get(`/api/products/categories${query}`).set('Authorization', asAdmin());
+  const fold = (value: string) => categoryKey(value);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.50')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+
+    // O banco descartável pode ter dados de outras execuções: escolhe categorias padrão ainda livres.
+    const [used, rules] = await Promise.all([
+      prisma.product.findMany({ where: { active: true, category: { not: null } }, select: { category: true } }),
+      prisma.shelfLifeRule.findMany({ where: { active: true, category: { not: null } }, select: { category: true } }),
+    ]);
+    const taken = new Set([...used, ...rules].map((row) => fold(row.category!)));
+    [free = '', free2 = '', free3 = ''] = DEFAULT_CATEGORIES.filter((item) => !taken.has(fold(item)));
+    expect([free, free2, free3].every(Boolean)).toBe(true);
+  });
+
+  it('uses the default spelling when no active product has an equivalent category, then the one in use', async () => {
+    expect((await createViaApi(fold(free))).category).toBe(free); // ex.: "laticinios" → "Laticínios"
+    expect((await createViaApi(`  ${free.toUpperCase()} `)).category).toBe(free); // já em uso: mesma grafia
+  });
+
+  it('prefers the most used spelling among active products over the default list', async () => {
+    for (const key of ['a', 'b', 'c']) await createLegacy(`Categoria legada ${key}`, fold(free).toUpperCase());
+    // 3 com a grafia antiga contra 2 com a da lista: vale a mais usada.
+    expect((await createViaApi(free.toLowerCase())).category).toBe(fold(free).toUpperCase());
+  });
+
+  it('keeps a new text with collapsed spaces, and empty or null means no category', async () => {
+    expect((await createViaApi(`  Nova   categoria \t ${tag}  `)).category).toBe(`Nova categoria ${tag}`);
+    expect((await createViaApi('')).category).toBeNull();
+    expect((await createViaApi('   ')).category).toBeNull();
+    expect((await createViaApi(null)).category).toBeNull();
+    expect((await createViaApi(undefined)).category).toBeNull();
+    const tooLong = await request(app).post('/api/products').set('Authorization', asAdmin()).send({
+      name: `Categoria ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 0, category: 'x'.repeat(61),
+    });
+    expect(tooLong.status).toBe(422);
+  });
+
+  it('normalizes on update too, keeping the current spelling when equivalent', async () => {
+    const product = await createViaApi(`Única ${tag}`);
+    const put = (body: object) => request(app).put(`/api/products/${product.id}`).set('Authorization', asAdmin()).send(body);
+
+    const same = await put({ category: `  ÚNICA   ${tag} ` });
+    expect(same.status).toBe(200);
+    expect(same.body.data.category).toBe(`Única ${tag}`);
+
+    expect((await put({ category: fold(free2) })).body.data.category).toBe(free2);
+    expect((await put({ name: `Categoria ${tag} editada` })).body.data.category).toBe(free2); // sem category, não mexe
+    expect((await put({ category: '' })).body.data.category).toBeNull();
+  });
+
+  it('keeps the old spelling of the only product with a category rule when it is edited', async () => {
+    const legacySpelling = fold(free3).toUpperCase(); // diferente da grafia da lista padrão
+    const product = await createLegacy('Categoria com regra', legacySpelling);
+    const rule = await createCategoryRule(legacySpelling);
+    expect(rule.category).toBe(legacySpelling);
+    const put = (body: object) => request(app).put(`/api/products/${product.id}`).set('Authorization', asAdmin()).send(body);
+
+    // O formulário manda a categoria junto; mesmo na grafia da lista, fica a atual.
+    expect((await put({ name: `Categoria com regra ${tag} editado`, category: free3 })).body.data.category).toBe(legacySpelling);
+    expect((await put({ name: `Categoria com regra ${tag} de novo` })).body.data.category).toBe(legacySpelling);
+    expect(await previewRule(product.id)).toMatchObject({ id: rule.id, validated: true });
+  });
+
+  it('gives a new equivalent product the spelling of the active category rule, even if most products use another', async () => {
+    const ruleSpelling = `mistura ${tag}`;
+    await createLegacy('Mistura regra', ruleSpelling);
+    const rule = await createCategoryRule(ruleSpelling);
+    for (const key of ['a', 'b', 'c']) await createLegacy(`Mistura maioria ${key}`, `MISTURA ${tag}`);
+
+    const created = await createViaApi(`Mistura ${tag}`);
+    expect(created.category).toBe(ruleSpelling);
+    expect(await previewRule(created.id)).toMatchObject({ id: rule.id, validated: true });
+  });
+
+  it('treats inner double spaces as the same category and keeps the stored spelling', async () => {
+    const stored = `Dupla  ${tag}`; // dois espaços, de antes da limpeza
+    await createLegacy('Espaço duplo', stored);
+    const rule = await createCategoryRule(stored);
+    expect(rule.category).toBe(stored);
+
+    const created = await createViaApi(`dupla ${tag}`);
+    expect(created.category).toBe(stored);
+    expect(await previewRule(created.id)).toMatchObject({ id: rule.id, validated: true });
+
+    const list = (await categories('?withDefaults=true')).body.data as string[];
+    expect(list.filter((item) => fold(item) === fold(stored))).toEqual([stored]);
+  });
+
+  it('lists the default categories with ?withDefaults=true, without equivalent duplicates', async () => {
+    const res = await categories('?withDefaults=true');
+    expect(res.status).toBe(200);
+    const list = res.body.data as string[];
+    expect(new Set(list.map(fold)).size).toBe(list.length);
+    expect(list).toEqual([...list].sort((a, b) => a.localeCompare(b, 'pt-BR')));
+    const keys = new Set(list.map(fold));
+    expect(DEFAULT_CATEGORIES.every((item) => keys.has(fold(item)))).toBe(true);
+    expect(list).toContain(`Nova categoria ${tag}`);
+    expect(list.filter((item) => fold(item) === fold(free))).toHaveLength(1);
+  });
+
+  it('keeps the previous behavior without the parameter, and validates the query', async () => {
+    const res = await categories();
+    expect(res.status).toBe(200);
+    const rows = await prisma.product.findMany({
+      where: { active: true, category: { not: null } }, select: { category: true }, distinct: ['category'], orderBy: { category: 'asc' },
+    });
+    expect(res.body.data).toEqual(rows.map((row) => row.category));
+    expect(res.body.data).toEqual(expect.arrayContaining([free, fold(free).toUpperCase()]));
+    expect((await categories('?withDefaults=false')).body.data).toEqual(res.body.data);
+    expect((await categories('?withDefaults=sim')).status).toBe(422);
+  });
+});
+
+describe('bloqueio de etiqueta sem regra validada', () => {
+  const tag = suffix.slice(0, 8);
+  const category = `Bloqueio ${tag}`;
+  let adminToken = '';
+  let operatorAuth = '';
+  let noRuleId = '';
+  let productRuleId = '';
+  let categoryRuleId = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const turnOff = () => prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false } });
+  const setRequire = (value: unknown, token = asAdmin()) =>
+    request(app).put('/api/settings').set('Authorization', token).send({ requireValidatedRule: value });
+  const labelBody = (productId: string, body: object = {}) => ({
+    productId, lot: 'LOT-BLOQ', originalExpiryDate: daysFromToday(60), openedAt: today(),
+    responsibleName: 'Turno de teste', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+  });
+  const preview = (productId: string, body: object = {}) =>
+    request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send(labelBody(productId, body));
+  const create = (productId: string, body: object = {}) =>
+    request(app).post('/api/labels').set('Authorization', asAdmin()).send(labelBody(productId, body));
+  const splitBody = { count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' };
+  const splitPreview = (id: string, body: object = {}) => request(app).post(`/api/labels/${id}/split/preview`)
+    .set('Authorization', asAdmin()).send({ storageType: 'REFRIGERADO', storageTemperature: 4, ...body });
+  const split = (id: string, body: object = {}) =>
+    request(app).post(`/api/labels/${id}/split`).set('Authorization', asAdmin()).send({ ...splitBody, ...body });
+  const newLabel = async (productId: string, body: object = {}) => {
+    const res = await create(productId, body);
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string };
+  };
+  const expectRuleRequired = (res: request.Response) => {
+    expect(res.status).toBe(422);
+    expect(res.body.error).toEqual({
+      code: 'RULE_REQUIRED',
+      message: 'Produto sem prazo validado para este armazenamento. Chame o gerente para cadastrar a regra.',
+    });
+  };
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.60')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operatorLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.61')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operatorLogin.body.data.accessToken}`;
+    // Prazos fictícios, só para o teste.
+    const product = async (name: string, data: { category?: string } = {}) => {
+      const created = await prisma.product.create({
+        data: { name: `${name} ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30, ...data },
+      });
+      productIds.push(created.id);
+      return created.id;
+    };
+    noRuleId = await product('Bloqueio sem regra');
+    productRuleId = await product('Bloqueio regra produto');
+    categoryRuleId = await product('Bloqueio regra categoria', { category });
+    for (const body of [{ productId: productRuleId }, { category }]) {
+      const res = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+        .send({ ...ruleBody, shelfLifeDays: 5, storageType: 'REFRIGERADO', ...body });
+      expect(res.status).toBe(201);
+      ruleIds.push(res.body.data.id);
+    }
+  });
+
+  // Cada teste que liga o bloqueio desliga no fim, para não mudar o resultado dos outros.
+  afterEach(turnOff);
+  afterAll(turnOff);
+
+  it('keeps the current behavior while the option is off (the default)', async () => {
+    const settings = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(settings.status).toBe(200);
+    expect(settings.body.data.requireValidatedRule).toBe(false);
+
+    const me = await request(app).get('/api/auth/me').set('Authorization', asAdmin());
+    expect(me.body.meta).toMatchObject({ kitchenToday: today(), requireValidatedRule: false });
+
+    const res = await preview(noRuleId);
+    expect(res.status).toBe(200);
+    expect(res.body.data.rule.validated).toBe(false);
+    const label = await newLabel(noRuleId);
+    expect((await splitPreview(label.id)).status).toBe(200);
+    expect((await split(label.id)).status).toBe(201);
+  });
+
+  it('only lets an ADMIN change the option, with a strict body', async () => {
+    expect((await setRequire(true, operatorAuth)).status).toBe(403);
+    expect((await request(app).put('/api/settings').send({ requireValidatedRule: true })).status).toBe(401);
+    expect((await request(app).get('/api/settings')).status).toBe(401);
+    expect((await setRequire('true')).status).toBe(422);
+    expect((await request(app).put('/api/settings').set('Authorization', asAdmin()).send({})).status).toBe(422);
+    const extra = await request(app).put('/api/settings').set('Authorization', asAdmin())
+      .send({ requireValidatedRule: true, updatedByName: 'Outro' });
+    expect(extra.status).toBe(422);
+    const settings = await request(app).get('/api/settings').set('Authorization', asAdmin());
+    expect(settings.body.data.requireValidatedRule).toBe(false);
+  });
+
+  it('turns the option on with who changed it, the blocked counts and /auth/me', async () => {
+    const res = await setRequire(true);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ requireValidatedRule: true, updatedByName: 'Teste de integração' });
+    expect(typeof res.body.data.updatedAt).toBe('string');
+    const withoutRule = await request(app).get('/api/products/without-rule').set('Authorization', asAdmin());
+    expect(res.body.meta).toEqual({
+      blockedProducts: withoutRule.body.meta.total, blockedCombinations: withoutRule.body.meta.missingCount,
+    });
+    // Os produtos deste bloco: sem regra (2 armazenamentos), regra só no refrigerado (1 cada).
+    expect(res.body.meta.blockedProducts).toBeGreaterThanOrEqual(3);
+    expect(res.body.meta.blockedCombinations).toBeGreaterThanOrEqual(4);
+    expect(await prisma.kitchenSettings.findUnique({ where: { id: 1 } })).toMatchObject({ updatedById: userId });
+
+    const me = await request(app).get('/api/auth/me').set('Authorization', operatorAuth);
+    expect(me.body.meta.requireValidatedRule).toBe(true);
+    const settings = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(settings.body.data).toMatchObject({ requireValidatedRule: true, updatedByName: 'Teste de integração' });
+  });
+
+  it('with the option on, refuses the 4 endpoints without a rule and accepts product or category rules', async () => {
+    const parentNoRule = await newLabel(noRuleId);
+    expect((await setRequire(true)).status).toBe(200);
+    const before = await prisma.label.count({ where: { productId: noRuleId } });
+
+    expectRuleRequired(await preview(noRuleId));
+    expectRuleRequired(await preview(noRuleId, { storageTemperature: undefined }));
+    expectRuleRequired(await create(noRuleId, { requestId: randomUUID() }));
+    expectRuleRequired(await splitPreview(parentNoRule.id));
+    expectRuleRequired(await split(parentNoRule.id, { requestId: randomUUID(), closeParent: true }));
+    expect(await prisma.label.count({ where: { productId: noRuleId } })).toBe(before);
+    expect((await prisma.label.findUniqueOrThrow({ where: { id: parentNoRule.id } })).status).toBe('ATIVA');
+    // A regra vale por armazenamento: só refrigerado tem regra, congelado é recusado.
+    expectRuleRequired(await preview(productRuleId, { storageType: 'CONGELADO', storageTemperature: -18 }));
+
+    for (const productId of [productRuleId, categoryRuleId]) {
+      const ok = await preview(productId);
+      expect(ok.status).toBe(200);
+      expect(ok.body.data.rule).toMatchObject({ validated: true, shelfLifeDays: 5 });
+      const parent = await newLabel(productId);
+      expect((await splitPreview(parent.id)).status).toBe(200);
+      expect((await split(parent.id)).status).toBe(201);
+    }
+
+    expect((await setRequire(false)).status).toBe(200);
+    expect((await preview(noRuleId)).status).toBe(200);
+  });
+
+  it('still resolves idempotent resends, close, reprint and list with the option on', async () => {
+    const requestId = randomUUID();
+    const label = await newLabel(noRuleId, { requestId });
+    const splitRequestId = randomUUID();
+    const first = await split(label.id, { requestId: splitRequestId });
+    expect(first.status).toBe(201);
+    const other = await newLabel(noRuleId);
+    expect((await setRequire(true)).status).toBe(200);
+
+    const resent = await create(noRuleId, { requestId });
+    expect(resent.status).toBe(200);
+    expect(resent.body.data.id).toBe(label.id);
+    const resplit = await split(label.id, { requestId: splitRequestId });
+    expect(resplit.status).toBe(200);
+    expect(resplit.body.data.children.map((child: { id: string }) => child.id))
+      .toEqual(first.body.data.children.map((child: { id: string }) => child.id));
+
+    expect((await request(app).patch(`/api/labels/${other.id}/print`).set('Authorization', asAdmin())).status).toBe(200);
+    const list = await request(app).get('/api/labels').query({ productId: noRuleId, limit: '100' }).set('Authorization', asAdmin());
+    expect(list.status).toBe(200);
+    expect(list.body.data.some((item: { id: string }) => item.id === other.id)).toBe(true);
+    const closed = await request(app).post(`/api/labels/${other.id}/close`).set('Authorization', operatorAuth)
+      .send({ outcome: 'USADO' });
+    expect(closed.status).toBe(200);
+    expect(closed.body.data).toMatchObject({ status: 'ENCERRADA', outcome: 'USADO' });
+  });
+});
+
+describe('aviso de validade digitada muito distante', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const reset = () => prisma.kitchenSettings.updateMany({
+    data: { requireValidatedRule: false, expiryWarningMonths: null },
+  });
+  const putSettings = (body: object) => request(app).put('/api/settings').set('Authorization', asAdmin()).send(body);
+  // Um produto por teste: cada um monta o próprio histórico e não depende da ordem.
+  const newProduct = async () => {
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Aviso validade ${tag} ${randomUUID().slice(0, 6)}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    return product.id;
+  };
+  const typedBody = (productId: string, expiryDays: number) => ({
+    productId, lot: 'LOT-AVISO', originalExpiryDate: daysFromToday(expiryDays), openedAt: today(),
+    responsibleName: 'Turno de teste', storageType: 'REFRIGERADO', storageTemperature: 4,
+  });
+  const preview = (body: object) => request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send(body);
+  const warningFor = async (productId: string, expiryDays: number) => {
+    const res = await preview(typedBody(productId, expiryDays));
+    expect(res.status).toBe(200);
+    return res.body.data.expiryWarning;
+  };
+  // Lotes cadastrados hoje: entram no histórico com validade − dia do cadastro.
+  const addLots = (productId: string, ...expiryDays: number[]) => Promise.all(expiryDays.map((days) =>
+    prisma.productLot.create({ data: {
+      productId, code: `AV-${days}-${randomUUID().slice(0, 6)}`,
+      expiryDate: new Date(`${daysFromToday(days)}T00:00:00.000Z`),
+    } })));
+  const typedLabel = async (productId: string, expiryDays: number) => {
+    const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(typedBody(productId, expiryDays));
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string };
+  };
+  const limitDays = (months: number) =>
+    Math.round((addMonths(kitchenToday(), months).getTime() - kitchenToday().getTime()) / 86_400_000);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.70')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+  });
+
+  // Cada teste que muda a configuração volta ao padrão no fim.
+  afterEach(reset);
+  afterAll(reset);
+
+  it('does not warn without history, nor with fewer than 3 records', async () => {
+    const productId = await newProduct();
+    expect(await warningFor(productId, 900)).toBeNull();
+    await addLots(productId, 300, 300);
+    expect(await warningFor(productId, 900)).toBeNull();
+  });
+
+  it('warns ABOVE_HISTORY above the median + 180 days, and not for normal variation', async () => {
+    const productId = await newProduct();
+    await addLots(productId, 300, 305);
+    await typedLabel(productId, 310); // mediana de 300, 305, 310 = 305
+
+    expect(await warningFor(productId, 486)).toEqual({
+      reason: 'ABOVE_HISTORY', typedDays: 486, referenceDays: 305, limitMonths: null,
+    });
+    expect(await warningFor(productId, 485)).toBeNull();
+    // Embalagem alguns dias mais nova que todas as anteriores: variação normal, sem aviso.
+    expect(await warningFor(productId, 320)).toBeNull();
+  });
+
+  it('keeps warning after a label with the wrong year entered the history', async () => {
+    const productId = await newProduct();
+    await addLots(productId, 300, 300, 300);
+    // Ano digitado errado: 665 dias em vez de 300. Com o máximo como referência, o aviso sumiria.
+    const wrong = await typedLabel(productId, 665);
+    expect(wrong.id).toBeTruthy();
+    expect(await warningFor(productId, 665)).toEqual({
+      reason: 'ABOVE_HISTORY', typedDays: 665, referenceDays: 300, limitMonths: null,
+    });
+  });
+
+  it('ignores cancelled labels, split children and labels made from a registered lot', async () => {
+    const productId = await newProduct();
+    const [lot] = await addLots(productId, 300, 300);
+
+    const cancelled = await typedLabel(productId, 300);
+    const close = await request(app).post(`/api/labels/${cancelled.id}/close`).set('Authorization', asAdmin())
+      .send({ outcome: 'CANCELADO' });
+    expect(close.status).toBe(200);
+    // Etiqueta do lote cadastrado: a validade já conta pelo lote.
+    const fromLot = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+      productId, lotId: lot.id, openedAt: today(), responsibleName: 'Turno de teste',
+      storageType: 'REFRIGERADO', storageTemperature: 4,
+    });
+    expect(fromLot.status).toBe(201);
+    // Filha do Dividir repete a embalagem da origem (aqui, a do lote).
+    const split = await request(app).post(`/api/labels/${fromLot.body.data.id}/split`).set('Authorization', asAdmin())
+      .send({ count: 2, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' });
+    expect(split.status).toBe(201);
+    // Só os 2 lotes contam: abaixo do mínimo.
+    expect(await warningFor(productId, 900)).toBeNull();
+
+    await typedLabel(productId, 300); // terceiro registro válido
+    expect((await warningFor(productId, 900))?.reason).toBe('ABOVE_HISTORY');
+  });
+
+  it('warns ABOVE_LIMIT with the configured limit, which wins over ABOVE_HISTORY', async () => {
+    const productId = await newProduct();
+    await addLots(productId, 30, 30, 30);
+
+    expect((await putSettings({ expiryWarningMonths: 1 })).status).toBe(200);
+    expect(await warningFor(productId, 400)).toEqual({
+      reason: 'ABOVE_LIMIT', typedDays: 400, referenceDays: limitDays(1), limitMonths: 1,
+    });
+    // Exatamente no limite não avisa por ele (e fica abaixo da mediana + 180).
+    expect(await warningFor(productId, limitDays(1))).toBeNull();
+
+    // Limite de 24 meses: 400 dias fica dentro dele, mas acima do histórico (30 + 180).
+    expect((await putSettings({ expiryWarningMonths: 24 })).status).toBe(200);
+    expect(await warningFor(productId, 400)).toEqual({
+      reason: 'ABOVE_HISTORY', typedDays: 400, referenceDays: 30, limitMonths: 24,
+    });
+  });
+
+  it('accepts a partial PUT and validates the limit', async () => {
+    const initial = await request(app).get('/api/settings').set('Authorization', asAdmin());
+    expect(initial.body.data).toMatchObject({ requireValidatedRule: false, expiryWarningMonths: null });
+
+    for (const value of [0, 61, 1.5, '3', true]) {
+      expect((await putSettings({ expiryWarningMonths: value })).status).toBe(422);
+    }
+    expect((await putSettings({ expiryWarningMonths: 6, extra: 1 })).status).toBe(422);
+
+    const set = await putSettings({ expiryWarningMonths: 60 });
+    expect(set.status).toBe(200);
+    expect(set.body.data).toMatchObject({ requireValidatedRule: false, expiryWarningMonths: 60 });
+    expect(set.body.meta).toEqual({ blockedProducts: expect.any(Number), blockedCombinations: expect.any(Number) });
+
+    // Só o bloqueio: o limite fica como estava.
+    const onlyRequire = await putSettings({ requireValidatedRule: true });
+    expect(onlyRequire.status).toBe(200);
+    expect(onlyRequire.body.data).toMatchObject({ requireValidatedRule: true, expiryWarningMonths: 60 });
+
+    // null desliga o limite e não mexe no bloqueio.
+    const off = await putSettings({ expiryWarningMonths: null });
+    expect(off.status).toBe(200);
+    expect(off.body.data).toMatchObject({ requireValidatedRule: true, expiryWarningMonths: null });
+    const settings = await request(app).get('/api/settings').set('Authorization', asAdmin());
+    expect(settings.body.data.expiryWarningMonths).toBeNull();
+  });
+
+  it('keeps creating the label when the preview warns, without storing the warning', async () => {
+    const productId = await newProduct();
+    expect((await putSettings({ expiryWarningMonths: 1 })).status).toBe(200);
+    const body = typedBody(productId, 80);
+    expect((await preview(body)).body.data.expiryWarning.reason).toBe('ABOVE_LIMIT');
+    const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(body);
+    expect(res.status).toBe(201);
+    expect(res.body.data).not.toHaveProperty('expiryWarning');
+    expect(res.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(2));
+  });
+
+  it('does not warn for a registered lot', async () => {
+    const productId = await newProduct();
+    expect((await putSettings({ expiryWarningMonths: 1 })).status).toBe(200);
+    const [lot] = await addLots(productId, 400);
+    const res = await preview({
+      productId, lotId: lot.id, openedAt: today(), storageType: 'REFRIGERADO', storageTemperature: 4,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.lot.id).toBe(lot.id);
+    expect(res.body.data.expiryWarning).toBeNull();
+  });
+});
+
+describe('medição de tempo e origem da temperatura', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  // Um produto por teste: cada um conta só as próprias etiquetas e não depende da ordem.
+  const newProduct = async () => {
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Medição ${tag} ${randomUUID().slice(0, 6)}`, brand: 'Teste', daysValidRefrigerated: 5, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    return product.id;
+  };
+  const labelBody = (productId: string, body: object = {}) => ({
+    productId, lot: 'LOT-MED', originalExpiryDate: daysFromToday(60), openedAt: today(),
+    responsibleName: 'Turno de teste', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+  });
+  const postLabel = (productId: string, body: object = {}) =>
+    request(app).post('/api/labels').set('Authorization', asAdmin()).send(labelBody(productId, body));
+  const newLabel = async (productId: string, body: object = {}) => {
+    const res = await postLabel(productId, body);
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string; shortCode: string; flowMs: number | null; temperatureSource: string | null };
+  };
+  const split = (parentId: string, body: object = {}) =>
+    request(app).post(`/api/labels/${parentId}/split`).set('Authorization', asAdmin())
+      .send({ count: 2, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador', ...body });
+  const metrics = (query: Record<string, string>, token = asAdmin()) =>
+    request(app).get('/api/labels/metrics').query(query).set('Authorization', token);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.80')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.81')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+  });
+
+  it('stores flowMs and temperatureSource on create and returns them in the list', async () => {
+    const productId = await newProduct();
+    const measured = await newLabel(productId, { flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    expect(measured).toMatchObject({ flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    const typed = await newLabel(productId, { flowMs: 0, temperatureSource: 'DIGITADO' });
+    expect(typed).toMatchObject({ flowMs: 0, temperatureSource: 'DIGITADO' });
+    // Cliente antigo, sem os campos: ficam nulos.
+    const plain = await newLabel(productId);
+    expect(plain).toMatchObject({ flowMs: null, temperatureSource: null });
+
+    const stored = await prisma.label.findUniqueOrThrow({ where: { id: measured.id } });
+    expect(stored).toMatchObject({ flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+
+    const list = await request(app).get('/api/labels').query({ productId, limit: '100' }).set('Authorization', asAdmin());
+    expect(list.status).toBe(200);
+    const byId = (id: string) => list.body.data.find((label: { id: string }) => label.id === id);
+    expect(byId(measured.id)).toMatchObject({ flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    expect(byId(typed.id)).toMatchObject({ flowMs: 0, temperatureSource: 'DIGITADO' });
+    expect(byId(plain.id)).toMatchObject({ flowMs: null, temperatureSource: null });
+  });
+
+  it('ignores an invalid flowMs without refusing the label and validates the temperatureSource enum', async () => {
+    const productId = await newProduct();
+    // A métrica nunca recusa a etiqueta: valor inválido não é gravado.
+    for (const flowMs of [-1, 3_600_001, 1.5, '1000', null, Number.MAX_SAFE_INTEGER]) {
+      const res = await postLabel(productId, { flowMs });
+      expect(res.status).toBe(201);
+      expect(res.body.data.flowMs).toBeNull();
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: res.body.data.id } })).flowMs).toBeNull();
+    }
+    for (const temperatureSource of ['sugerido', 'MEDIDO', '', 1]) {
+      const res = await postLabel(productId, { temperatureSource });
+      expect(res.status).toBe(201);
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: res.body.data.id } })).temperatureSource).toBeNull();
+    }
+    expect((await newLabel(productId, { flowMs: 3_600_000 })).flowMs).toBe(3_600_000);
+
+    const parent = await newLabel(productId);
+    const badSource = await split(parent.id, { count: 1, temperatureSource: 'X' });
+    expect(badSource.status).toBe(201);
+    expect((await prisma.label.findFirstOrThrow({ where: { parentLabelId: parent.id } })).temperatureSource).toBeNull();
+    for (const flowMs of [3_600_001, -5, 2.5, 'abc', null]) {
+      const res = await split(parent.id, { count: 1, flowMs });
+      expect(res.status).toBe(201);
+      expect(res.body.data.children[0].flowMs).toBeNull();
+    }
+  });
+
+  it('a replayed create keeps the stored values', async () => {
+    const productId = await newProduct();
+    const requestId = randomUUID();
+    const first = await postLabel(productId, { requestId, flowMs: 8_000, temperatureSource: 'SUGERIDO' });
+    expect(first.status).toBe(201);
+    const replay = await postLabel(productId, { requestId, flowMs: 99_000, temperatureSource: 'DIGITADO' });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data).toMatchObject({ id: first.body.data.id, flowMs: 8_000, temperatureSource: 'SUGERIDO' });
+    const stored = await prisma.label.findUniqueOrThrow({ where: { id: first.body.data.id } });
+    expect(stored).toMatchObject({ flowMs: 8_000, temperatureSource: 'SUGERIDO' });
+    expect(await prisma.label.count({ where: { productId } })).toBe(1);
+  });
+
+  it('stores the split measurement on every child, not on the source, and a replay keeps it', async () => {
+    const productId = await newProduct();
+    const parent = await newLabel(productId, { flowMs: 4_000, temperatureSource: 'DIGITADO' });
+    const requestId = randomUUID();
+    const res = await split(parent.id, { count: 3, requestId, flowMs: 6_500, temperatureSource: 'SUGERIDO' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.children).toHaveLength(3);
+    for (const child of res.body.data.children) {
+      expect(child).toMatchObject({ flowMs: 6_500, temperatureSource: 'SUGERIDO', parentLabelId: parent.id });
+    }
+    expect(res.body.data.parent).toMatchObject({ flowMs: 4_000, temperatureSource: 'DIGITADO' });
+
+    const replay = await split(parent.id, { count: 3, requestId, flowMs: 1, temperatureSource: 'DIGITADO' });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.children.map((child: { id: string }) => child.id).sort())
+      .toEqual(res.body.data.children.map((child: { id: string }) => child.id).sort());
+    const children = await prisma.label.findMany({ where: { parentLabelId: parent.id } });
+    expect(children).toHaveLength(3);
+    expect(children.every((child) => child.flowMs === 6_500 && child.temperatureSource === 'SUGERIDO')).toBe(true);
+    expect(await prisma.label.findUniqueOrThrow({ where: { id: parent.id } }))
+      .toMatchObject({ flowMs: 4_000, temperatureSource: 'DIGITADO' });
+
+    // Sem os campos, as filhas ficam nulas.
+    const plain = await split(parent.id);
+    expect(plain.status).toBe(201);
+    for (const child of plain.body.data.children) expect(child).toMatchObject({ flowMs: null, temperatureSource: null });
+  });
+
+  it('adds "Tempo (s)" and "Origem da temperatura" at the end of the CSV', async () => {
+    const productId = await newProduct();
+    const suggested = await newLabel(productId, { flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    const typed = await newLabel(productId, { flowMs: 900, temperatureSource: 'DIGITADO' });
+    const plain = await newLabel(productId);
+    const res = await request(app).get('/api/labels/export.csv').query({ productId }).set('Authorization', asAdmin())
+      .buffer(true).parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    const rows = (res.body as Buffer).toString('utf8').replace(/^﻿/, '').split('\r\n').filter(Boolean);
+    const header = rows[0].split(';');
+    expect(header).toHaveLength(25);
+    expect(header.slice(-3)).toEqual(['"Criada em"', '"Tempo (s)"', '"Origem da temperatura"']);
+    // Colunas anteriores no mesmo lugar.
+    expect(header[4]).toBe('"Lote cadastrado"');
+    expect(header[10]).toBe('"Temperatura"');
+    const tail = (code: string) => rows.find((line) => line.startsWith(`"${code}"`))!.split(';').slice(-2);
+    expect(tail(suggested.shortCode)).toEqual(['"12,3"', '"Sugerida"']);
+    expect(tail(typed.shortCode)).toEqual(['"0,9"', '"Digitada"']);
+    expect(tail(plain.shortCode)).toEqual(['""', '""']);
+  });
+
+  describe('relatório', () => {
+    // Período antigo e produto próprio: nada que já exista no banco entra na conta.
+    const day1 = '2001-03-10';
+    const day2 = '2001-03-11';
+    const day3 = '2001-03-12';
+    // Meio-dia UTC: no mesmo dia em qualquer fuso de −11 a +11 h (a cozinha padrão é UTC−4).
+    const moveTo = (ids: string[], day: string) =>
+      prisma.label.updateMany({ where: { id: { in: ids } }, data: { createdAt: new Date(`${day}T12:00:00.000Z`) } });
+
+    it('aggregates median, p90, counts and days, without cancelled labels', async () => {
+      const productId = await newProduct();
+      const a = await newLabel(productId, { flowMs: 1_000, temperatureSource: 'SUGERIDO' });
+      const b = await newLabel(productId, { flowMs: 2_000, temperatureSource: 'DIGITADO' });
+      const c = await newLabel(productId, { flowMs: 3_000, temperatureSource: 'SUGERIDO' });
+      const d = await newLabel(productId);
+      const cancelled = await newLabel(productId, { flowMs: 100_000, temperatureSource: 'DIGITADO' });
+      await request(app).post(`/api/labels/${cancelled.id}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'CANCELADO' }).expect(200);
+      const parent = await newLabel(productId, { flowMs: 4_000, temperatureSource: 'DIGITADO' });
+      // Dividir em 3: um tempo medido (conta uma vez) e três etiquetas impressas (contam três).
+      const children = await split(parent.id, { count: 3, requestId: randomUUID(), flowMs: 5_000, temperatureSource: 'SUGERIDO' });
+      expect(children.status).toBe(201);
+      const childIds = children.body.data.children.map((child: { id: string }) => child.id) as string[];
+      await moveTo([a.id, b.id, c.id, d.id, cancelled.id], day1);
+      await moveTo([parent.id, ...childIds], day2);
+
+      const res = await metrics({ productId, from: day1, to: day3 });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        from: day1, to: day3,
+        total: 8, withFlow: 5, discardedFlows: 0, flowMedianMs: 3_000,
+        // percentile_cont(0.9) de 1, 2, 3, 4 e 5 s: 4 s + 0,6 × 1 s.
+        flowP90Ms: 4_600,
+        withTemperatureSource: 7, suggestedCount: 5, typedCount: 2,
+        byDay: [
+          { date: day1, total: 4, flowMedianMs: 2_000, suggestedCount: 2, typedCount: 1 },
+          { date: day2, total: 4, flowMedianMs: 4_500, suggestedCount: 3, typedCount: 1 },
+          { date: day3, total: 0, flowMedianMs: null, suggestedCount: 0, typedCount: 0 },
+        ],
+      });
+
+      // Só o primeiro dia.
+      const single = await metrics({ productId, from: day1, to: day1 });
+      expect(single.body.data).toMatchObject({ total: 4, withFlow: 3, flowMedianMs: 2_000, byDay: [{ date: day1 }] });
+      // Período sem nada.
+      const empty = await metrics({ productId, from: '2001-04-01', to: '2001-04-02' });
+      expect(empty.body.data).toMatchObject({
+        total: 0, withFlow: 0, discardedFlows: 0, flowMedianMs: null, flowP90Ms: null,
+        withTemperatureSource: 0, suggestedCount: 0, typedCount: 0,
+      });
+      expect(empty.body.data.byDay).toHaveLength(2);
+    });
+
+    it('defaults to the last 7 kitchen days and counts labels created today', async () => {
+      const productId = await newProduct();
+      await newLabel(productId, { flowMs: 7_000, temperatureSource: 'DIGITADO' });
+      const res = await metrics({ productId });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        from: daysFromToday(-6), to: today(), total: 1, withFlow: 1, flowMedianMs: 7_000, flowP90Ms: 7_000, typedCount: 1,
+      });
+      expect(res.body.data.byDay).toHaveLength(7);
+      expect(res.body.data.byDay[6]).toEqual({ date: today(), total: 1, flowMedianMs: 7_000, suggestedCount: 0, typedCount: 1 });
+    });
+
+    it('puts a label created at 03:30Z on the previous kitchen day', async () => {
+      const productId = await newProduct();
+      const label = await newLabel(productId, { flowMs: 2_000, temperatureSource: 'DIGITADO' });
+      const instant = new Date('2001-05-02T03:30:00.000Z');
+      await prisma.label.update({ where: { id: label.id }, data: { createdAt: instant } });
+      // Dia da cozinha desse instante (em America/Manaus, UTC−4: 01/05 às 23:30).
+      const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+      const kitchenDay = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+        .format(instant);
+      if (timeZone === 'America/Manaus') expect(kitchenDay).toBe('2001-05-01');
+
+      const res = await metrics({ productId, from: '2001-04-30', to: '2001-05-03' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.total).toBe(1);
+      const days = res.body.data.byDay as { date: string; total: number; flowMedianMs: number | null }[];
+      expect(days.filter((day) => day.total > 0)).toEqual([
+        { date: kitchenDay, total: 1, flowMedianMs: 2_000, suggestedCount: 0, typedCount: 1 },
+      ]);
+    });
+
+    it('counts two splits of the same source on the same day as two actions', async () => {
+      const productId = await newProduct();
+      const parent = await newLabel(productId);
+      const first = await split(parent.id, { count: 2, requestId: randomUUID(), flowMs: 1_000 });
+      const second = await split(parent.id, { count: 2, requestId: randomUUID(), flowMs: 3_000 });
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      const ids = [parent.id, ...[...first.body.data.children, ...second.body.data.children].map((child: { id: string }) => child.id)];
+      await moveTo(ids, '2001-06-10');
+
+      const res = await metrics({ productId, from: '2001-06-10', to: '2001-06-10' });
+      expect(res.body.data).toMatchObject({ total: 5, withFlow: 2, discardedFlows: 0, flowMedianMs: 2_000 });
+    });
+
+    it('keeps counting a split as one action when one of its children was cancelled', async () => {
+      const productId = await newProduct();
+      const parent = await newLabel(productId);
+      const res = await split(parent.id, { count: 3, requestId: randomUUID(), flowMs: 4_000, temperatureSource: 'SUGERIDO' });
+      expect(res.status).toBe(201);
+      const childIds = res.body.data.children.map((child: { id: string }) => child.id) as string[];
+      await request(app).post(`/api/labels/${childIds[0]}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'CANCELADO' }).expect(200);
+      await moveTo([parent.id, ...childIds], '2001-07-10');
+
+      const report = await metrics({ productId, from: '2001-07-10', to: '2001-07-10' });
+      expect(report.body.data).toMatchObject({
+        total: 3, withFlow: 1, discardedFlows: 0, flowMedianMs: 4_000, flowP90Ms: 4_000, suggestedCount: 2,
+      });
+    });
+
+    it('leaves flows above FLOW_PLAUSIBLE_MAX_MS out of the time and counts them in discardedFlows', async () => {
+      const productId = await newProduct();
+      const labels = await Promise.all([1_000, 3_000, 600_000, 700_000].map((flowMs) => newLabel(productId, { flowMs })));
+      await moveTo(labels.map((label) => label.id), '2001-08-10');
+
+      const res = await metrics({ productId, from: '2001-08-10', to: '2001-08-10' });
+      // 600 000 (no teto) entra; 700 000 fica de fora da mediana, mas continua gravado.
+      expect(res.body.data).toMatchObject({ total: 4, withFlow: 3, discardedFlows: 1, flowMedianMs: 3_000 });
+      expect(res.body.data.byDay[0].flowMedianMs).toBe(3_000);
+      const outlier = await prisma.label.findUniqueOrThrow({ where: { id: labels[3].id } });
+      expect(outlier.flowMs).toBe(700_000);
+      const csv = await request(app).get('/api/labels/export.csv').query({ productId, q: labels[3].shortCode })
+        .set('Authorization', asAdmin());
+      expect(csv.status).toBe(200);
+      expect(csv.text).toContain('"700,0";""');
+    });
+
+    it('is only for admins and validates the period', async () => {
+      expect((await metrics({}, operatorAuth)).status).toBe(403);
+      expect((await request(app).get('/api/labels/metrics')).status).toBe(401);
+      // 92 dias contando os dois extremos: aceito; 93: recusado.
+      expect((await metrics({ from: '2001-01-01', to: '2001-04-02' })).status).toBe(200);
+      const tooLong = await metrics({ from: '2001-01-01', to: '2001-04-03' });
+      expect(tooLong.status).toBe(422);
+      expect(tooLong.body.error.code).toBe('VALIDATION_ERROR');
+      expect((await metrics({ from: daysFromToday(-92) })).status).toBe(422);
+      expect((await metrics({ from: day2, to: day1 })).status).toBe(422);
+      expect((await metrics({ from: '2001-02-30' })).status).toBe(422);
+      expect((await metrics({ to: '10/03/2001' })).status).toBe(422);
+      expect((await metrics({ productId: 'x' })).status).toBe(422);
     });
   });
 });

@@ -11,7 +11,9 @@ import { useToastContext } from '@/components/ui/Toast';
 import { PageLoader, Spinner } from '@/components/ui/Spinner';
 import { LoadError } from '@/components/ui/LoadError';
 import { formatBR } from '@/utils/date';
-import { extractError } from '@/services/api';
+import { extractError, extractErrorCode } from '@/services/api';
+import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
+import { expiryWarningText, needsExpiryConfirmation } from '@/utils/expiryWarning';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
 import { createRequestKeeper } from '@/utils/requestId';
@@ -20,8 +22,10 @@ import {
   SUGGESTED_TEMPERATURE, TEMP_MAX, TEMP_MIN, formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft,
 } from '@/utils/temperature';
 import {
-  LABEL_TEMPLATES, getLabelTemplate, loadLabelTemplateId, saveLabelTemplateId, type LabelTemplateId,
+  LABEL_TEMPLATES, getLabelTemplate, type LabelTemplateId,
 } from '@/utils/labelTemplates';
+import { useLabelTemplate } from '@/hooks/useLabelTemplate';
+import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
 
 const PACKAGE = 'embalagem';
 
@@ -37,12 +41,16 @@ export function LabelFormPage() {
   const [productTry, setProductTry] = useState(0);
   const [previewTry, setPreviewTry] = useState(0);
   const [submitting, setSubmitting] = useState(false);
-  const [requests] = useState(createRequestKeeper);
+  // A temperatura é SUGERIDO só se veio do botão "Usar" e não foi mexida depois.
+  const [tempFromSuggestion, setTempFromSuggestion] = useState(false);
+  const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:label-form'));
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
+  const [expiryConfirmed, setExpiryConfirmed] = useState('');
+  const [previewErrorCode, setPreviewErrorCode] = useState<string | undefined>();
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
-  const [templateId, setTemplateId] = useState<LabelTemplateId>(loadLabelTemplateId);
+  const { templateId, explicit: templateChosen, choose: chooseTemplate } = useLabelTemplate();
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
   const [dateFilled, setDateFilled] = useState(false);
   // Abertura: do limite para trás até hoje da cozinha (o servidor valida de novo).
@@ -106,12 +114,16 @@ export function LabelFormPage() {
     && form.storageType && (form.openedAt || !dateFilled),
   );
   const previewMatchesForm = preview?.requestKey === requestKey;
+  const expiryWarning = previewMatchesForm ? preview?.expiryWarning ?? null : null;
+  const expiryKey = `${productId}|${preview?.originalExpiryDate ?? ''}`;
+  const expiryPending = needsExpiryConfirmation(expiryWarning, expiryKey, expiryConfirmed);
   const rangeText = previewMatchesForm && preview ? formatTemperatureRange(preview.rule.minTemperature, preview.rule.maxTemperature) : null;
 
   useEffect(() => {
     if (!product || !previewReady) {
       setPreview(null);
       setPreviewError('');
+      setPreviewErrorCode(undefined);
       setPreviewLoading(false);
       return;
     }
@@ -119,6 +131,7 @@ export function LabelFormPage() {
     const timer = window.setTimeout(async () => {
       setPreviewLoading(true);
       setPreviewError('');
+      setPreviewErrorCode(undefined);
       try {
         const { data } = await labelApi.preview({
           ...expirySource(form.source, form.originalExpiryDate),
@@ -134,7 +147,7 @@ export function LabelFormPage() {
           }
         }
       } catch (error) {
-        if (active) { setPreview(null); setPreviewError(extractError(error)); }
+        if (active) { setPreview(null); setPreviewError(extractError(error)); setPreviewErrorCode(extractErrorCode(error)); }
       } finally {
         if (active) setPreviewLoading(false);
       }
@@ -148,7 +161,7 @@ export function LabelFormPage() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!form.storageType || !previewMatchesForm || temperature === null) return;
+    if (!form.storageType || !previewMatchesForm || temperature === null || expiryPending) return;
     setSubmitting(true);
     let createdLabel: import('@/types').Label | null = null;
     try {
@@ -161,8 +174,10 @@ export function LabelFormPage() {
         storageType: form.storageType,
         storageTemperature: temperature,
       };
-      const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
+      const temperatureSource = tempFromSuggestion && temperature === suggested ? 'SUGERIDO' : 'DIGITADO';
+      const { data } = await labelApi.create({ ...payload, temperatureSource, requestId: requests.idFor(payload) });
       createdLabel = data.data;
+      requests.reset();
       printLabel(createdLabel, logoUrl);
       try {
         await labelApi.registerPrint(createdLabel.id);
@@ -201,11 +216,6 @@ export function LabelFormPage() {
   function removeLogo() {
     setLogoUrl(null);
     localStorage.removeItem('gastrotag_logo');
-  }
-
-  function chooseTemplate(id: LabelTemplateId) {
-    setTemplateId(id);
-    saveLabelTemplateId(id);
   }
 
   if (loading) return <PageLoader />;
@@ -392,7 +402,7 @@ export function LabelFormPage() {
                 <input
                   id="storage-temperature"
                   value={form.storageTemp}
-                  onChange={(e) => setField('storageTemp', e.target.value)}
+                  onChange={(e) => { setTempFromSuggestion(false); setField('storageTemp', e.target.value); }}
                   className={cn('input pl-10', tempInvalid && 'border-rose-400')}
                   placeholder="Digite a temperatura, ex.: 4 ou -18"
                   inputMode="decimal"
@@ -415,7 +425,7 @@ export function LabelFormPage() {
                     <button
                       type="button"
                       className="btn btn-outline btn-sm"
-                      onClick={() => setField('storageTemp', temperatureDraft(suggested))}
+                      onClick={() => { setTempFromSuggestion(true); setField('storageTemp', temperatureDraft(suggested)); }}
                     >
                       Usar {formatTemperatureShort(suggested)}
                     </button>
@@ -470,7 +480,7 @@ export function LabelFormPage() {
             </p>
             <div role="radiogroup" aria-label="Modelo da etiqueta" className="space-y-2">
               {LABEL_TEMPLATES.map((template) => {
-                const selected = template.id === templateId;
+                const selected = templateChosen && template.id === templateId;
                 const ratio = template.widthMm && template.heightMm ? template.widthMm / template.heightMm : 0.75;
                 return (
                   <button
@@ -506,10 +516,28 @@ export function LabelFormPage() {
             </p>
           </div>
 
+          {expiryWarning && preview && (
+            <div id="aviso-validade-digitada" role="alert" className="p-3.5 rounded-xl border-2 border-amber-300 bg-amber-50 text-xs text-amber-900">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                <span><strong>Confira a validade digitada.</strong> {expiryWarningText(expiryWarning, preview.originalExpiryDate)}</span>
+              </div>
+              {expiryPending ? (
+                <button type="button" className="btn btn-outline btn-sm mt-3 min-h-11 w-full sm:w-auto" onClick={() => setExpiryConfirmed(expiryKey)}>
+                  Conferi na embalagem
+                </button>
+              ) : (
+                <p className="mt-2 flex items-center gap-1.5 font-bold text-emerald-700"><CheckCircle2 className="h-4 w-4" aria-hidden="true" /> Conferido na embalagem.</p>
+              )}
+            </div>
+          )}
+
+          <LabelTemplateStatus />
           <button
             type="submit"
             form="label-form"
-            disabled={submitting || !previewMatchesForm || previewLoading || temperature === null}
+            disabled={submitting || !previewMatchesForm || previewLoading || temperature === null || expiryPending}
+            aria-describedby={expiryPending ? 'aviso-validade-digitada' : undefined}
             className="btn btn-accent w-full py-3.5 text-sm font-bold shadow-md"
           >
             {submitting || previewLoading ? (
@@ -538,7 +566,9 @@ export function LabelFormPage() {
           </div>
 
           {previewError && (
-            <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-medium">
+            <div role="alert" className={previewErrorCode === RULE_REQUIRED_CODE
+              ? 'p-4 rounded-xl border-2 border-rose-300 bg-rose-50 text-rose-800 text-sm font-bold'
+              : 'p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-xs font-medium'}>
               <p>{previewError}</p>
               <button type="button" className="btn btn-outline btn-sm mt-3" onClick={() => setPreviewTry((n) => n + 1)}>
                 Tentar de novo
