@@ -1,8 +1,16 @@
+# Logs dos containers limitados a ~30 MB por serviço (3 arquivos de 10 MB, rotação pelo Docker).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
     image: postgres:16.16-alpine3.24
     container_name: gastrotag_db
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-gastrotag}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env}
@@ -23,6 +31,7 @@ services:
       dockerfile: Dockerfile
     container_name: gastrotag_api
     restart: unless-stopped
+    logging: *default-logging
     # A API encerra sozinha em até 10 s após o SIGTERM (desligamento gracioso).
     stop_grace_period: 15s
     environment:
@@ -57,6 +66,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     # nginx sem root escuta 8080 no container; no host continua a porta 80.
     ports:
       - "80:8080"
@@ -78,6 +88,7 @@ services:
     image: cloudflare/cloudflared:2026.10.7
     container_name: gastrotag_tunel
     profiles: ["tunel"]
+    logging: *default-logging
     command: tunnel --no-autoupdate --url http://frontend:8081
     depends_on:
       frontend:
@@ -89,6 +100,7 @@ services:
     image: postgres:16.16-alpine3.24
     container_name: gastrotag_backup
     restart: unless-stopped
+    logging: *default-logging
     # Dá tempo de um dump em andamento terminar antes do SIGKILL.
     stop_grace_period: 60s
     # tr remove um eventual CR (checkout com fim de linha do Windows) antes de executar.

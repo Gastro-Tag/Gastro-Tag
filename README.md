@@ -48,6 +48,8 @@ docker compose down
 
 Os dados do PostgreSQL ficam no volume `postgres_data`.
 
+Os logs dos containers ficam limitados a cerca de 30 MB por serviço (driver `json-file`, 3 arquivos de 10 MB com rotação), e `docker compose logs` continua funcionando normalmente. A mudança vale para cada container quando ele é recriado (`docker compose up -d` recria os que mudaram).
+
 ## Executar em desenvolvimento local
 
 O modo local conecta o backend ao PostgreSQL em `localhost:5432` e usa a API em `localhost:3333`.
