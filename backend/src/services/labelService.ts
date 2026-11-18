@@ -2,7 +2,8 @@
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import {
-  addDays, formatDateBR, formatKitchenDateTime, generateShortCode, kitchenDayStartInstant, kitchenToday, MAX_BACKDATE_DAYS,
+  addDays, addMonths, daysBetween, formatDateBR, formatKitchenDateTime, generateShortCode, kitchenDayStartInstant,
+  kitchenToday, MAX_BACKDATE_DAYS,
 } from '../utils/dateUtils';
 import { toCsv } from '../utils/csv';
 import { calculateDiscard, calculateSplitDiscard, parseDateOnly } from '../domain/shelfLife';
@@ -355,43 +356,125 @@ const REASON_LABELS: Record<DiscardReason, string> = {
   EMBALAGEM_DANIFICADA: 'Embalagem danificada', OUTRO: 'Outro',
 };
 
+/** Etiquetas e lotes considerados no histórico do produto (os mais recentes de cada um). */
+const EXPIRY_HISTORY_LIMIT = 200;
+/** Mínimo de registros para o histórico valer como referência. */
+const EXPIRY_HISTORY_MIN = 3;
+
+export interface ExpiryWarning {
+  /** ABOVE_LIMIT: passa do limite configurado; ABOVE_HISTORY: passa da mediana do histórico + folga. */
+  reason: 'ABOVE_HISTORY' | 'ABOVE_LIMIT';
+  /** Dias entre a abertura e a validade digitada. */
+  typedDays: number;
+  /** ABOVE_LIMIT: dias até abertura + N meses; ABOVE_HISTORY: a mediana do histórico (arredondada). */
+  referenceDays: number;
+  /** Limite configurado em meses (nulo: desligado). */
+  limitMonths: number | null;
+}
+
+/**
+ * Folga sobre a mediana do histórico. Heurística para pegar o erro de digitação do ano (que soma
+ * ~365 dias à validade) sem avisar a cada embalagem um pouco mais nova; não é limite regulatório.
+ */
+const EXPIRY_HISTORY_MARGIN_DAYS = 180;
+
+/**
+ * Mediana do prazo "validade do fabricante − abertura/cadastro" já registrado para o produto, em uma
+ * consulta. Mediana, não o máximo: uma etiqueta com o ano errado não desliga o aviso. Entram as
+ * últimas etiquetas de origem com validade digitada (as filhas do Dividir repetem a embalagem da
+ * origem; as de lote já contam pelo lote), exceto as canceladas, e os últimos lotes (validade − dia
+ * do cadastro na cozinha), ativos ou não.
+ */
+async function expiryHistory(productId: string) {
+  const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+  const [row] = await prisma.$queryRaw<{ count: number; median: number | null }[]>`
+    SELECT COUNT(*)::int AS count,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY days)::float8 AS median
+    FROM (
+      (SELECT l.original_expiry_date - l.opened_at AS days
+        FROM labels l
+        WHERE l.product_id = ${productId} AND l.parent_label_id IS NULL AND l.lot_id IS NULL
+          AND l.outcome IS DISTINCT FROM 'CANCELADO'
+        ORDER BY l.created_at DESC LIMIT ${EXPIRY_HISTORY_LIMIT})
+      UNION ALL
+      (SELECT pl.expiry_date - (pl.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${timeZone})::date AS days
+        FROM product_lots pl
+        WHERE pl.product_id = ${productId}
+        ORDER BY pl.created_at DESC LIMIT ${EXPIRY_HISTORY_LIMIT})
+    ) history`;
+  return row ?? { count: 0, median: null };
+}
+
+/**
+ * Aviso (não bloqueia) para validade digitada muito distante da abertura, ex.: 2027 no lugar de 2026,
+ * que anularia o teto pela validade do fabricante. O limite em meses é da cozinha e vem desligado;
+ * o histórico só vale com ao menos 3 registros e avisa acima da mediana + folga. Os dois valendo,
+ * prevalece o limite.
+ */
+async function expiryWarningFor(productId: string, openedAt: Date, originalExpiryDate: Date): Promise<ExpiryWarning | null> {
+  const typedDays = daysBetween(openedAt, originalExpiryDate);
+  const { expiryWarningMonths: limitMonths } = await SettingsService.get();
+  if (limitMonths !== null) {
+    const limit = addMonths(openedAt, limitMonths);
+    if (originalExpiryDate > limit) {
+      return { reason: 'ABOVE_LIMIT', typedDays, referenceDays: daysBetween(openedAt, limit), limitMonths };
+    }
+  }
+  const history = await expiryHistory(productId);
+  if (history.count < EXPIRY_HISTORY_MIN || history.median === null) return null;
+  const referenceDays = Math.round(history.median);
+  if (typedDays > referenceDays + EXPIRY_HISTORY_MARGIN_DAYS) {
+    return { reason: 'ABOVE_HISTORY', typedDays, referenceDays, limitMonths };
+  }
+  return null;
+}
+
+/** Cálculo comum à prévia e à etiqueta (a etiqueta não consulta o aviso de validade). */
+async function computePreview(data: Omit<LabelInput, 'userId' | 'lot' | 'responsibleName'>) {
+  const product = await prisma.product.findUnique({ where: { id: data.productId, active: true } });
+  if (!product) throw Errors.notFound('Produto');
+
+  const lot = data.lotId ? await LotService.findActiveLot(product.id, data.lotId) : null;
+  const expiry = lot?.expiryDate ?? data.originalExpiryDate;
+  if (!expiry) throw Errors.validation('Escolha um lote ou informe a validade da embalagem.');
+  const originalExpiryDate = parseDateOnly(expiry, 'Validade original');
+
+  const storageType = data.storageType as StorageType;
+  const { rule, shelfLifeDays } = await resolveShelfLife(prisma, product, storageType);
+  const storageTemperature = checkTemperature(rule, data.storageTemperature);
+
+  const today = kitchenToday();
+  const openedAt = data.openedAt ?? today;
+  const calculation = calculateDiscard({
+    openedAt,
+    shelfLifeDays,
+    originalExpiryDate,
+    capToOriginalExpiry,
+    today,
+    // Só a data digitada tem limite para trás; sem ela, vale hoje.
+    earliestOpenedAt: data.openedAt ? addDays(today, -MAX_BACKDATE_DAYS) : null,
+  });
+  return {
+    product: { id: product.id, name: product.name, brand: product.brand },
+    storageType: data.storageType,
+    lot: lot ? { id: lot.id, code: lot.code } : null,
+    openedAt: parseDateOnly(openedAt),
+    discardAt: calculation.discardAt,
+    rule: previewRule(rule, shelfLifeDays),
+    storageTemperature,
+    storageTemp: storageTemperature === null ? null : formatTemperature(storageTemperature),
+    originalExpiryDate,
+    cappedByOriginalExpiry: calculation.cappedByOriginalExpiry,
+  };
+}
+
 export const LabelService = {
+  /** `expiryWarning` só para a validade digitada (sem lote cadastrado). */
   async preview(data: Omit<LabelInput, 'userId' | 'lot' | 'responsibleName'>) {
-    const product = await prisma.product.findUnique({ where: { id: data.productId, active: true } });
-    if (!product) throw Errors.notFound('Produto');
-
-    const lot = data.lotId ? await LotService.findActiveLot(product.id, data.lotId) : null;
-    const expiry = lot?.expiryDate ?? data.originalExpiryDate;
-    if (!expiry) throw Errors.validation('Escolha um lote ou informe a validade da embalagem.');
-    const originalExpiryDate = parseDateOnly(expiry, 'Validade original');
-
-    const storageType = data.storageType as StorageType;
-    const { rule, shelfLifeDays } = await resolveShelfLife(prisma, product, storageType);
-    const storageTemperature = checkTemperature(rule, data.storageTemperature);
-
-    const today = kitchenToday();
-    const openedAt = data.openedAt ?? today;
-    const calculation = calculateDiscard({
-      openedAt,
-      shelfLifeDays,
-      originalExpiryDate,
-      capToOriginalExpiry,
-      today,
-      // Só a data digitada tem limite para trás; sem ela, vale hoje.
-      earliestOpenedAt: data.openedAt ? addDays(today, -MAX_BACKDATE_DAYS) : null,
-    });
-    return {
-      product: { id: product.id, name: product.name, brand: product.brand },
-      storageType: data.storageType,
-      lot: lot ? { id: lot.id, code: lot.code } : null,
-      openedAt: parseDateOnly(openedAt),
-      discardAt: calculation.discardAt,
-      rule: previewRule(rule, shelfLifeDays),
-      storageTemperature,
-      storageTemp: storageTemperature === null ? null : formatTemperature(storageTemperature),
-      originalExpiryDate,
-      cappedByOriginalExpiry: calculation.cappedByOriginalExpiry,
-    };
+    const result = await computePreview(data);
+    const expiryWarning = data.lotId ? null
+      : await expiryWarningFor(result.product.id, result.openedAt, result.originalExpiryDate);
+    return { ...result, expiryWarning };
   },
 
   /** `replayed`: o mesmo pedido já tinha gerado esta etiqueta (rede caiu, toque repetido). */
@@ -401,7 +484,7 @@ export const LabelService = {
     const responsible = await resolveResponsible();
 
     if (data.storageTemperature === undefined) throw Errors.validation('Informe a temperatura medida em °C.');
-    const preview = await LabelService.preview(data);
+    const preview = await computePreview(data);
     const lot = preview.lot?.code ?? data.lot;
     if (!lot) throw Errors.validation('Informe o lote da embalagem.');
     let shortCode = '';

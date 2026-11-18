@@ -183,6 +183,6 @@ export const settingsApi = {
     api.get<ApiResponse<AppSettings>>('/settings'),
 
   /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
-  update: (requireValidatedRule: boolean) =>
-    api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', { requireValidatedRule }),
+  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null }) =>
+    api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', changes),
 };

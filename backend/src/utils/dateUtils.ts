@@ -35,6 +35,22 @@ export function addDays(date: Date, days: number): Date {
   return result;
 }
 
+/**
+ * Adiciona N meses a uma data (meia-noite UTC). Dia que não existe no mês de destino vira o último
+ * dia dele (31/01 + 1 mês = 28 ou 29/02).
+ */
+export function addMonths(date: Date, months: number): Date {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + months;
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(year, month, Math.min(date.getUTCDate(), lastDay)));
+}
+
+/** Dias corridos entre duas datas (meia-noite UTC); negativo se `to` vem antes de `from`. */
+export function daysBetween(from: Date, to: Date): number {
+  return Math.round((to.getTime() - from.getTime()) / 86_400_000);
+}
+
 /** Retorna número de dias até a data (negativo = vencido) */
 export function daysUntil(date: Date): number {
   const now = kitchenToday();

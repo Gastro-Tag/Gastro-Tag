@@ -6,7 +6,7 @@ import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
 import { logger } from '../src/utils/logger';
-import { kitchenToday } from '../src/utils/dateUtils';
+import { addMonths, kitchenToday } from '../src/utils/dateUtils';
 import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
 
 // Precisa valer antes de importar o app: simula a API atrás do nginx.
@@ -34,8 +34,8 @@ const ruleBody = {
 };
 
 beforeAll(async () => {
-  // Uma execução interrompida pode ter deixado o bloqueio ligado: começa sempre com ele desligado.
-  await prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false } });
+  // Uma execução interrompida pode ter deixado o bloqueio ou o limite do aviso ligados: começa sempre desligado.
+  await prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false, expiryWarningMonths: null } });
   const user = await prisma.user.create({ data: {
     name: 'Teste de integração', email,
     passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
@@ -2352,5 +2352,181 @@ describe('bloqueio de etiqueta sem regra validada', () => {
       .send({ outcome: 'USADO' });
     expect(closed.status).toBe(200);
     expect(closed.body.data).toMatchObject({ status: 'ENCERRADA', outcome: 'USADO' });
+  });
+});
+
+describe('aviso de validade digitada muito distante', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const reset = () => prisma.kitchenSettings.updateMany({
+    data: { requireValidatedRule: false, expiryWarningMonths: null },
+  });
+  const putSettings = (body: object) => request(app).put('/api/settings').set('Authorization', asAdmin()).send(body);
+  // Um produto por teste: cada um monta o próprio histórico e não depende da ordem.
+  const newProduct = async () => {
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Aviso validade ${tag} ${randomUUID().slice(0, 6)}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    return product.id;
+  };
+  const typedBody = (productId: string, expiryDays: number) => ({
+    productId, lot: 'LOT-AVISO', originalExpiryDate: daysFromToday(expiryDays), openedAt: today(),
+    responsibleName: 'Turno de teste', storageType: 'REFRIGERADO', storageTemperature: 4,
+  });
+  const preview = (body: object) => request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send(body);
+  const warningFor = async (productId: string, expiryDays: number) => {
+    const res = await preview(typedBody(productId, expiryDays));
+    expect(res.status).toBe(200);
+    return res.body.data.expiryWarning;
+  };
+  // Lotes cadastrados hoje: entram no histórico com validade − dia do cadastro.
+  const addLots = (productId: string, ...expiryDays: number[]) => Promise.all(expiryDays.map((days) =>
+    prisma.productLot.create({ data: {
+      productId, code: `AV-${days}-${randomUUID().slice(0, 6)}`,
+      expiryDate: new Date(`${daysFromToday(days)}T00:00:00.000Z`),
+    } })));
+  const typedLabel = async (productId: string, expiryDays: number) => {
+    const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(typedBody(productId, expiryDays));
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string };
+  };
+  const limitDays = (months: number) =>
+    Math.round((addMonths(kitchenToday(), months).getTime() - kitchenToday().getTime()) / 86_400_000);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.70')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+  });
+
+  // Cada teste que muda a configuração volta ao padrão no fim.
+  afterEach(reset);
+  afterAll(reset);
+
+  it('does not warn without history, nor with fewer than 3 records', async () => {
+    const productId = await newProduct();
+    expect(await warningFor(productId, 900)).toBeNull();
+    await addLots(productId, 300, 300);
+    expect(await warningFor(productId, 900)).toBeNull();
+  });
+
+  it('warns ABOVE_HISTORY above the median + 180 days, and not for normal variation', async () => {
+    const productId = await newProduct();
+    await addLots(productId, 300, 305);
+    await typedLabel(productId, 310); // mediana de 300, 305, 310 = 305
+
+    expect(await warningFor(productId, 486)).toEqual({
+      reason: 'ABOVE_HISTORY', typedDays: 486, referenceDays: 305, limitMonths: null,
+    });
+    expect(await warningFor(productId, 485)).toBeNull();
+    // Embalagem alguns dias mais nova que todas as anteriores: variação normal, sem aviso.
+    expect(await warningFor(productId, 320)).toBeNull();
+  });
+
+  it('keeps warning after a label with the wrong year entered the history', async () => {
+    const productId = await newProduct();
+    await addLots(productId, 300, 300, 300);
+    // Ano digitado errado: 665 dias em vez de 300. Com o máximo como referência, o aviso sumiria.
+    const wrong = await typedLabel(productId, 665);
+    expect(wrong.id).toBeTruthy();
+    expect(await warningFor(productId, 665)).toEqual({
+      reason: 'ABOVE_HISTORY', typedDays: 665, referenceDays: 300, limitMonths: null,
+    });
+  });
+
+  it('ignores cancelled labels, split children and labels made from a registered lot', async () => {
+    const productId = await newProduct();
+    const [lot] = await addLots(productId, 300, 300);
+
+    const cancelled = await typedLabel(productId, 300);
+    const close = await request(app).post(`/api/labels/${cancelled.id}/close`).set('Authorization', asAdmin())
+      .send({ outcome: 'CANCELADO' });
+    expect(close.status).toBe(200);
+    // Etiqueta do lote cadastrado: a validade já conta pelo lote.
+    const fromLot = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+      productId, lotId: lot.id, openedAt: today(), responsibleName: 'Turno de teste',
+      storageType: 'REFRIGERADO', storageTemperature: 4,
+    });
+    expect(fromLot.status).toBe(201);
+    // Filha do Dividir repete a embalagem da origem (aqui, a do lote).
+    const split = await request(app).post(`/api/labels/${fromLot.body.data.id}/split`).set('Authorization', asAdmin())
+      .send({ count: 2, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' });
+    expect(split.status).toBe(201);
+    // Só os 2 lotes contam: abaixo do mínimo.
+    expect(await warningFor(productId, 900)).toBeNull();
+
+    await typedLabel(productId, 300); // terceiro registro válido
+    expect((await warningFor(productId, 900))?.reason).toBe('ABOVE_HISTORY');
+  });
+
+  it('warns ABOVE_LIMIT with the configured limit, which wins over ABOVE_HISTORY', async () => {
+    const productId = await newProduct();
+    await addLots(productId, 30, 30, 30);
+
+    expect((await putSettings({ expiryWarningMonths: 1 })).status).toBe(200);
+    expect(await warningFor(productId, 400)).toEqual({
+      reason: 'ABOVE_LIMIT', typedDays: 400, referenceDays: limitDays(1), limitMonths: 1,
+    });
+    // Exatamente no limite não avisa por ele (e fica abaixo da mediana + 180).
+    expect(await warningFor(productId, limitDays(1))).toBeNull();
+
+    // Limite de 24 meses: 400 dias fica dentro dele, mas acima do histórico (30 + 180).
+    expect((await putSettings({ expiryWarningMonths: 24 })).status).toBe(200);
+    expect(await warningFor(productId, 400)).toEqual({
+      reason: 'ABOVE_HISTORY', typedDays: 400, referenceDays: 30, limitMonths: 24,
+    });
+  });
+
+  it('accepts a partial PUT and validates the limit', async () => {
+    const initial = await request(app).get('/api/settings').set('Authorization', asAdmin());
+    expect(initial.body.data).toMatchObject({ requireValidatedRule: false, expiryWarningMonths: null });
+
+    for (const value of [0, 61, 1.5, '3', true]) {
+      expect((await putSettings({ expiryWarningMonths: value })).status).toBe(422);
+    }
+    expect((await putSettings({ expiryWarningMonths: 6, extra: 1 })).status).toBe(422);
+
+    const set = await putSettings({ expiryWarningMonths: 60 });
+    expect(set.status).toBe(200);
+    expect(set.body.data).toMatchObject({ requireValidatedRule: false, expiryWarningMonths: 60 });
+    expect(set.body.meta).toEqual({ blockedProducts: expect.any(Number), blockedCombinations: expect.any(Number) });
+
+    // Só o bloqueio: o limite fica como estava.
+    const onlyRequire = await putSettings({ requireValidatedRule: true });
+    expect(onlyRequire.status).toBe(200);
+    expect(onlyRequire.body.data).toMatchObject({ requireValidatedRule: true, expiryWarningMonths: 60 });
+
+    // null desliga o limite e não mexe no bloqueio.
+    const off = await putSettings({ expiryWarningMonths: null });
+    expect(off.status).toBe(200);
+    expect(off.body.data).toMatchObject({ requireValidatedRule: true, expiryWarningMonths: null });
+    const settings = await request(app).get('/api/settings').set('Authorization', asAdmin());
+    expect(settings.body.data.expiryWarningMonths).toBeNull();
+  });
+
+  it('keeps creating the label when the preview warns, without storing the warning', async () => {
+    const productId = await newProduct();
+    expect((await putSettings({ expiryWarningMonths: 1 })).status).toBe(200);
+    const body = typedBody(productId, 80);
+    expect((await preview(body)).body.data.expiryWarning.reason).toBe('ABOVE_LIMIT');
+    const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send(body);
+    expect(res.status).toBe(201);
+    expect(res.body.data).not.toHaveProperty('expiryWarning');
+    expect(res.body.data.discardAt.slice(0, 10)).toBe(daysFromToday(2));
+  });
+
+  it('does not warn for a registered lot', async () => {
+    const productId = await newProduct();
+    expect((await putSettings({ expiryWarningMonths: 1 })).status).toBe(200);
+    const [lot] = await addLots(productId, 400);
+    const res = await preview({
+      productId, lotId: lot.id, openedAt: today(), storageType: 'REFRIGERADO', storageTemperature: 4,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.data.lot.id).toBe(lot.id);
+    expect(res.body.data.expiryWarning).toBeNull();
   });
 });

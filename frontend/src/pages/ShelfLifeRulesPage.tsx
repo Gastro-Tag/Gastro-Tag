@@ -17,6 +17,7 @@ import { useToastContext } from '@/components/ui/Toast';
 import { formatBR, formatDateTimeBR } from '@/utils/date';
 import { formatTemperatureRange } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
+import { EXPIRY_MONTHS_MAX, EXPIRY_MONTHS_MIN, parseExpiryMonths, toastAvisoValidade } from '@/utils/expiryWarning';
 import { BLOQUEADO_NAO_IMPRIME, confirmaBloqueio, semRegraResumo, toastBloqueio, usaDiasDoCadastro } from '@/utils/semRegra';
 
 const SOURCE_TYPE_LABEL: Record<RuleSourceType, string> = {
@@ -78,6 +79,20 @@ export function ShelfLifeRulesPage() {
 
   const missingRequest = useRef(0);
 
+  async function saveExpiryMonths(value: number | null) {
+    setSettingsBusy(true);
+    try {
+      const { data } = await settingsApi.update({ expiryWarningMonths: value });
+      setSettings(data.data);
+      toast(toastAvisoValidade(data.data.expiryWarningMonths ?? null), 'success');
+    } catch (error) {
+      toast(extractError(error), 'error');
+      void fetchSettings();
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   const fetchSettings = useCallback(async () => {
     setSettingsError('');
     try {
@@ -107,7 +122,7 @@ export function ShelfLifeRulesPage() {
   async function saveRequirement(next: boolean) {
     setSettingsBusy(true);
     try {
-      const { data } = await settingsApi.update(next);
+      const { data } = await settingsApi.update({ requireValidatedRule: next });
       setSettings(data.data);
       toast(toastBloqueio(next, data.meta.blockedProducts, data.meta.blockedCombinations), 'success');
       setDialog(null);
@@ -235,6 +250,8 @@ export function ShelfLifeRulesPage() {
           else void askEnable();
         }}
       />
+
+      {settings && <ExpiryWarningCard settings={settings} busy={settingsBusy} onSave={(value) => void saveExpiryMonths(value)} />}
 
       <MissingRulesSection
         blocking={settings?.requireValidatedRule === true}
@@ -392,7 +409,7 @@ function RequireRuleCard({ settings, error, busy, onRetry, onToggle }: {
           </p>
           {settings.updatedAt && settings.updatedByName && (
             <p className="mt-1 text-[11px] text-slate-400">
-              Alterado por {settings.updatedByName} em {formatDateBRManaus(settings.updatedAt)}
+              Configurações alteradas por {settings.updatedByName} em {formatDateBRManaus(settings.updatedAt)}
             </p>
           )}
         </div>
@@ -412,6 +429,59 @@ function RequireRuleCard({ settings, error, busy, onRetry, onToggle }: {
           <span className="sr-only">{on ? 'Ligado' : 'Desligado'}</span>
         </button>
       </div>
+    </section>
+  );
+}
+
+function ExpiryWarningCard({ settings, busy, onSave }: {
+  settings: AppSettings;
+  busy: boolean;
+  onSave: (value: number | null) => void;
+}) {
+  const saved = settings.expiryWarningMonths ?? null;
+  const [text, setText] = useState(saved === null ? '' : String(saved));
+  const [touched, setTouched] = useState(false);
+  useEffect(() => { setText(saved === null ? '' : String(saved)); setTouched(false); }, [saved]);
+  const { value, error } = parseExpiryMonths(text);
+  const unchanged = !error && value === saved;
+  return (
+    <section className="card bg-white p-4 sm:p-5" aria-labelledby="aviso-validade-titulo">
+      <h2 id="aviso-validade-titulo" className="text-base font-bold text-charcoal-800">Aviso de validade digitada distante</h2>
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">
+        Quando o operador digita a validade da embalagem, o sistema avisa se ela passa deste limite e pede para conferir a
+        data. O número é uma escolha da cozinha, não um limite regulatório. Vazio = desligado.
+      </p>
+      <form
+        className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end"
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          setTouched(true);
+          if (!error && !unchanged && !busy) onSave(value);
+        }}
+      >
+        <div className="sm:w-80">
+          <label htmlFor="aviso-validade-meses" className="mb-1 block text-xs font-semibold text-slate-600">
+            Avisar quando a validade digitada passar de (meses)
+          </label>
+          <input
+            id="aviso-validade-meses"
+            className="input"
+            type="text"
+            inputMode="numeric"
+            placeholder={`Vazio = desligado (${EXPIRY_MONTHS_MIN} a ${EXPIRY_MONTHS_MAX})`}
+            value={text}
+            disabled={busy}
+            aria-invalid={touched && Boolean(error)}
+            aria-describedby={touched && error ? 'aviso-validade-erro' : undefined}
+            onChange={(event) => { setText(event.target.value); setTouched(true); }}
+          />
+        </div>
+        <button type="submit" className="btn btn-primary" disabled={busy || unchanged || Boolean(error)}>
+          {busy ? <Spinner size="sm" className="text-white" /> : <span>Salvar</span>}
+        </button>
+      </form>
+      {touched && error && <p id="aviso-validade-erro" role="alert" className="mt-1.5 text-xs font-medium text-rose-600">{error}</p>}
     </section>
   );
 }

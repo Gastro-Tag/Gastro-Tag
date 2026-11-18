@@ -3,9 +3,18 @@ import { z } from 'zod';
 import { SettingsService } from '../services/settingsService';
 import { ProductService } from '../services/productService';
 
+const EXPIRY_WARNING_MONTHS_ERROR = 'Informe o limite do aviso de validade em meses inteiros, de 1 a 60, ou null para desligar.';
+
+// Corpo parcial: só o que vier é alterado, mas ao menos um campo.
 const updateSchema = z.strictObject({
-  requireValidatedRule: z.boolean({ error: 'Informe se a etiqueta exige regra validada (true ou false).' }),
-});
+  requireValidatedRule: z.boolean({ error: 'Informe se a etiqueta exige regra validada (true ou false).' }).optional(),
+  expiryWarningMonths: z.number({ error: EXPIRY_WARNING_MONTHS_ERROR })
+    .int(EXPIRY_WARNING_MONTHS_ERROR).min(1, EXPIRY_WARNING_MONTHS_ERROR).max(60, EXPIRY_WARNING_MONTHS_ERROR)
+    .nullable().optional(),
+}).refine(
+  (data) => data.requireValidatedRule !== undefined || data.expiryWarningMonths !== undefined,
+  { message: 'Informe ao menos uma configuração para alterar.' },
+);
 
 export const SettingsController = {
   async get(_req: Request, res: Response) {

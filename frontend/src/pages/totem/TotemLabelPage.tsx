@@ -7,6 +7,7 @@ import {
 import { labelApi, productApi } from '@/services';
 import { extractError, extractErrorCode } from '@/services/api';
 import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
+import { expiryWarningText, needsExpiryConfirmation } from '@/utils/expiryWarning';
 import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
@@ -57,6 +58,7 @@ export function TotemLabelPage() {
   const [copies, setCopies] = useState(1);
   const [previews, setPreviews] = useState<Partial<Record<StorageType, PreviewState>>>({});
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [expiryConfirmed, setExpiryConfirmed] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [done, setDone] = useState<Done | null>(null);
@@ -126,7 +128,10 @@ export function TotemLabelPage() {
   const isPackage = Boolean(source?.originalExpiryDate);
   const lotReady = !isPackage || Boolean(lot.trim());
   const confirmedTemp = storage ? temps[storage] : undefined;
-  const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lotReady && !submitting);
+  const expiryWarning = selectedPreview?.status === 'ok' ? selectedPreview.data.expiryWarning ?? null : null;
+  const typedExpiry = selectedPreview?.status === 'ok' ? selectedPreview.data.originalExpiryDate : '';
+  const expiryPending = needsExpiryConfirmation(expiryWarning, `${productId}|${typedExpiry}`, expiryConfirmed);
+  const canPrint = Boolean(product && storage && selectedPreview?.status === 'ok' && lotReady && !submitting && !expiryPending);
 
   async function registerPrints(label: Label, count: number) {
     try {
@@ -141,7 +146,7 @@ export function TotemLabelPage() {
     // Lê de novo no toque: o turno pode ter expirado desde a última sincronização.
     const responsible = getOperator();
     if (!responsible) { syncOperator(); openOperatorSheet(); return; }
-    if (!source || selectedPreview?.status !== 'ok' || !lotReady) return;
+    if (!source || selectedPreview?.status !== 'ok' || !lotReady || expiryPending) return;
     // Imprimir só depois de o operador confirmar a temperatura no teclado numérico.
     const temperature = temps[storage];
     if (temperature === undefined) { setSheet('temp'); return; }
@@ -352,6 +357,26 @@ export function TotemLabelPage() {
           <span className="min-w-0">
             Data limitada pela validade original do fabricante ({formatBR(selectedPreview.data.originalExpiryDate)}).
           </span>
+        </div>
+      )}
+
+      {expiryWarning && (
+        <div role="alert" className="rounded-2xl border-4 border-amber-400 bg-amber-50 p-4 sm:p-5">
+          <div className="flex items-start gap-3 text-xl font-extrabold leading-snug text-amber-900 sm:text-2xl">
+            <AlertTriangle className="mt-1 h-8 w-8 shrink-0 text-amber-600" aria-hidden="true" />
+            <span className="min-w-0 break-words">{expiryWarningText(expiryWarning, typedExpiry)}</span>
+          </div>
+          {expiryPending ? (
+            <button
+              type="button"
+              onClick={() => setExpiryConfirmed(`${productId}|${typedExpiry}`)}
+              className="btn btn-primary mt-4 h-auto min-h-[64px] w-full touch-manipulation rounded-2xl px-4 text-xl font-extrabold sm:text-2xl"
+            >
+              <Check className="h-7 w-7 shrink-0" aria-hidden="true" /> Conferi na embalagem
+            </button>
+          ) : (
+            <p className="mt-3 flex items-center gap-2 text-lg font-bold text-emerald-700 sm:text-xl"><CheckCircle2 className="h-6 w-6" aria-hidden="true" /> Conferido na embalagem</p>
+          )}
         </div>
       )}
 

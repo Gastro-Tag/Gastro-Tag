@@ -13,6 +13,7 @@ import { LoadError } from '@/components/ui/LoadError';
 import { formatBR } from '@/utils/date';
 import { extractError, extractErrorCode } from '@/services/api';
 import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
+import { expiryWarningText, needsExpiryConfirmation } from '@/utils/expiryWarning';
 import { cn } from '@/utils/cn';
 import { printLabel } from '@/utils/printLabel';
 import { createRequestKeeper } from '@/utils/requestId';
@@ -44,6 +45,7 @@ export function LabelFormPage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
   const [previewError, setPreviewError] = useState('');
+  const [expiryConfirmed, setExpiryConfirmed] = useState('');
   const [previewErrorCode, setPreviewErrorCode] = useState<string | undefined>();
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
   const { templateId, explicit: templateChosen, choose: chooseTemplate } = useLabelTemplate();
@@ -110,6 +112,9 @@ export function LabelFormPage() {
     && form.storageType && (form.openedAt || !dateFilled),
   );
   const previewMatchesForm = preview?.requestKey === requestKey;
+  const expiryWarning = previewMatchesForm ? preview?.expiryWarning ?? null : null;
+  const expiryKey = `${productId}|${preview?.originalExpiryDate ?? ''}`;
+  const expiryPending = needsExpiryConfirmation(expiryWarning, expiryKey, expiryConfirmed);
   const rangeText = previewMatchesForm && preview ? formatTemperatureRange(preview.rule.minTemperature, preview.rule.maxTemperature) : null;
 
   useEffect(() => {
@@ -154,7 +159,7 @@ export function LabelFormPage() {
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (!form.storageType || !previewMatchesForm || temperature === null) return;
+    if (!form.storageType || !previewMatchesForm || temperature === null || expiryPending) return;
     setSubmitting(true);
     let createdLabel: import('@/types').Label | null = null;
     try {
@@ -507,11 +512,28 @@ export function LabelFormPage() {
             </p>
           </div>
 
+          {expiryWarning && preview && (
+            <div id="aviso-validade-digitada" role="alert" className="p-3.5 rounded-xl border-2 border-amber-300 bg-amber-50 text-xs text-amber-900">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                <span><strong>Confira a validade digitada.</strong> {expiryWarningText(expiryWarning, preview.originalExpiryDate)}</span>
+              </div>
+              {expiryPending ? (
+                <button type="button" className="btn btn-outline btn-sm mt-3 min-h-11 w-full sm:w-auto" onClick={() => setExpiryConfirmed(expiryKey)}>
+                  Conferi na embalagem
+                </button>
+              ) : (
+                <p className="mt-2 flex items-center gap-1.5 font-bold text-emerald-700"><CheckCircle2 className="h-4 w-4" aria-hidden="true" /> Conferido na embalagem.</p>
+              )}
+            </div>
+          )}
+
           <LabelTemplateStatus />
           <button
             type="submit"
             form="label-form"
-            disabled={submitting || !previewMatchesForm || previewLoading || temperature === null}
+            disabled={submitting || !previewMatchesForm || previewLoading || temperature === null || expiryPending}
+            aria-describedby={expiryPending ? 'aviso-validade-digitada' : undefined}
             className="btn btn-accent w-full py-3.5 text-sm font-bold shadow-md"
           >
             {submitting || previewLoading ? (

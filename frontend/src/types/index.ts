@@ -288,6 +288,15 @@ export interface LabelPreview {
   storageTemp: string | null;
   originalExpiryDate: string;
   cappedByOriginalExpiry: boolean;
+  /** Só com validade digitada (embalagem na mão); nulo com lote cadastrado. */
+  expiryWarning?: ExpiryWarning | null;
+}
+
+export interface ExpiryWarning {
+  reason: 'ABOVE_HISTORY' | 'ABOVE_LIMIT';
+  typedDays: number;
+  referenceDays: number;
+  limitMonths: number | null;
 }
 
 export interface PreviewRule {
@@ -376,6 +385,8 @@ export interface ProductsWithoutRuleMeta {
 /** GET/PUT /settings: configuração da cozinha (PUT só ADMIN). */
 export interface AppSettings {
   requireValidatedRule: boolean;
+  /** Meses acima dos quais a validade digitada gera aviso; null = desligado. */
+  expiryWarningMonths:  number | null;
   updatedAt:            string | null;
   updatedByName:        string | null;
 }
