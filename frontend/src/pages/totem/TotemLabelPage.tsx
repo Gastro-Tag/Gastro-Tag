@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import {
   AlertTriangle, ArrowLeft, CalendarDays, Check, CheckCircle2, Hash, Minus, Plus,
   Printer, Refrigerator, Scissors, Snowflake, Thermometer, User,
@@ -8,7 +8,7 @@ import { labelApi, productApi } from '@/services';
 import { extractError, extractErrorCode } from '@/services/api';
 import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
 import { expiryWarningText, needsExpiryConfirmation } from '@/utils/expiryWarning';
-import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType } from '@/types';
+import type { ExpirySource, Label, LabelPreview, Product, ProductLot, StorageType, TemperatureSource } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { useTotemStore } from '@/store/totemStore';
@@ -18,7 +18,8 @@ import {
   DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft,
   getHandlerToken, getLastStorage, getOperator, parseDateDraft, rememberChoices, weekdayShort,
 } from '@/utils/totem';
-import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft } from '@/utils/temperature';
+import { formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, resolveTemperatureSource, temperatureDraft } from '@/utils/temperature';
+import { elapsedFlowMs, flowStartFromState } from '@/utils/flowTime';
 import { cn } from '@/utils/cn';
 import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
 import { createRequestKeeper } from '@/utils/requestId';
@@ -43,7 +44,25 @@ function logo(): string | null {
 export function TotemLabelPage() {
   const { productId = '' } = useParams<{ productId: string }>();
   const navigate = useNavigate();
-  const { operator, openOperatorSheet, syncOperator, invalidateOperator } = useTotemStore();
+  const location = useLocation();
+  // Início do fluxo: o toque no produto (passado pela lista). Sem ele (link direto, recarga) o tempo não é enviado.
+  const flowStart = useRef(flowStartFromState(location.state));
+  const { operator, operatorSheetOpen, openOperatorSheet, syncOperator, invalidateOperator } = useTotemStore();
+
+  // Consome o state: voltar/avançar e recarregar não reaproveitam o início.
+  useEffect(() => {
+    if (location.state != null) navigate(location.pathname, { replace: true, state: null });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Identificar o operador (PIN/nome) não conta no tempo: ao fechar a folha com sucesso, o relógio recomeça.
+  const sheetWasOpen = useRef(false);
+  useEffect(() => {
+    if (operatorSheetOpen) { sheetWasOpen.current = true; return; }
+    if (sheetWasOpen.current) {
+      sheetWasOpen.current = false;
+      if (operator && flowStart.current !== undefined) flowStart.current = performance.now();
+    }
+  }, [operatorSheetOpen, operator]);
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loadError, setLoadError] = useState('');
@@ -51,6 +70,9 @@ export function TotemLabelPage() {
   // Só vale a temperatura que o operador confirmou NESTA etiqueta. O valor de DEFAULT_TEMP é apenas sugestão
   // e a tela é remontada a cada etiqueta, então a próxima sempre pede a confirmação de novo.
   const [temps, setTemps] = useState<Partial<Record<StorageType, number>>>({});
+  const [tempSources, setTempSources] = useState<Partial<Record<StorageType, TemperatureSource>>>({});
+  // O operador tocou no teclado enquanto a janela de temperatura estava aberta.
+  const tempEdited = useRef(false);
   // Lote cadastrado ou validade digitada a partir da embalagem em mãos.
   const [source, setSource] = useState<ExpirySource | null>(null);
   const [packageExpiry, setPackageExpiry] = useState('');
@@ -164,9 +186,10 @@ export function TotemLabelPage() {
         storageType: storage,
         storageTemperature: temperature,
       };
+      const flowMs = elapsedFlowMs(flowStart.current, performance.now());
       // Com PIN confirmado o servidor usa o nome do operador do token; sem ele vale o nome digitado.
       const handlerToken = getHandlerToken() || undefined;
-      const { data } = await labelApi.create({ ...payload, handlerToken, requestId: requests.idFor(payload) });
+      const { data } = await labelApi.create({ ...payload, handlerToken, flowMs, temperatureSource: tempSources[storage], requestId: requests.idFor(payload) });
       const label: Label = data.data;
       created = label;
       requests.reset(); // a próxima etiqueta, mesmo igual, é outro pedido
@@ -482,7 +505,7 @@ export function TotemLabelPage() {
           maxLength={8}
           displayValue={formatDateDraft}
           confirmLabel="Usar esta validade"
-          onCancel={() => setSheet(null)}
+          onCancel={() => { tempEdited.current = false; setSheet(null); }}
           onConfirm={(value) => {
             const expiry = parseDateDraft(value);
             if (!expiry) return 'Digite uma data real: dia, mês e ano.';
@@ -504,11 +527,15 @@ export function TotemLabelPage() {
           layout="numeric"
           maxLength={6}
           confirmLabel="Confirmar temperatura"
-          onCancel={() => setSheet(null)}
+          onLiveChange={() => { tempEdited.current = true; }}
+          onCancel={() => { tempEdited.current = false; setSheet(null); }}
           onConfirm={(value) => {
             const temperature = parseTemperature(value);
             if (temperature === null) return 'Digite uma temperatura válida, em °C (de −50 a 30).';
+            const source = resolveTemperatureSource({ value: temperature, suggested: DEFAULT_TEMP[storage], edited: tempEdited.current, previous: tempSources[storage] });
             setTemps((current) => ({ ...current, [storage]: temperature }));
+            setTempSources((current) => ({ ...current, [storage]: source }));
+            tempEdited.current = false;
             setSubmitError('');
             setSheet(null);
           }}

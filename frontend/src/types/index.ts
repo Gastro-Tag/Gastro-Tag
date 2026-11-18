@@ -161,6 +161,10 @@ export interface Label {
   handlerId?:       string | null;
   /** O responsável foi confirmado por PIN no totem. */
   handlerVerified?: boolean;
+  /** Tempo do fluxo no aparelho (ms), do toque no produto até imprimir; nulo nas etiquetas antigas. */
+  flowMs?:            number | null;
+  /** Origem da temperatura confirmada; nulo nas etiquetas antigas. */
+  temperatureSource?: TemperatureSource | null;
 }
 
 export type LabelStatus  = 'ATIVA' | 'ENCERRADA';
@@ -213,6 +217,8 @@ export interface SplitLabelDTO {
   storageTemperature: number;
   responsibleName:    string;
   closeParent?:       boolean;
+  flowMs?:            number;
+  temperatureSource?: TemperatureSource;
   requestId?:         string;
   handlerToken?:      string;
 }
@@ -348,6 +354,8 @@ export type CreateLabelDTO = ExpirySource & LabelBaseDTO & {
   requestId?:  string;
   /** Operador confirmado por PIN (totem). Quando válido, o servidor usa o nome dele. */
   handlerToken?: string;
+  flowMs?: number;
+  temperatureSource?: TemperatureSource;
 };
 
 // ── Regras de validade ──────────────────────────────────
@@ -449,3 +457,32 @@ export interface DashboardStats {
   };
   topProducts: { id: string; name: string; brand: string; labelCount: number }[];
 }
+
+// ── Números da cozinha (GET /labels/metrics, ADMIN) ──────
+export type TemperatureSource = 'SUGERIDO' | 'DIGITADO';
+
+export interface LabelMetricsDay {
+  date: string;
+  total: number;
+  flowMedianMs: number | null;
+  suggestedCount: number;
+  typedCount: number;
+}
+
+export interface LabelMetrics {
+  from: string;
+  to: string;
+  total: number;
+  /** Conta ações (um Dividir é 1), não etiquetas. */
+  withFlow: number;
+  /** Medições acima do teto (10 min) ignoradas pelo servidor; pode não vir em versões antigas. */
+  discardedFlows?: number;
+  flowMedianMs: number | null;
+  flowP90Ms: number | null;
+  withTemperatureSource: number;
+  suggestedCount: number;
+  typedCount: number;
+  byDay: LabelMetricsDay[];
+}
+
+export interface LabelMetricsParams { from?: string; to?: string }

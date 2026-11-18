@@ -1760,7 +1760,7 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect([...body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
 
       const rows = rowsOf(body);
-      expect(rows[0].split(';')).toHaveLength(23);
+      expect(rows[0].split(';')).toHaveLength(25);
       expect(rows[0]).toContain('"Código";"Produto";"Marca";"Lote";"Lote cadastrado";"Validade do fabricante"');
       const row = rows.find((line) => line.startsWith(`"${formula.shortCode}"`))!;
       expect(row).toBeTruthy();
@@ -2694,5 +2694,305 @@ describe('aviso de validade digitada muito distante', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.lot.id).toBe(lot.id);
     expect(res.body.data.expiryWarning).toBeNull();
+  });
+});
+
+describe('medição de tempo e origem da temperatura', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  // Um produto por teste: cada um conta só as próprias etiquetas e não depende da ordem.
+  const newProduct = async () => {
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Medição ${tag} ${randomUUID().slice(0, 6)}`, brand: 'Teste', daysValidRefrigerated: 5, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    return product.id;
+  };
+  const labelBody = (productId: string, body: object = {}) => ({
+    productId, lot: 'LOT-MED', originalExpiryDate: daysFromToday(60), openedAt: today(),
+    responsibleName: 'Turno de teste', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+  });
+  const postLabel = (productId: string, body: object = {}) =>
+    request(app).post('/api/labels').set('Authorization', asAdmin()).send(labelBody(productId, body));
+  const newLabel = async (productId: string, body: object = {}) => {
+    const res = await postLabel(productId, body);
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string; shortCode: string; flowMs: number | null; temperatureSource: string | null };
+  };
+  const split = (parentId: string, body: object = {}) =>
+    request(app).post(`/api/labels/${parentId}/split`).set('Authorization', asAdmin())
+      .send({ count: 2, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador', ...body });
+  const metrics = (query: Record<string, string>, token = asAdmin()) =>
+    request(app).get('/api/labels/metrics').query(query).set('Authorization', token);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.80')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.81')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+  });
+
+  it('stores flowMs and temperatureSource on create and returns them in the list', async () => {
+    const productId = await newProduct();
+    const measured = await newLabel(productId, { flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    expect(measured).toMatchObject({ flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    const typed = await newLabel(productId, { flowMs: 0, temperatureSource: 'DIGITADO' });
+    expect(typed).toMatchObject({ flowMs: 0, temperatureSource: 'DIGITADO' });
+    // Cliente antigo, sem os campos: ficam nulos.
+    const plain = await newLabel(productId);
+    expect(plain).toMatchObject({ flowMs: null, temperatureSource: null });
+
+    const stored = await prisma.label.findUniqueOrThrow({ where: { id: measured.id } });
+    expect(stored).toMatchObject({ flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+
+    const list = await request(app).get('/api/labels').query({ productId, limit: '100' }).set('Authorization', asAdmin());
+    expect(list.status).toBe(200);
+    const byId = (id: string) => list.body.data.find((label: { id: string }) => label.id === id);
+    expect(byId(measured.id)).toMatchObject({ flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    expect(byId(typed.id)).toMatchObject({ flowMs: 0, temperatureSource: 'DIGITADO' });
+    expect(byId(plain.id)).toMatchObject({ flowMs: null, temperatureSource: null });
+  });
+
+  it('ignores an invalid flowMs without refusing the label and validates the temperatureSource enum', async () => {
+    const productId = await newProduct();
+    // A métrica nunca recusa a etiqueta: valor inválido não é gravado.
+    for (const flowMs of [-1, 3_600_001, 1.5, '1000', null, Number.MAX_SAFE_INTEGER]) {
+      const res = await postLabel(productId, { flowMs });
+      expect(res.status).toBe(201);
+      expect(res.body.data.flowMs).toBeNull();
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: res.body.data.id } })).flowMs).toBeNull();
+    }
+    for (const temperatureSource of ['sugerido', 'MEDIDO', '', 1]) {
+      expect((await postLabel(productId, { temperatureSource })).status).toBe(422);
+    }
+    expect((await newLabel(productId, { flowMs: 3_600_000 })).flowMs).toBe(3_600_000);
+
+    const parent = await newLabel(productId);
+    expect((await split(parent.id, { temperatureSource: 'X' })).status).toBe(422);
+    expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(0);
+    for (const flowMs of [3_600_001, -5, 2.5, 'abc', null]) {
+      const res = await split(parent.id, { count: 1, flowMs });
+      expect(res.status).toBe(201);
+      expect(res.body.data.children[0].flowMs).toBeNull();
+    }
+  });
+
+  it('a replayed create keeps the stored values', async () => {
+    const productId = await newProduct();
+    const requestId = randomUUID();
+    const first = await postLabel(productId, { requestId, flowMs: 8_000, temperatureSource: 'SUGERIDO' });
+    expect(first.status).toBe(201);
+    const replay = await postLabel(productId, { requestId, flowMs: 99_000, temperatureSource: 'DIGITADO' });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data).toMatchObject({ id: first.body.data.id, flowMs: 8_000, temperatureSource: 'SUGERIDO' });
+    const stored = await prisma.label.findUniqueOrThrow({ where: { id: first.body.data.id } });
+    expect(stored).toMatchObject({ flowMs: 8_000, temperatureSource: 'SUGERIDO' });
+    expect(await prisma.label.count({ where: { productId } })).toBe(1);
+  });
+
+  it('stores the split measurement on every child, not on the source, and a replay keeps it', async () => {
+    const productId = await newProduct();
+    const parent = await newLabel(productId, { flowMs: 4_000, temperatureSource: 'DIGITADO' });
+    const requestId = randomUUID();
+    const res = await split(parent.id, { count: 3, requestId, flowMs: 6_500, temperatureSource: 'SUGERIDO' });
+    expect(res.status).toBe(201);
+    expect(res.body.data.children).toHaveLength(3);
+    for (const child of res.body.data.children) {
+      expect(child).toMatchObject({ flowMs: 6_500, temperatureSource: 'SUGERIDO', parentLabelId: parent.id });
+    }
+    expect(res.body.data.parent).toMatchObject({ flowMs: 4_000, temperatureSource: 'DIGITADO' });
+
+    const replay = await split(parent.id, { count: 3, requestId, flowMs: 1, temperatureSource: 'DIGITADO' });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.children.map((child: { id: string }) => child.id).sort())
+      .toEqual(res.body.data.children.map((child: { id: string }) => child.id).sort());
+    const children = await prisma.label.findMany({ where: { parentLabelId: parent.id } });
+    expect(children).toHaveLength(3);
+    expect(children.every((child) => child.flowMs === 6_500 && child.temperatureSource === 'SUGERIDO')).toBe(true);
+    expect(await prisma.label.findUniqueOrThrow({ where: { id: parent.id } }))
+      .toMatchObject({ flowMs: 4_000, temperatureSource: 'DIGITADO' });
+
+    // Sem os campos, as filhas ficam nulas.
+    const plain = await split(parent.id);
+    expect(plain.status).toBe(201);
+    for (const child of plain.body.data.children) expect(child).toMatchObject({ flowMs: null, temperatureSource: null });
+  });
+
+  it('adds "Tempo (s)" and "Origem da temperatura" at the end of the CSV', async () => {
+    const productId = await newProduct();
+    const suggested = await newLabel(productId, { flowMs: 12_345, temperatureSource: 'SUGERIDO' });
+    const typed = await newLabel(productId, { flowMs: 900, temperatureSource: 'DIGITADO' });
+    const plain = await newLabel(productId);
+    const res = await request(app).get('/api/labels/export.csv').query({ productId }).set('Authorization', asAdmin())
+      .buffer(true).parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+    expect(res.status).toBe(200);
+    const rows = (res.body as Buffer).toString('utf8').replace(/^﻿/, '').split('\r\n').filter(Boolean);
+    const header = rows[0].split(';');
+    expect(header).toHaveLength(25);
+    expect(header.slice(-3)).toEqual(['"Criada em"', '"Tempo (s)"', '"Origem da temperatura"']);
+    // Colunas anteriores no mesmo lugar.
+    expect(header[4]).toBe('"Lote cadastrado"');
+    expect(header[10]).toBe('"Temperatura"');
+    const tail = (code: string) => rows.find((line) => line.startsWith(`"${code}"`))!.split(';').slice(-2);
+    expect(tail(suggested.shortCode)).toEqual(['"12,3"', '"Sugerida"']);
+    expect(tail(typed.shortCode)).toEqual(['"0,9"', '"Digitada"']);
+    expect(tail(plain.shortCode)).toEqual(['""', '""']);
+  });
+
+  describe('relatório', () => {
+    // Período antigo e produto próprio: nada que já exista no banco entra na conta.
+    const day1 = '2001-03-10';
+    const day2 = '2001-03-11';
+    const day3 = '2001-03-12';
+    // Meio-dia UTC: no mesmo dia em qualquer fuso de −11 a +11 h (a cozinha padrão é UTC−4).
+    const moveTo = (ids: string[], day: string) =>
+      prisma.label.updateMany({ where: { id: { in: ids } }, data: { createdAt: new Date(`${day}T12:00:00.000Z`) } });
+
+    it('aggregates median, p90, counts and days, without cancelled labels', async () => {
+      const productId = await newProduct();
+      const a = await newLabel(productId, { flowMs: 1_000, temperatureSource: 'SUGERIDO' });
+      const b = await newLabel(productId, { flowMs: 2_000, temperatureSource: 'DIGITADO' });
+      const c = await newLabel(productId, { flowMs: 3_000, temperatureSource: 'SUGERIDO' });
+      const d = await newLabel(productId);
+      const cancelled = await newLabel(productId, { flowMs: 100_000, temperatureSource: 'DIGITADO' });
+      await request(app).post(`/api/labels/${cancelled.id}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'CANCELADO' }).expect(200);
+      const parent = await newLabel(productId, { flowMs: 4_000, temperatureSource: 'DIGITADO' });
+      // Dividir em 3: um tempo medido (conta uma vez) e três etiquetas impressas (contam três).
+      const children = await split(parent.id, { count: 3, requestId: randomUUID(), flowMs: 5_000, temperatureSource: 'SUGERIDO' });
+      expect(children.status).toBe(201);
+      const childIds = children.body.data.children.map((child: { id: string }) => child.id) as string[];
+      await moveTo([a.id, b.id, c.id, d.id, cancelled.id], day1);
+      await moveTo([parent.id, ...childIds], day2);
+
+      const res = await metrics({ productId, from: day1, to: day3 });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toEqual({
+        from: day1, to: day3,
+        total: 8, withFlow: 5, discardedFlows: 0, flowMedianMs: 3_000,
+        // percentile_cont(0.9) de 1, 2, 3, 4 e 5 s: 4 s + 0,6 × 1 s.
+        flowP90Ms: 4_600,
+        withTemperatureSource: 7, suggestedCount: 5, typedCount: 2,
+        byDay: [
+          { date: day1, total: 4, flowMedianMs: 2_000, suggestedCount: 2, typedCount: 1 },
+          { date: day2, total: 4, flowMedianMs: 4_500, suggestedCount: 3, typedCount: 1 },
+          { date: day3, total: 0, flowMedianMs: null, suggestedCount: 0, typedCount: 0 },
+        ],
+      });
+
+      // Só o primeiro dia.
+      const single = await metrics({ productId, from: day1, to: day1 });
+      expect(single.body.data).toMatchObject({ total: 4, withFlow: 3, flowMedianMs: 2_000, byDay: [{ date: day1 }] });
+      // Período sem nada.
+      const empty = await metrics({ productId, from: '2001-04-01', to: '2001-04-02' });
+      expect(empty.body.data).toMatchObject({
+        total: 0, withFlow: 0, discardedFlows: 0, flowMedianMs: null, flowP90Ms: null,
+        withTemperatureSource: 0, suggestedCount: 0, typedCount: 0,
+      });
+      expect(empty.body.data.byDay).toHaveLength(2);
+    });
+
+    it('defaults to the last 7 kitchen days and counts labels created today', async () => {
+      const productId = await newProduct();
+      await newLabel(productId, { flowMs: 7_000, temperatureSource: 'DIGITADO' });
+      const res = await metrics({ productId });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({
+        from: daysFromToday(-6), to: today(), total: 1, withFlow: 1, flowMedianMs: 7_000, flowP90Ms: 7_000, typedCount: 1,
+      });
+      expect(res.body.data.byDay).toHaveLength(7);
+      expect(res.body.data.byDay[6]).toEqual({ date: today(), total: 1, flowMedianMs: 7_000, suggestedCount: 0, typedCount: 1 });
+    });
+
+    it('puts a label created at 03:30Z on the previous kitchen day', async () => {
+      const productId = await newProduct();
+      const label = await newLabel(productId, { flowMs: 2_000, temperatureSource: 'DIGITADO' });
+      const instant = new Date('2001-05-02T03:30:00.000Z');
+      await prisma.label.update({ where: { id: label.id }, data: { createdAt: instant } });
+      // Dia da cozinha desse instante (em America/Manaus, UTC−4: 01/05 às 23:30).
+      const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+      const kitchenDay = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' })
+        .format(instant);
+      if (timeZone === 'America/Manaus') expect(kitchenDay).toBe('2001-05-01');
+
+      const res = await metrics({ productId, from: '2001-04-30', to: '2001-05-03' });
+      expect(res.status).toBe(200);
+      expect(res.body.data.total).toBe(1);
+      const days = res.body.data.byDay as { date: string; total: number; flowMedianMs: number | null }[];
+      expect(days.filter((day) => day.total > 0)).toEqual([
+        { date: kitchenDay, total: 1, flowMedianMs: 2_000, suggestedCount: 0, typedCount: 1 },
+      ]);
+    });
+
+    it('counts two splits of the same source on the same day as two actions', async () => {
+      const productId = await newProduct();
+      const parent = await newLabel(productId);
+      const first = await split(parent.id, { count: 2, requestId: randomUUID(), flowMs: 1_000 });
+      const second = await split(parent.id, { count: 2, requestId: randomUUID(), flowMs: 3_000 });
+      expect(first.status).toBe(201);
+      expect(second.status).toBe(201);
+      const ids = [parent.id, ...[...first.body.data.children, ...second.body.data.children].map((child: { id: string }) => child.id)];
+      await moveTo(ids, '2001-06-10');
+
+      const res = await metrics({ productId, from: '2001-06-10', to: '2001-06-10' });
+      expect(res.body.data).toMatchObject({ total: 5, withFlow: 2, discardedFlows: 0, flowMedianMs: 2_000 });
+    });
+
+    it('keeps counting a split as one action when one of its children was cancelled', async () => {
+      const productId = await newProduct();
+      const parent = await newLabel(productId);
+      const res = await split(parent.id, { count: 3, requestId: randomUUID(), flowMs: 4_000, temperatureSource: 'SUGERIDO' });
+      expect(res.status).toBe(201);
+      const childIds = res.body.data.children.map((child: { id: string }) => child.id) as string[];
+      await request(app).post(`/api/labels/${childIds[0]}/close`).set('Authorization', asAdmin())
+        .send({ outcome: 'CANCELADO' }).expect(200);
+      await moveTo([parent.id, ...childIds], '2001-07-10');
+
+      const report = await metrics({ productId, from: '2001-07-10', to: '2001-07-10' });
+      expect(report.body.data).toMatchObject({
+        total: 3, withFlow: 1, discardedFlows: 0, flowMedianMs: 4_000, flowP90Ms: 4_000, suggestedCount: 2,
+      });
+    });
+
+    it('leaves flows above FLOW_PLAUSIBLE_MAX_MS out of the time and counts them in discardedFlows', async () => {
+      const productId = await newProduct();
+      const labels = await Promise.all([1_000, 3_000, 600_000, 700_000].map((flowMs) => newLabel(productId, { flowMs })));
+      await moveTo(labels.map((label) => label.id), '2001-08-10');
+
+      const res = await metrics({ productId, from: '2001-08-10', to: '2001-08-10' });
+      // 600 000 (no teto) entra; 700 000 fica de fora da mediana, mas continua gravado.
+      expect(res.body.data).toMatchObject({ total: 4, withFlow: 3, discardedFlows: 1, flowMedianMs: 3_000 });
+      expect(res.body.data.byDay[0].flowMedianMs).toBe(3_000);
+      const outlier = await prisma.label.findUniqueOrThrow({ where: { id: labels[3].id } });
+      expect(outlier.flowMs).toBe(700_000);
+      const csv = await request(app).get('/api/labels/export.csv').query({ productId, q: labels[3].shortCode })
+        .set('Authorization', asAdmin());
+      expect(csv.status).toBe(200);
+      expect(csv.text).toContain('"700,0";""');
+    });
+
+    it('is only for admins and validates the period', async () => {
+      expect((await metrics({}, operatorAuth)).status).toBe(403);
+      expect((await request(app).get('/api/labels/metrics')).status).toBe(401);
+      // 92 dias contando os dois extremos: aceito; 93: recusado.
+      expect((await metrics({ from: '2001-01-01', to: '2001-04-02' })).status).toBe(200);
+      const tooLong = await metrics({ from: '2001-01-01', to: '2001-04-03' });
+      expect(tooLong.status).toBe(422);
+      expect(tooLong.body.error.code).toBe('VALIDATION_ERROR');
+      expect((await metrics({ from: daysFromToday(-92) })).status).toBe(422);
+      expect((await metrics({ from: day2, to: day1 })).status).toBe(422);
+      expect((await metrics({ from: '2001-02-30' })).status).toBe(422);
+      expect((await metrics({ to: '10/03/2001' })).status).toBe(422);
+      expect((await metrics({ productId: 'x' })).status).toBe(422);
+    });
   });
 });

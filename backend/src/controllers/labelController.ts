@@ -42,7 +42,21 @@ const nameOrHandler = (data: { responsibleName?: string; handlerToken?: string }
   Boolean(data.responsibleName || data.handlerToken);
 const nameOrHandlerError = { message: 'Informe o nome do responsável.' };
 
+// Medição do cliente: ms do toque no produto até criar a etiqueta. Não é confiável para auditoria (o aparelho
+// pode mandar qualquer valor); serve só para o relatório de tempo. Até 1 hora.
+export const FLOW_MS_MAX = 3_600_000;
+/** Inteiro de 0 a FLOW_MS_MAX; qualquer outra coisa (negativo, fração, texto, null) é ignorada, não recusada. */
+const validFlowMs = (value: unknown): number | undefined =>
+  (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= FLOW_MS_MAX) ? value : undefined;
+const measurementFields = {
+  // A métrica nunca impede a etiqueta: valor inválido não é gravado e a etiqueta sai normalmente.
+  flowMs: z.unknown().optional().transform(validFlowMs),
+  // A temperatura confirmada foi a sugerida (4 / −18 °C) ou digitada pelo operador.
+  temperatureSource: z.enum(['SUGERIDO', 'DIGITADO'], { error: 'Origem da temperatura inválida.' }).optional(),
+};
+
 const createSchema = labelFields.extend({
+  ...measurementFields,
   storageTemperature: labelFields.shape.storageTemperature.unwrap(),
   lot: z.string().trim().min(1).max(60).refine((value) => !value.includes('\u0000'), 'Lote inválido.').optional(),
   responsibleName: responsibleNameSchema.optional(),
@@ -78,6 +92,13 @@ const listSchema = filterFields.extend({
 // Exportação: mesmos filtros, sem paginação; from/to pela data de criação na cozinha.
 const exportSchema = filterFields.refine(...periodOrder);
 
+// Relatório de tempo e temperatura: período pela data de criação na cozinha (padrão: últimos 7 dias).
+const metricsSchema = z.object({
+  from: dateSchema.optional(),
+  to: dateSchema.optional(),
+  productId: z.string().uuid().optional(),
+}).refine(...periodOrder);
+
 const closeSchema = z.object({
   outcome: z.enum(['USADO', 'DESCARTADO', 'CANCELADO'], { error: 'Escolha o destino da etiqueta.' }),
   discardReason: z.enum(['PRAZO_VENCIDO', 'ALTERACAO_SENSORIAL', 'EMBALAGEM_DANIFICADA', 'OUTRO'], {
@@ -101,6 +122,7 @@ const splitPreviewSchema = z.object({
 });
 
 const splitSchema = splitPreviewSchema.extend({
+  ...measurementFields,
   count: z.number({
     error: (issue) => (issue.input === undefined ? 'Informe a quantidade de etiquetas.' : 'Quantidade inválida.'),
   })
@@ -145,6 +167,12 @@ export const LabelController = {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('Cache-Control', 'no-store');
     res.send(csv);
+  },
+
+  async metrics(req: Request, res: Response) {
+    const query = metricsSchema.parse(req.query);
+    const data = await LabelService.metrics(query);
+    res.json({ success: true, data });
   },
 
   async getById(req: Request, res: Response) {

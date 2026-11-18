@@ -6,7 +6,7 @@ import {
 import { labelApi, productApi } from '@/services';
 import { extractError } from '@/services/api';
 import { RULE_REQUIRED_CODE } from '@/utils/semRegra';
-import type { Label, Product, SplitResult, StorageType } from '@/types';
+import type { Label, Product, SplitResult, StorageType, TemperatureSource } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { Centered, FieldButton, TempButton, storagesOf } from '@/pages/totem/TotemLabelPage';
@@ -15,7 +15,7 @@ import { useTotemStore } from '@/store/totemStore';
 import { formatBR } from '@/utils/date';
 import { DEFAULT_TEMP, STORAGE_LABEL, getHandlerToken, getOperator, weekdayShort } from '@/utils/totem';
 import { printSplitChildren } from '@/utils/split';
-import { formatTemperatureRange, formatTemperatureShort, parseTemperature, temperatureDraft } from '@/utils/temperature';
+import { formatTemperatureRange, formatTemperatureShort, parseTemperature, resolveTemperatureSource, temperatureDraft } from '@/utils/temperature';
 import { createRequestKeeper } from '@/utils/requestId';
 import { isHandlerInvalid } from '@/utils/handler';
 import { cn } from '@/utils/cn';
@@ -46,6 +46,8 @@ export function TotemSplitPage() {
   const [storage, setStorage] = useState<StorageType>('REFRIGERADO');
   // Só vale a temperatura confirmada NESTA divisão; a sugestão nunca é gravada sozinha.
   const [temps, setTemps] = useState<Partial<Record<StorageType, number>>>({});
+  const [tempSources, setTempSources] = useState<Partial<Record<StorageType, TemperatureSource>>>({});
+  const tempEdited = useRef(false);
   const [closeParent, setCloseParent] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -98,6 +100,7 @@ export function TotemSplitPage() {
     const options = product ? storagesOf(product) : [];
     setStorage(options.includes(label.storageType) ? label.storageType : (options[0] ?? label.storageType));
     setTemps({});
+    setTempSources({});
     setCount(2);
     setCloseParent(false);
     setSubmitError('');
@@ -116,7 +119,7 @@ export function TotemSplitPage() {
     let created: SplitResult | null = null;
     try {
       const payload = { count, storageType: storage, storageTemperature: temperature, responsibleName: responsible, closeParent };
-      const { data } = await labelApi.split(parent.id, { ...payload, handlerToken: getHandlerToken() || undefined, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
+      const { data } = await labelApi.split(parent.id, { ...payload, handlerToken: getHandlerToken() || undefined, temperatureSource: tempSources[storage], requestId: requests.idFor({ ...payload, parentId: parent.id }) });
       created = data.data;
       requests.reset(); // a próxima divisão, mesmo igual, é outro pedido
       await printSplitChildren(created, logo(), preview.data.fractionedAt);
@@ -435,11 +438,15 @@ export function TotemSplitPage() {
           layout="numeric"
           maxLength={6}
           confirmLabel="Confirmar temperatura"
-          onCancel={() => setSheet(false)}
+          onLiveChange={() => { tempEdited.current = true; }}
+          onCancel={() => { tempEdited.current = false; setSheet(false); }}
           onConfirm={(value) => {
             const temperature = parseTemperature(value);
             if (temperature === null) return 'Digite uma temperatura válida, em °C (de −50 a 30).';
+            const source = resolveTemperatureSource({ value: temperature, suggested: DEFAULT_TEMP[storage], edited: tempEdited.current, previous: tempSources[storage] });
             setTemps((current) => ({ ...current, [storage]: temperature }));
+            setTempSources((current) => ({ ...current, [storage]: source }));
+            tempEdited.current = false;
             setSubmitError('');
             setSheet(false);
           }}

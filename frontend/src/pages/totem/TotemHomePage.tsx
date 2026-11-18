@@ -221,7 +221,7 @@ export function TotemHomePage() {
           ) : (
             <div className="grid gap-3 sm:gap-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 260px), 1fr))' }}>
               {visible.map((product) => (
-                <ProductTile key={product.id} product={product} onPress={() => navigate(`/totem/etiqueta/${product.id}`)} />
+                <ProductTile key={product.id} product={product} onPress={() => navigate(`/totem/etiqueta/${product.id}`, { state: { flowStart: performance.now() } })} />
               ))}
             </div>
           )

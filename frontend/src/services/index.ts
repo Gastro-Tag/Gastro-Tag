@@ -6,7 +6,7 @@ import type {
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
   ShelfLifeRule, RuleFilters, AppSettings, SettingsUpdateMeta, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
-  DueLabelsResult, KitchenInfo, LabelExportParams, TotemOperator, VerifyOperatorResult,
+  DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
 
 // ── Auth ────────────────────────────────────────────────
@@ -125,6 +125,10 @@ export const labelApi = {
   /** Etiquetas ATIVAS vencidas, que vencem hoje e amanhã (data da cozinha). */
   due: () =>
     api.get<DueLabelsResult>('/labels/due'),
+
+  /** Números da cozinha (ADMIN): tempo do fluxo e origem da temperatura. Sem datas, últimos 7 dias. */
+  metrics: (params?: LabelMetricsParams) =>
+    api.get<ApiResponse<LabelMetrics>>('/labels/metrics', { params }),
 
   /** CSV (ADMIN) com os filtros da lista + período de criação. Devolve o arquivo e o nome sugerido. */
   exportCsv: async (params: LabelExportParams): Promise<{ blob: Blob; filename: string }> => {

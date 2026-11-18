@@ -1,4 +1,4 @@
-import type { StorageType } from '@/types';
+import type { StorageType, TemperatureSource } from '@/types';
 
 /** Faixa aceita pela API na etiqueta (°C). */
 export const TEMP_MIN = -50;
@@ -49,4 +49,19 @@ export function formatTemperatureRange(min: number | null | undefined, max: numb
   if (min != null) return `mínimo ${formatTemperatureShort(min)}`;
   if (max != null) return `máximo ${formatTemperatureShort(max)}`;
   return null;
+}
+
+/**
+ * Origem da temperatura confirmada.
+ * - SUGERIDO: o valor final é exatamente a sugestão e o operador não digitou nada
+ *   (botão "Usar 4 °C" ou teclado já preenchido confirmado sem tocar).
+ * - DIGITADO: qualquer digitação/alteração, mesmo que o resultado tenha voltado a ser igual à sugestão.
+ * `previous` vale quando o teclado é reaberto e confirmado sem edição: mantém a origem já decidida.
+ */
+export function resolveTemperatureSource(opts: {
+  value: number; suggested: number; edited: boolean; previous?: TemperatureSource;
+}): TemperatureSource {
+  if (opts.edited) return 'DIGITADO';
+  if (opts.previous) return opts.previous;
+  return opts.value === opts.suggested ? 'SUGERIDO' : 'DIGITADO';
 }

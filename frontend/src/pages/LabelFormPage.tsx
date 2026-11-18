@@ -41,6 +41,8 @@ export function LabelFormPage() {
   const [productTry, setProductTry] = useState(0);
   const [previewTry, setPreviewTry] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  // A temperatura é SUGERIDO só se veio do botão "Usar" e não foi mexida depois.
+  const [tempFromSuggestion, setTempFromSuggestion] = useState(false);
   const [requests] = useState(() => createRequestKeeper('gastrotag:requestId:label-form'));
   const [previewLoading, setPreviewLoading] = useState(false);
   const [preview, setPreview] = useState<(LabelPreview & { requestKey: string }) | null>(null);
@@ -172,7 +174,8 @@ export function LabelFormPage() {
         storageType: form.storageType,
         storageTemperature: temperature,
       };
-      const { data } = await labelApi.create({ ...payload, requestId: requests.idFor(payload) });
+      const temperatureSource = tempFromSuggestion && temperature === suggested ? 'SUGERIDO' : 'DIGITADO';
+      const { data } = await labelApi.create({ ...payload, temperatureSource, requestId: requests.idFor(payload) });
       createdLabel = data.data;
       requests.reset();
       printLabel(createdLabel, logoUrl);
@@ -399,7 +402,7 @@ export function LabelFormPage() {
                 <input
                   id="storage-temperature"
                   value={form.storageTemp}
-                  onChange={(e) => setField('storageTemp', e.target.value)}
+                  onChange={(e) => { setTempFromSuggestion(false); setField('storageTemp', e.target.value); }}
                   className={cn('input pl-10', tempInvalid && 'border-rose-400')}
                   placeholder="Digite a temperatura, ex.: 4 ou -18"
                   inputMode="decimal"
@@ -422,7 +425,7 @@ export function LabelFormPage() {
                     <button
                       type="button"
                       className="btn btn-outline btn-sm"
-                      onClick={() => setField('storageTemp', temperatureDraft(suggested))}
+                      onClick={() => { setTempFromSuggestion(true); setField('storageTemp', temperatureDraft(suggested)); }}
                     >
                       Usar {formatTemperatureShort(suggested)}
                     </button>

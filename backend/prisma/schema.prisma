@@ -113,44 +113,49 @@ model ProductLot {
 
 // ── Etiqueta gerada ──────────────────────────────────────
 model Label {
-  id                     String         @id @default(uuid())
-  shortCode              String         @unique @map("short_code")
-  productId              String         @map("product_id")
-  userId                 String         @map("user_id")
+  id                     String             @id @default(uuid())
+  shortCode              String             @unique @map("short_code")
+  productId              String             @map("product_id")
+  userId                 String             @map("user_id")
   lot                    String
-  lotId                  String?        @map("lot_id") // nulo: validade informada na hora
-  openedAt               DateTime       @map("opened_at") @db.Date
-  discardAt              DateTime       @map("discard_at") @db.Date
-  storageType            StorageType    @map("storage_type")
-  storageTemp            String         @map("storage_temp") // texto impresso; nas novas, gerado pelo servidor ("4,0 °C")
-  storageTemperature     Decimal?       @map("storage_temperature") @db.Decimal(4, 1) // nulo nas antigas sem texto numérico
-  ruleId                 String?        @map("rule_id")
-  ruleVersion            Int?           @map("rule_version")
-  ruleSource             String?        @map("rule_source") // cópia da fonte da regra usada
-  shelfLifeDays          Int            @map("shelf_life_days")
-  originalExpiryDate     DateTime       @map("original_expiry_date") @db.Date
-  cappedByOriginalExpiry Boolean        @default(false) @map("capped_by_original_expiry")
-  productName            String         @map("product_name")
-  productBrand           String         @map("product_brand")
-  responsibleName        String?        @map("responsible_name")
-  handlerId              String?        @map("handler_id") // operador confirmado com PIN no totem; nulo: nome digitado
-  requestId              String?        @map("request_id") // repetir o envio devolve a mesma etiqueta
-  printedAt              DateTime?      @map("printed_at")
-  printCount             Int            @default(0) @map("print_count")
+  lotId                  String?            @map("lot_id") // nulo: validade informada na hora
+  openedAt               DateTime           @map("opened_at") @db.Date
+  discardAt              DateTime           @map("discard_at") @db.Date
+  storageType            StorageType        @map("storage_type")
+  storageTemp            String             @map("storage_temp") // texto impresso; nas novas, gerado pelo servidor ("4,0 °C")
+  storageTemperature     Decimal?           @map("storage_temperature") @db.Decimal(4, 1) // nulo nas antigas sem texto numérico
+  ruleId                 String?            @map("rule_id")
+  ruleVersion            Int?               @map("rule_version")
+  ruleSource             String?            @map("rule_source") // cópia da fonte da regra usada
+  shelfLifeDays          Int                @map("shelf_life_days")
+  originalExpiryDate     DateTime           @map("original_expiry_date") @db.Date
+  cappedByOriginalExpiry Boolean            @default(false) @map("capped_by_original_expiry")
+  productName            String             @map("product_name")
+  productBrand           String             @map("product_brand")
+  responsibleName        String?            @map("responsible_name")
+  handlerId              String?            @map("handler_id") // operador confirmado com PIN no totem; nulo: nome digitado
+  requestId              String?            @map("request_id") // repetir o envio devolve a mesma etiqueta
+  printedAt              DateTime?          @map("printed_at")
+  printCount             Int                @default(0) @map("print_count")
   // Destino da etiqueta: ativa até ser usada, descartada ou cancelada. Não há desfazer.
-  status                 LabelStatus    @default(ATIVA)
+  status                 LabelStatus        @default(ATIVA)
   outcome                LabelOutcome?
-  discardReason          DiscardReason? @map("discard_reason")
-  closeNote              String?        @map("close_note")
-  closedAt               DateTime?      @map("closed_at")
-  closedById             String?        @map("closed_by_id")
-  closedByName           String?        @map("closed_by_name") // cópia do nome de quem encerrou
+  discardReason          DiscardReason?     @map("discard_reason")
+  closeNote              String?            @map("close_note")
+  closedAt               DateTime?          @map("closed_at")
+  closedById             String?            @map("closed_by_id")
+  closedByName           String?            @map("closed_by_name") // cópia do nome de quem encerrou
   // Dividir: a filha aponta para a etiqueta de origem e guarda o dia em que foi fracionada.
-  parentLabelId          String?        @map("parent_label_id")
-  fractionedAt           DateTime?      @map("fractioned_at") @db.Date
-  splitRequestId         String?        @map("split_request_id") // repetir o envio devolve as mesmas filhas
-  cappedByParent         Boolean        @default(false) @map("capped_by_parent") // descarte da filha limitado pela origem
-  createdAt              DateTime       @default(now()) @map("created_at")
+  parentLabelId          String?            @map("parent_label_id")
+  fractionedAt           DateTime?          @map("fractioned_at") @db.Date
+  splitRequestId         String?            @map("split_request_id") // repetir o envio devolve as mesmas filhas
+  cappedByParent         Boolean            @default(false) @map("capped_by_parent") // descarte da filha limitado pela origem
+  // Medição do cliente (toque no produto até criar a etiqueta), em ms. Não serve para auditoria: o aparelho
+  // pode mandar qualquer valor dentro da faixa. Nulo nas antigas e quando o cliente não mediu.
+  flowMs                 Int?               @map("flow_ms")
+  // A temperatura impressa foi a sugerida (4 / −18 °C) confirmada ou digitada pelo operador. Nulo: não informado.
+  temperatureSource      TemperatureSource? @map("temperature_source")
+  createdAt              DateTime           @default(now()) @map("created_at")
 
   product    Product        @relation(fields: [productId], references: [id])
   user       User           @relation(fields: [userId], references: [id])
@@ -173,6 +178,11 @@ model Label {
   @@index([parentLabelId, splitRequestId])
   @@index([handlerId])
   @@map("labels")
+}
+
+enum TemperatureSource {
+  SUGERIDO
+  DIGITADO
 }
 
 enum LabelStatus {

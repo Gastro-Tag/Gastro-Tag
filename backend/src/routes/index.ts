@@ -104,9 +104,10 @@ router.put('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.c
 router.delete('/shelf-life-rules/:id', authenticate, requireAdmin, RuleController.deactivate);
 
 router.get('/labels', authenticate, LabelController.list);
-// Antes de /labels/:id, senão "due" e "export.csv" seriam lidos como id.
+// Antes de /labels/:id, senão "due", "export.csv" e "metrics" seriam lidos como id.
 router.get('/labels/due', authenticate, LabelController.due);
 router.get('/labels/export.csv', authenticate, requireAdmin, LabelController.exportCsv);
+router.get('/labels/metrics', authenticate, requireAdmin, LabelController.metrics);
 router.get('/labels/:id', authenticate, LabelController.getById);
 router.post('/labels/preview', authenticate, LabelController.preview);
 router.post('/labels', authenticate, LabelController.create);

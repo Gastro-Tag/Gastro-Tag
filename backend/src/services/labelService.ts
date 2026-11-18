@@ -1,4 +1,6 @@
-﻿import { DiscardReason, LabelOutcome, LabelStatus, Prisma, ShelfLifeRule, StorageType } from '@prisma/client';
+﻿import {
+  DiscardReason, LabelOutcome, LabelStatus, Prisma, ShelfLifeRule, StorageType, TemperatureSource,
+} from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import {
@@ -34,6 +36,10 @@ export interface LabelInput {
   storageTemperature?: number;
   /** Gerado pelo aparelho a cada pedido: o reenvio do mesmo pedido devolve a etiqueta já criada. */
   requestId?: string;
+  /** Medição do cliente (ms do toque no produto até criar a etiqueta); não é confiável para auditoria. */
+  flowMs?: number;
+  /** A temperatura foi a sugerida confirmada ou digitada pelo operador. */
+  temperatureSource?: TemperatureSource;
 }
 
 export interface CloseInput {
@@ -60,6 +66,9 @@ export interface SplitInput extends SplitPreviewInput {
   closeParent?: boolean;
   /** Gerado pelo aparelho a cada pedido: o reenvio devolve as filhas já criadas. */
   requestId?: string;
+  /** Medição do cliente para o Dividir inteiro; gravada igual em cada filha. */
+  flowMs?: number;
+  temperatureSource?: TemperatureSource;
 }
 
 export interface Actor { id: string; name: string; role: string }
@@ -421,14 +430,61 @@ const CSV_HEADER = [
   'Código', 'Produto', 'Marca', 'Lote', 'Lote cadastrado', 'Validade do fabricante', 'Abertura', 'Fracionado em', 'Origem (código)',
   'Armazenamento', 'Temperatura', 'Descarte', 'Prazo (dias)', 'Regra', 'Responsável', 'Operador com PIN',
   'Situação', 'Destino', 'Motivo', 'Observação', 'Encerrado em', 'Encerrado por', 'Criada em',
+  // No fim, para não deslocar as colunas anteriores.
+  'Tempo (s)', 'Origem da temperatura',
 ];
 const STORAGE_LABELS: Record<StorageType, string> = { REFRIGERADO: 'Refrigerado', CONGELADO: 'Congelado' };
 const STATUS_LABELS: Record<LabelStatus, string> = { ATIVA: 'Ativa', ENCERRADA: 'Encerrada' };
 const OUTCOME_LABELS: Record<LabelOutcome, string> = { USADO: 'Usado', DESCARTADO: 'Descartado', CANCELADO: 'Cancelado' };
+const TEMPERATURE_SOURCE_LABELS: Record<TemperatureSource, string> = { SUGERIDO: 'Sugerida', DIGITADO: 'Digitada' };
+/** Segundos com uma casa e vírgula ("12,3"); vazio sem medição. */
+const csvSeconds = (flowMs: number | null) => (flowMs === null ? '' : (flowMs / 1000).toFixed(1).replace('.', ','));
 const REASON_LABELS: Record<DiscardReason, string> = {
   PRAZO_VENCIDO: 'Prazo vencido', ALTERACAO_SENSORIAL: 'Alteração sensorial',
   EMBALAGEM_DANIFICADA: 'Embalagem danificada', OUTRO: 'Outro',
 };
+
+/** Período padrão do relatório de tempo e temperatura (dias da cozinha, contando hoje) e o máximo aceito. */
+const METRICS_DEFAULT_DAYS = 7;
+export const METRICS_MAX_DAYS = 92;
+
+export interface MetricsFilters { from?: string; to?: string; productId?: string }
+
+/** Instante UTC sem fuso, no formato de `labels.created_at` (TIMESTAMP(3) gravado em UTC). */
+const utcTimestamp = (date: Date) => date.toISOString().slice(0, 23);
+
+/**
+ * Teto do tempo plausível no relatório (10 min). Acima dele a medição fica gravada (e no CSV), mas não
+ * entra na mediana nem no p90: aparelho esquecido aberto não distorce a conta. Conta em `discardedFlows`.
+ */
+export const FLOW_PLAUSIBLE_MAX_MS = 600_000;
+
+const roundMs = (value: number | null) => (value === null ? null : Math.round(value));
+
+/**
+ * Etiquetas do período para o relatório, já sem as canceladas (erro de cadastro, não trabalho da
+ * bancada). `action_key` junta as filhas de um mesmo Dividir (mesma origem e mesmo pedido): o tempo
+ * foi medido uma vez para o Dividir inteiro e gravado igual em cada filha. Dividir sem `requestId`
+ * não tem como ser agrupado e conta cada filha.
+ */
+function metricsBase(start: Date, end: Date, productId: string | undefined, timeZone: string) {
+  return Prisma.sql`
+    base AS (
+      SELECT l.id, l.flow_ms, l.temperature_source,
+        (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE ${timeZone})::date AS day,
+        CASE WHEN l.parent_label_id IS NOT NULL AND l.split_request_id IS NOT NULL
+          THEN l.parent_label_id || ':' || l.split_request_id ELSE l.id END AS action_key
+      FROM labels l
+      WHERE l.created_at >= ${utcTimestamp(start)}::timestamp AND l.created_at < ${utcTimestamp(end)}::timestamp
+        AND l.outcome IS DISTINCT FROM 'CANCELADO'
+        ${productId ? Prisma.sql`AND l.product_id = ${productId}` : Prisma.empty}
+    ),
+    measured AS (
+      SELECT day, action_key, MIN(flow_ms) AS flow_ms
+      FROM base WHERE flow_ms IS NOT NULL GROUP BY day, action_key
+    ),
+    flows AS (SELECT * FROM measured WHERE flow_ms <= ${FLOW_PLAUSIBLE_MAX_MS})`;
+}
 
 /** Etiquetas e lotes considerados no histórico do produto (os mais recentes de cada um). */
 const EXPIRY_HISTORY_LIMIT = 200;
@@ -576,6 +632,7 @@ export const LabelService = {
             productName: preview.product.name, productBrand: preview.product.brand,
             responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
             requestId: data.requestId,
+            flowMs: data.flowMs ?? null, temperatureSource: data.temperatureSource ?? null,
           },
           include: labelInclude,
         });
@@ -669,10 +726,82 @@ export const LabelService = {
       STATUS_LABELS[label.status], label.outcome ? OUTCOME_LABELS[label.outcome] : '',
       label.discardReason ? REASON_LABELS[label.discardReason] : '', label.closeNote ?? '',
       dateTime(label.closedAt), label.closedByName ?? '', dateTime(label.createdAt),
+      csvSeconds(label.flowMs), label.temperatureSource ? TEMPERATURE_SOURCE_LABELS[label.temperatureSource] : '',
     ]);
     return {
       csv: toCsv(CSV_HEADER, rows),
       filename: `etiquetas-${dateOnly(kitchenToday())}.csv`,
+    };
+  },
+
+  /**
+   * Relatório de tempo por etiqueta e de temperaturas digitadas x sugeridas, agregado no banco.
+   * Período pela data de criação no fuso da cozinha, `from` e `to` inclusive (padrão: os últimos 7 dias
+   * da cozinha; no máximo 92). Contagens (`total`, `withTemperatureSource`, `suggestedCount`,
+   * `typedCount`) são por etiqueta, origens e filhas, sem as canceladas: cada uma é impressa com a sua
+   * temperatura. O tempo (`withFlow`, mediana, p90) é por ação medida: uma por etiqueta criada e uma
+   * por Dividir, senão um Dividir de 20 filhas pesaria 20 vezes. Ações acima de `FLOW_PLAUSIBLE_MAX_MS`
+   * ficam fora do tempo e contam em `discardedFlows`. `flowMs` é medido no aparelho e não serve para auditoria.
+   */
+  async metrics(filters: MetricsFilters) {
+    const today = kitchenToday();
+    const toDate = filters.to ? parseDateOnly(filters.to, 'Data final') : today;
+    const fromDate = filters.from ? parseDateOnly(filters.from, 'Data inicial')
+      : addDays(toDate, -(METRICS_DEFAULT_DAYS - 1));
+    if (fromDate > toDate) throw Errors.validation('A data inicial deve ser menor ou igual à data final.');
+    if (daysBetween(fromDate, toDate) + 1 > METRICS_MAX_DAYS) {
+      throw Errors.validation(`O período do relatório é de no máximo ${METRICS_MAX_DAYS} dias.`);
+    }
+    const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
+    const base = metricsBase(
+      kitchenDayStartInstant(fromDate), kitchenDayStartInstant(addDays(toDate, 1)), filters.productId, timeZone,
+    );
+
+    const [[summary], days] = await Promise.all([
+      prisma.$queryRaw<{
+        total: number; with_flow: number; discarded_flows: number; flow_median: number | null; flow_p90: number | null;
+        with_source: number; suggested: number; typed: number;
+      }[]>`
+        WITH ${base}
+        SELECT
+          (SELECT COUNT(*) FROM base)::int AS total,
+          (SELECT COUNT(*) FROM flows)::int AS with_flow,
+          (SELECT COUNT(*) FROM measured WHERE flow_ms > ${FLOW_PLAUSIBLE_MAX_MS})::int AS discarded_flows,
+          (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY flow_ms) FROM flows)::float8 AS flow_median,
+          (SELECT percentile_cont(0.9) WITHIN GROUP (ORDER BY flow_ms) FROM flows)::float8 AS flow_p90,
+          (SELECT COUNT(*) FROM base WHERE temperature_source IS NOT NULL)::int AS with_source,
+          (SELECT COUNT(*) FROM base WHERE temperature_source = 'SUGERIDO')::int AS suggested,
+          (SELECT COUNT(*) FROM base WHERE temperature_source = 'DIGITADO')::int AS typed`,
+      // Todos os dias do período, inclusive os sem etiqueta (zeros), em ordem.
+      prisma.$queryRaw<{ date: string; total: number; flow_median: number | null; suggested: number; typed: number }[]>`
+        WITH ${base},
+        per_day AS (
+          SELECT day, COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE temperature_source = 'SUGERIDO')::int AS suggested,
+            COUNT(*) FILTER (WHERE temperature_source = 'DIGITADO')::int AS typed
+          FROM base GROUP BY day
+        ),
+        flow_day AS (
+          SELECT day, percentile_cont(0.5) WITHIN GROUP (ORDER BY flow_ms)::float8 AS flow_median
+          FROM flows GROUP BY day
+        )
+        SELECT to_char(d.day, 'YYYY-MM-DD') AS date, COALESCE(p.total, 0) AS total, f.flow_median,
+          COALESCE(p.suggested, 0) AS suggested, COALESCE(p.typed, 0) AS typed
+        FROM generate_series(${dateOnly(fromDate)}::date, ${dateOnly(toDate)}::date, interval '1 day') AS d(day)
+        LEFT JOIN per_day p ON p.day = d.day::date
+        LEFT JOIN flow_day f ON f.day = d.day::date
+        ORDER BY d.day`,
+    ]);
+
+    return {
+      from: dateOnly(fromDate)!, to: dateOnly(toDate)!,
+      total: summary.total, withFlow: summary.with_flow, discardedFlows: summary.discarded_flows,
+      flowMedianMs: roundMs(summary.flow_median), flowP90Ms: roundMs(summary.flow_p90),
+      withTemperatureSource: summary.with_source, suggestedCount: summary.suggested, typedCount: summary.typed,
+      byDay: days.map((day) => ({
+        date: day.date, total: day.total, flowMedianMs: roundMs(day.flow_median),
+        suggestedCount: day.suggested, typedCount: day.typed,
+      })),
     };
   },
 
@@ -788,6 +917,7 @@ export const LabelService = {
                 responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
                 parentLabelId: parent.id, fractionedAt, splitRequestId: data.requestId,
                 cappedByParent: calculation.cappedByParent,
+                flowMs: data.flowMs ?? null, temperatureSource: data.temperatureSource ?? null,
               },
               select: { id: true },
             });

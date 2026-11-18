@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SUGGESTED_TEMPERATURE, formatTemperature, formatTemperatureRange, formatTemperatureShort,
-  parseTemperature, temperatureDraft,
+  parseTemperature, resolveTemperatureSource, temperatureDraft,
 } from './temperature';
 
 describe('parseTemperature', () => {
@@ -53,5 +53,18 @@ describe('formatação', () => {
   });
   it('sugestões são as esperadas', () => {
     expect(SUGGESTED_TEMPERATURE).toEqual({ REFRIGERADO: 4, CONGELADO: -18 });
+  });
+});
+
+describe('resolveTemperatureSource', () => {
+  it('SUGERIDO só quando sem edição e igual à sugestão', () => {
+    expect(resolveTemperatureSource({ value: 4, suggested: 4, edited: false })).toBe('SUGERIDO');
+    expect(resolveTemperatureSource({ value: 5, suggested: 4, edited: false })).toBe('DIGITADO');
+  });
+  it('qualquer edição vira DIGITADO, mesmo voltando ao valor sugerido', () => {
+    expect(resolveTemperatureSource({ value: 4, suggested: 4, edited: true })).toBe('DIGITADO');
+  });
+  it('reabrir sem editar mantém a origem anterior', () => {
+    expect(resolveTemperatureSource({ value: 4, suggested: 4, edited: false, previous: 'DIGITADO' })).toBe('DIGITADO');
   });
 });

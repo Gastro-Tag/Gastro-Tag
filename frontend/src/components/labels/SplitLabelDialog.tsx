@@ -35,6 +35,8 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
   const [storage, setStorage] = useState<StorageType>(parent.storageType);
   // A sugestão não é medição: o campo começa vazio e o operador digita ou confirma o valor.
   const [tempText, setTempText] = useState('');
+  // SUGERIDO só se o valor veio do botão "Usar" e não foi mexido depois.
+  const [tempFromSuggestion, setTempFromSuggestion] = useState(false);
   const [responsible, setResponsible] = useState(userName);
   const [closeParent, setCloseParent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -67,7 +69,8 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
     let result: SplitResult;
     try {
       // Mesmo requestId se o pedido for reenviado (rede caiu, toque repetido): o servidor devolve as filhas já criadas.
-      const { data } = await labelApi.split(parent.id, { ...payload, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
+      const temperatureSource = tempFromSuggestion && temperature === suggested ? 'SUGERIDO' : 'DIGITADO';
+      const { data } = await labelApi.split(parent.id, { ...payload, temperatureSource, requestId: requests.idFor({ ...payload, parentId: parent.id }) });
       result = data.data;
       requests.reset();
     } catch (err) {
@@ -150,7 +153,7 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
             <input
               id="split-temperature" className={cn('input min-h-[44px] pl-10', tempInvalid && 'border-rose-400')}
               inputMode="decimal" autoComplete="off" maxLength={10} placeholder="Ex.: 4 ou -18"
-              value={tempText} onChange={(e) => { setTempText(e.target.value); setError(''); }}
+              value={tempText} onChange={(e) => { setTempText(e.target.value); setTempFromSuggestion(false); setError(''); }}
               aria-invalid={tempInvalid} aria-describedby="split-temperature-help"
             />
           </div>
@@ -163,7 +166,7 @@ export function SplitLabelDialog({ parent, onClose, onDone }: Props) {
             {temperature !== suggested && (
               <p className="flex flex-wrap items-center gap-2 text-slate-500">
                 <span>Sugestão: {formatTemperatureShort(suggested)} (não é medição).</span>
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => setTempText(temperatureDraft(suggested))}>
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => { setTempText(temperatureDraft(suggested)); setTempFromSuggestion(true); }}>
                   Usar {formatTemperatureShort(suggested)}
                 </button>
               </p>

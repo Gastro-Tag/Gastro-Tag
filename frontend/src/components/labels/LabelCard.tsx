@@ -159,6 +159,14 @@ export function LabelCard({ label, onReprint, onSplit, onCloseLabel, onSearchCod
             </div>
           )}
 
+          {(label.flowMs != null || label.temperatureSource) && (
+            <div className="mt-1 text-[11px] text-slate-400">
+              {label.flowMs != null && <>Tempo no aparelho: {(label.flowMs / 1000).toFixed(1).replace('.', ',')} s</>}
+              {label.flowMs != null && label.temperatureSource && ' • '}
+              {label.temperatureSource && <>Temperatura: {label.temperatureSource === 'SUGERIDO' ? 'sugerida confirmada' : 'digitada'}</>}
+            </div>
+          )}
+
           {(label.childrenCount ?? 0) > 0 && <Children label={label} />}
         </div>
       </div>
