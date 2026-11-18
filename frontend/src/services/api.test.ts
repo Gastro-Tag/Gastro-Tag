@@ -68,7 +68,7 @@ describe('interceptor de 401', () => {
     await expect(api.get('/a')).rejects.toBeTruthy();
     expect(localStorage.getItem('accessToken')).toBeNull();
     expect(localStorage.getItem('refreshToken')).toBeNull();
-    expect(hrefSetter).toHaveBeenCalledWith('/login');
+    expect(hrefSetter).toHaveBeenCalledWith('/login?next=%2Fpainel');
   });
 
   it('no totem o logout vai para /totem/login', async () => {
@@ -83,7 +83,7 @@ describe('interceptor de 401', () => {
     install((c) => { if (c.url?.includes('/auth/refresh')) refreshCalls++; return { status: 401 }; });
     await expect(api.get('/a')).rejects.toBeTruthy();
     expect(refreshCalls).toBe(0);
-    expect(hrefSetter).toHaveBeenCalledWith('/login');
+    expect(hrefSetter).toHaveBeenCalledWith('/login?next=%2Fpainel');
   });
 
   it('falha de rede no refresh não desconecta', async () => {
