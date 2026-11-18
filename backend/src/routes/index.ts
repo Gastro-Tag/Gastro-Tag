@@ -86,6 +86,8 @@ router.post('/totem/operators/verify', authenticate, verifyPinRateLimit, TotemCo
 
 router.get('/products', authenticate, ProductController.list);
 router.get('/products/categories', authenticate, ProductController.getCategories);
+// Antes de /products/:id, senão "without-rule" seria lido como id.
+router.get('/products/without-rule', authenticate, requireAdmin, ProductController.withoutRule);
 router.get('/products/:id', authenticate, ProductController.getById);
 router.post('/products', authenticate, requireAdmin, ProductController.create);
 router.put('/products/:id', authenticate, requireAdmin, ProductController.update);

@@ -1,6 +1,7 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, StorageType } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
+import { hasActiveRuleFor, productShelfLifeDays } from './labelService';
 import {
   PENDING_LOT_CODE, addDays, daysUntil, getExpiryStatus, kitchenToday, kitchenWeekAgo, summarizeLots,
 } from '../utils/dateUtils';
@@ -178,6 +179,41 @@ export const ProductService = {
     await ProductService.getById(id);
     // Soft delete
     return prisma.product.update({ where: { id }, data: { active: false } });
+  },
+
+  /**
+   * Produtos ativos que, em algum armazenamento, gerariam etiqueta "sem regra validada": nenhuma regra
+   * ativa do produto nem da categoria, então vale o prazo do produto. Com 0 dias no produto a etiqueta
+   * é recusada (422 em `resolveShelfLifeDays`), então esse armazenamento não entra.
+   */
+  async listWithoutRule() {
+    const [products, activeRules] = await Promise.all([
+      prisma.product.findMany({
+        where: { active: true },
+        select: { id: true, name: true, brand: true, category: true, daysValidRefrigerated: true, daysValidFrozen: true },
+        orderBy: [{ name: 'asc' }, { brand: 'asc' }, { id: 'asc' }],
+      }),
+      prisma.shelfLifeRule.findMany({
+        where: { active: true },
+        select: { productId: true, category: true, storageType: true },
+      }),
+    ]);
+    const storageTypes: StorageType[] = ['REFRIGERADO', 'CONGELADO'];
+    const data = products
+      .map(({ daysValidRefrigerated, daysValidFrozen, ...product }) => ({
+        ...product,
+        missing: storageTypes
+          .map((storageType) => ({
+            storageType,
+            productDays: productShelfLifeDays({ daysValidRefrigerated, daysValidFrozen }, storageType),
+          }))
+          .filter(({ storageType, productDays }) => productDays > 0 && !hasActiveRuleFor(activeRules, product, storageType)),
+      }))
+      .filter((product) => product.missing.length > 0);
+    return {
+      data,
+      meta: { total: data.length, missingCount: data.reduce((sum, product) => sum + product.missing.length, 0) },
+    };
   },
 
   async getCategories() {

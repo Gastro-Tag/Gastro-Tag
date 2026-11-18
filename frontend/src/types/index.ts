@@ -357,6 +357,20 @@ export interface ShelfLifeRule {
   createdBy:         { name: string } | null;
 }
 
+/** Produto ativo que ainda imprime etiqueta "sem regra validada" (GET /products/without-rule, ADMIN). */
+export interface ProductWithoutRule {
+  id:       string;
+  name:     string;
+  brand:    string;
+  category: string | null;
+  missing:  { storageType: StorageType; productDays: number }[];
+}
+
+export interface ProductsWithoutRuleMeta {
+  total:        number;
+  missingCount: number;
+}
+
 export interface RuleFilters {
   productId?:       string;
   category?:        string;

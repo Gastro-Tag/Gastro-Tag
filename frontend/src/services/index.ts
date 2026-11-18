@@ -4,7 +4,7 @@ import type {
   Product, ProductLot, CreateProductDTO, ProductFilters,
   Label, CreateLabelDTO, LabelPreview, LabelPreviewDTO,
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
-  ShelfLifeRule, RuleFilters, RuleVersionDTO, CreateRuleDTO,
+  ShelfLifeRule, RuleFilters, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
   DueLabelsResult, KitchenInfo, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
@@ -80,6 +80,10 @@ export const productApi = {
 
   getCategories: () =>
     api.get<ApiResponse<string[]>>('/products/categories'),
+
+  /** ADMIN: produtos ativos que ainda imprimem etiqueta sem regra validada. */
+  withoutRule: () =>
+    api.get<ApiResponse<ProductWithoutRule[]> & { meta: ProductsWithoutRuleMeta }>('/products/without-rule'),
 };
 
 // ── Lots ────────────────────────────────────────────────

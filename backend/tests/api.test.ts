@@ -1909,3 +1909,114 @@ describe('etapa G2a: e-mail sem diferenciar maiúsculas, admin no boot e mensage
     });
   });
 });
+
+describe('produtos sem regra validada', () => {
+  const tag = suffix.slice(0, 8);
+  const category = `Sem regra ${tag}`;
+  let adminToken = '';
+  const ids: Record<string, string> = {};
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const withoutRule = (token = asAdmin()) =>
+    request(app).get('/api/products/without-rule').set('Authorization', token);
+  const createProduct = async (key: string, data: { category?: string; daysValidRefrigerated: number; daysValidFrozen: number }) => {
+    const product = await prisma.product.create({ data: { name: `Sem regra ${tag} ${key}`, brand: 'Teste', ...data } });
+    productIds.push(product.id);
+    ids[key] = product.id;
+  };
+  const createRule = async (body: object) => {
+    const res = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+      .send({ ...ruleBody, shelfLifeDays: 5, ...body });
+    expect(res.status).toBe(201);
+    ruleIds.push(res.body.data.id);
+    return res.body.data.id as string;
+  };
+  const entry = (body: { data: { id: string }[] }, key: string) => body.data.find((item) => item.id === ids[key]);
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.40')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+
+    await createProduct('a-sem-regra', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('b-regra-produto', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('c-regra-categoria', { category, daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('d-regra-desativada', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('e-zero-dias', { daysValidRefrigerated: 4, daysValidFrozen: 0 });
+    await createProduct('g-inativo', { daysValidRefrigerated: 3, daysValidFrozen: 30 });
+    await createProduct('h-regra-so-refrigerado', { daysValidRefrigerated: 3, daysValidFrozen: 45 });
+    await prisma.product.update({ where: { id: ids['g-inativo'] }, data: { active: false } });
+
+    await createRule({ productId: ids['b-regra-produto'], storageType: 'REFRIGERADO' });
+    await createRule({ productId: ids['b-regra-produto'], storageType: 'CONGELADO', shelfLifeDays: 20 });
+    await createRule({ category, storageType: 'REFRIGERADO' });
+    await createRule({ category, storageType: 'CONGELADO', shelfLifeDays: 20 });
+    await createRule({ productId: ids['h-regra-so-refrigerado'], storageType: 'REFRIGERADO' });
+    const deactivated = await createRule({ productId: ids['d-regra-desativada'], storageType: 'REFRIGERADO' });
+    await request(app).delete(`/api/shelf-life-rules/${deactivated}`).set('Authorization', asAdmin()).expect(200);
+    // Depois das regras: a regra de categoria usa o texto do cadastro, e este difere só na caixa.
+    await createProduct('f-categoria-outra-caixa', { category: category.toUpperCase(), daysValidRefrigerated: 2, daysValidFrozen: 0 });
+  });
+
+  it('lists the storage types that fall back to the product days, with totals', async () => {
+    const res = await withoutRule();
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(entry(res.body, 'a-sem-regra')).toEqual({
+      id: ids['a-sem-regra'], name: `Sem regra ${tag} a-sem-regra`, brand: 'Teste', category: null,
+      missing: [{ storageType: 'REFRIGERADO', productDays: 3 }, { storageType: 'CONGELADO', productDays: 30 }],
+    });
+    expect(res.body.meta).toEqual({
+      total: res.body.data.length,
+      missingCount: res.body.data.reduce((sum: number, item: { missing: unknown[] }) => sum + item.missing.length, 0),
+    });
+    expect(res.body.data.every((item: { missing: unknown[] }) => item.missing.length > 0)).toBe(true);
+    const mine = res.body.data.filter((item: { name: string }) => item.name.startsWith(`Sem regra ${tag}`))
+      .map((item: { name: string }) => item.name);
+    expect(mine).toEqual([...mine].sort());
+  });
+
+  it('leaves out products covered by a product or category rule, and inactive products', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'b-regra-produto')).toBeUndefined();
+    expect(entry(res.body, 'c-regra-categoria')).toBeUndefined();
+    expect(entry(res.body, 'g-inativo')).toBeUndefined();
+  });
+
+  it('lists only the storage type the product rule does not cover', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'h-regra-so-refrigerado')?.missing).toEqual([{ storageType: 'CONGELADO', productDays: 45 }]);
+  });
+
+  it('does not count a deactivated rule', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'd-regra-desativada')?.missing).toEqual([
+      { storageType: 'REFRIGERADO', productDays: 3 }, { storageType: 'CONGELADO', productDays: 30 },
+    ]);
+  });
+
+  it('leaves out a storage type with 0 days, where the label is refused instead', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'e-zero-dias')?.missing).toEqual([{ storageType: 'REFRIGERADO', productDays: 4 }]);
+    const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: ids['e-zero-dias'], originalExpiryDate: daysFromToday(30), storageType: 'CONGELADO',
+    });
+    expect(preview.status).toBe(422);
+  });
+
+  it('compares the category exactly, like the label calculation', async () => {
+    const res = await withoutRule();
+    expect(entry(res.body, 'f-categoria-outra-caixa')?.missing).toEqual([{ storageType: 'REFRIGERADO', productDays: 2 }]);
+    const preview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: ids['f-categoria-outra-caixa'], originalExpiryDate: daysFromToday(30), storageType: 'REFRIGERADO',
+    });
+    expect(preview.status).toBe(200);
+    expect(preview.body.data.rule.validated).toBe(false);
+  });
+
+  it('is only for administrators', async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.41')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    expect((await withoutRule(`Bearer ${login.body.data.accessToken}`)).status).toBe(403);
+    expect((await request(app).get('/api/products/without-rule')).status).toBe(401);
+  });
+});

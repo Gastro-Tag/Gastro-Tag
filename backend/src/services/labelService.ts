@@ -120,7 +120,10 @@ async function lockLabel(tx: Db, labelId: string) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
 }
 
-/** Regra ativa mais recente do produto; sem ela, a da categoria. Mesma busca na prévia, na etiqueta e no Dividir. */
+/**
+ * Regra ativa mais recente do produto; sem ela, a da categoria. Mesma busca na prévia, na etiqueta e no Dividir.
+ * Ao mudar o critério, mude junto `hasActiveRuleFor` (lista de produtos sem regra).
+ */
 async function findActiveRule(db: Db, product: { id: string; category: string | null }, storageType: StorageType) {
   return await db.shelfLifeRule.findFirst({
     where: { active: true, productId: product.id, storageType },
@@ -131,13 +134,36 @@ async function findActiveRule(db: Db, product: { id: string; category: string | 
   }) : null);
 }
 
+/**
+ * Mesmo critério de `findActiveRule`, em memória, para cruzar muitas regras ativas de uma vez:
+ * regra do produto; senão, regra sem produto com a categoria exatamente igual (sem categoria, não há).
+ */
+export function hasActiveRuleFor(
+  activeRules: { productId: string | null; category: string | null; storageType: StorageType }[],
+  product: { id: string; category: string | null },
+  storageType: StorageType,
+) {
+  return activeRules.some((rule) => rule.storageType === storageType && (
+    rule.productId === product.id
+    || (!!product.category && rule.productId === null && rule.category === product.category)
+  ));
+}
+
+/** Prazo cadastrado no produto para o armazenamento (usado quando não há regra). */
+export function productShelfLifeDays(
+  product: { daysValidRefrigerated: number; daysValidFrozen: number },
+  storageType: StorageType,
+) {
+  return storageType === 'REFRIGERADO' ? product.daysValidRefrigerated : product.daysValidFrozen;
+}
+
 /** Prazo da regra; sem regra, o cadastrado no produto para o armazenamento. */
 function resolveShelfLifeDays(
   rule: ShelfLifeRule | null,
   product: { daysValidRefrigerated: number; daysValidFrozen: number },
   storageType: StorageType,
 ) {
-  const fallbackDays = storageType === 'REFRIGERADO' ? product.daysValidRefrigerated : product.daysValidFrozen;
+  const fallbackDays = productShelfLifeDays(product, storageType);
   const shelfLifeDays = rule?.shelfLifeDays ?? fallbackDays;
   if (shelfLifeDays <= 0) {
     throw Errors.validation(`Produto não possui validade configurada para ${storageType.toLowerCase()}.`);

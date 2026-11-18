@@ -73,6 +73,12 @@ export const ProductController = {
     });
   },
 
+  async withoutRule(_req: Request, res: Response) {
+    const result = await ProductService.listWithoutRule();
+
+    res.json({ success: true, ...result });
+  },
+
   async getCategories(req: Request, res: Response) {
     const categories = await ProductService.getCategories();
 
