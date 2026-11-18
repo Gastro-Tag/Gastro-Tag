@@ -408,8 +408,8 @@ export interface AppSettings {
 
 /** meta do PUT /settings: o que fica bloqueado com a exigência ligada. */
 export interface SettingsUpdateMeta {
-  blockedProducts:     number;
-  blockedCombinations: number;
+  blockedProducts:     number | null;
+  blockedCombinations: number | null;
 }
 
 export interface RuleFilters {

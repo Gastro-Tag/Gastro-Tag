@@ -52,7 +52,9 @@ const measurementFields = {
   // A métrica nunca impede a etiqueta: valor inválido não é gravado e a etiqueta sai normalmente.
   flowMs: z.unknown().optional().transform(validFlowMs),
   // A temperatura confirmada foi a sugerida (4 / −18 °C) ou digitada pelo operador.
-  temperatureSource: z.enum(['SUGERIDO', 'DIGITADO'], { error: 'Origem da temperatura inválida.' }).optional(),
+  // Também nunca impede a etiqueta: valor fora de SUGERIDO/DIGITADO é ignorado (fica sem origem).
+  temperatureSource: z.unknown().optional()
+    .transform((v) => (v === 'SUGERIDO' || v === 'DIGITADO' ? v : undefined)),
 };
 
 const createSchema = labelFields.extend({

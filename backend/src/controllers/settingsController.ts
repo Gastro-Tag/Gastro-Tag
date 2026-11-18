@@ -25,11 +25,11 @@ export const SettingsController = {
     const data = updateSchema.parse(req.body);
     const settings = await SettingsService.update(data, { id: req.user!.sub, name: req.user!.name });
     // O que passa a ser recusado (ou deixa de ser) com o bloqueio ligado.
-    const { meta } = await ProductService.listWithoutRule();
-    res.json({
-      success: true,
-      data: settings,
-      meta: { blockedProducts: meta.total, blockedCombinations: meta.missingCount },
-    });
+    // A configuração já foi gravada: falha nesta contagem não pode virar erro (o ADMIN acharia que nada mudou).
+    const meta = await ProductService.listWithoutRule().then(
+      (r) => ({ blockedProducts: r.meta.total as number | null, blockedCombinations: r.meta.missingCount as number | null }),
+      () => ({ blockedProducts: null, blockedCombinations: null }),
+    );
+    res.json({ success: true, data: settings, meta });
   },
 };

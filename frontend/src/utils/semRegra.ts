@@ -21,8 +21,10 @@ export function confirmaBloqueio(counts: { total: number; missingCount: number }
 }
 
 /** Texto do toast depois de salvar a exigência. */
-export function toastBloqueio(ligado: boolean, blockedProducts: number, blockedCombinations: number): string {
+export function toastBloqueio(ligado: boolean, blockedProducts: number | null, blockedCombinations: number | null): string {
   if (!ligado) return 'Exigência desligada. Etiquetas sem regra voltam a sair com aviso.';
+  // Contagem indisponível (falhou no servidor depois de gravar): a exigência foi salva mesmo assim.
+  if (blockedProducts === null || blockedCombinations === null) return 'Exigência ligada.';
   if (blockedProducts === 0) return 'Exigência ligada. Nenhum produto está bloqueado.';
   return `Exigência ligada. ${plural(blockedProducts, 'produto bloqueado', 'produtos bloqueados')} (${plural(blockedCombinations, 'combinação', 'combinações')}) até ${blockedProducts === 1 ? 'ganhar' : 'ganharem'} regra.`;
 }

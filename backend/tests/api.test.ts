@@ -2768,13 +2768,16 @@ describe('medição de tempo e origem da temperatura', () => {
       expect((await prisma.label.findUniqueOrThrow({ where: { id: res.body.data.id } })).flowMs).toBeNull();
     }
     for (const temperatureSource of ['sugerido', 'MEDIDO', '', 1]) {
-      expect((await postLabel(productId, { temperatureSource })).status).toBe(422);
+      const res = await postLabel(productId, { temperatureSource });
+      expect(res.status).toBe(201);
+      expect((await prisma.label.findUniqueOrThrow({ where: { id: res.body.data.id } })).temperatureSource).toBeNull();
     }
     expect((await newLabel(productId, { flowMs: 3_600_000 })).flowMs).toBe(3_600_000);
 
     const parent = await newLabel(productId);
-    expect((await split(parent.id, { temperatureSource: 'X' })).status).toBe(422);
-    expect(await prisma.label.count({ where: { parentLabelId: parent.id } })).toBe(0);
+    const badSource = await split(parent.id, { count: 1, temperatureSource: 'X' });
+    expect(badSource.status).toBe(201);
+    expect((await prisma.label.findFirstOrThrow({ where: { parentLabelId: parent.id } })).temperatureSource).toBeNull();
     for (const flowMs of [3_600_001, -5, 2.5, 'abc', null]) {
       const res = await split(parent.id, { count: 1, flowMs });
       expect(res.status).toBe(201);
