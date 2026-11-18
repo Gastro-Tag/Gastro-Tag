@@ -288,6 +288,68 @@ export interface LabelFilters {
   productId?: string; userId?: string; q?: string; from?: string; to?: string;
   storageType?: 'REFRIGERADO' | 'CONGELADO';
   status?: 'ATIVA' | 'ENCERRADA'; due?: 'expired' | 'today' | 'upcoming'; parentLabelId?: string;
+  /**
+   * cadastrado: `lotId` preenchido; informado: `lotId` nulo (validade digitada na hora);
+   * anterior: `lotId` nulo de antes da migração dos lotes (e as filhas dessas).
+   */
+  lotSource?: LotSource;
+}
+
+export type LotSource = 'cadastrado' | 'informado' | 'anterior';
+
+/** Migração que criou `labels.lot_id`: as etiquetas de antes dela têm `lot_id` nulo sem validade digitada. */
+const PRODUCT_LOTS_MIGRATION = '20261103000000_product_lots';
+let lotsCutoff: Promise<Date | null> | undefined;
+
+/** Fim da migração dos lotes (lido uma vez por processo). Sem o registro, não há corte e nada é anterior. */
+function lotsCutoffDate(): Promise<Date | null> {
+  lotsCutoff ??= prisma.$queryRaw<{ finished_at: Date | null }[]>`
+    SELECT finished_at FROM _prisma_migrations
+    WHERE migration_name = ${PRODUCT_LOTS_MIGRATION} AND finished_at IS NOT NULL AND rolled_back_at IS NULL
+    ORDER BY finished_at DESC LIMIT 1`
+    .then((rows) => rows[0]?.finished_at ?? null)
+    // Falha de leitura não fica no cache: a próxima consulta tenta de novo.
+    .catch((error) => { lotsCutoff = undefined; throw error; });
+  return lotsCutoff;
+}
+
+/**
+ * Etiquetas anteriores aos lotes: `lot_id` nulo e criadas antes do corte, mais as filhas do Dividir
+ * delas em qualquer nível (a filha nasce depois do corte, mas herda a embalagem da origem).
+ */
+async function legacyLabelIds(): Promise<Set<string>> {
+  const cutoff = await lotsCutoffDate();
+  if (!cutoff) return new Set();
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    WITH RECURSIVE legacy AS (
+      SELECT id FROM labels WHERE lot_id IS NULL AND created_at < ${cutoff}
+      UNION
+      SELECT child.id FROM labels child JOIN legacy ON child.parent_label_id = legacy.id
+      WHERE child.lot_id IS NULL
+    )
+    SELECT id FROM legacy`;
+  return new Set(rows.map((row) => row.id));
+}
+
+/** Consulta as anteriores só quando o filtro ou algum item com `lotId` nulo precisa delas. */
+function lazyLegacyIds() {
+  let ids: Promise<Set<string>> | undefined;
+  return () => (ids ??= legacyLabelIds());
+}
+
+const lotSourceOf = (label: { id: string; lotId: string | null }, legacy: Set<string>): LotSource =>
+  label.lotId ? 'cadastrado' : legacy.has(label.id) ? 'anterior' : 'informado';
+
+const LOT_SOURCE_CSV: Record<LotSource, string> = { cadastrado: 'Sim', informado: 'Não', anterior: 'Anterior aos lotes' };
+
+async function lotSourceWhere(lotSource: LotSource | undefined, legacy: () => Promise<Set<string>>)
+  : Promise<Prisma.LabelWhereInput> {
+  if (!lotSource) return {};
+  if (lotSource === 'cadastrado') return { lotId: { not: null } };
+  const ids = [...await legacy()];
+  return lotSource === 'informado'
+    ? { lotId: null, ...(ids.length > 0 && { id: { notIn: ids } }) }
+    : { lotId: null, id: { in: ids } };
 }
 
 /**
@@ -344,7 +406,7 @@ const csvTemperature = (text: string) => text.replace(/^-/, '\u2212');
 const CSV_MAX_ROWS = 10_000;
 
 const CSV_HEADER = [
-  'Código', 'Produto', 'Marca', 'Lote', 'Validade do fabricante', 'Abertura', 'Fracionado em', 'Origem (código)',
+  'Código', 'Produto', 'Marca', 'Lote', 'Lote cadastrado', 'Validade do fabricante', 'Abertura', 'Fracionado em', 'Origem (código)',
   'Armazenamento', 'Temperatura', 'Descarte', 'Prazo (dias)', 'Regra', 'Responsável', 'Operador com PIN',
   'Situação', 'Destino', 'Motivo', 'Observação', 'Encerrado em', 'Encerrado por', 'Criada em',
 ];
@@ -523,7 +585,8 @@ export const LabelService = {
 
   async list(filters: LabelFilters & { page?: number; limit?: number }) {
     const { page = 1, limit = 20 } = filters;
-    const where = labelWhere(filters, 'openedAt');
+    const legacy = lazyLegacyIds();
+    const where = { ...labelWhere(filters, 'openedAt'), ...await lotSourceWhere(filters.lotSource, legacy) };
     const [total, items] = await Promise.all([
       prisma.label.count({ where }),
       prisma.label.findMany({
@@ -532,7 +595,8 @@ export const LabelService = {
         include: listInclude,
       }),
     ]);
-    const data = items.map(withChildrenCount);
+    const legacyIds = items.some((item) => item.lotId === null) ? await legacy() : new Set<string>();
+    const data = items.map((item) => ({ ...withChildrenCount(item), lotSource: lotSourceOf(item, legacyIds) }));
     return { data, meta: { total, page, limit: Math.min(limit, 100), totalPages: Math.ceil(total / Math.min(limit, 100)) } };
   },
 
@@ -567,7 +631,8 @@ export const LabelService = {
 
   /** Histórico em CSV (planilha). Mesmos filtros da lista; o período é pela data de criação na cozinha. */
   async exportCsv(filters: LabelFilters) {
-    const where = labelWhere(filters, 'createdAt');
+    const legacy = lazyLegacyIds();
+    const where = { ...labelWhere(filters, 'createdAt'), ...await lotSourceWhere(filters.lotSource, legacy) };
     const total = await prisma.label.count({ where });
     if (total > CSV_MAX_ROWS) {
       throw Errors.validation(
@@ -579,8 +644,9 @@ export const LabelService = {
     });
     const date = (value: Date | null) => (value ? formatDateBR(value) : '');
     const dateTime = (value: Date | null) => (value ? formatKitchenDateTime(value) : '');
+    const legacyIds = labels.some((label) => label.lotId === null) ? await legacy() : new Set<string>();
     const rows = labels.map((label) => [
-      label.shortCode, label.productName, label.productBrand, label.lot,
+      label.shortCode, label.productName, label.productBrand, label.lot, LOT_SOURCE_CSV[lotSourceOf(label, legacyIds)],
       date(label.originalExpiryDate), date(label.openedAt), date(label.fractionedAt), label.parent?.shortCode ?? '',
       STORAGE_LABELS[label.storageType], csvTemperature(label.storageTemp), date(label.discardAt), String(label.shelfLifeDays),
       label.ruleId

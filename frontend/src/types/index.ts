@@ -125,6 +125,8 @@ export interface Label {
   /** Fonte da regra no momento da etiqueta (ou aviso de prazo sem regra validada). */
   ruleSource?: string | null;
   lotId?: string | null;
+  /** Só vem em GET /labels (lista). Ausente em getById, /labels/due e nas respostas de criar/dividir/encerrar. */
+  lotSource?: LotSource;
   ruleId?: string | null;
   shelfLifeDays?: number;
   originalExpiryDate?: string;
@@ -220,12 +222,16 @@ export interface SplitResult {
   children: Label[];
 }
 
+/** Origem do lote: cadastrado, "Outra embalagem" (validade digitada) ou anterior ao cadastro de lotes. */
+export type LotSource = 'cadastrado' | 'informado' | 'anterior';
+
 export interface LabelListParams {
   productId?: string; userId?: string; page?: number; limit?: number;
   q?: string; from?: string; to?: string; storageType?: string;
   status?: LabelStatus;
   /** Só com status ATIVA. */
   due?: 'expired' | 'today' | 'upcoming';
+  lotSource?: LotSource;
   parentLabelId?: string;
 }
 
@@ -234,6 +240,7 @@ export interface LabelExportParams {
   q?: string; from?: string; to?: string; storageType?: string;
   status?: LabelStatus;
   due?: 'expired' | 'today' | 'upcoming';
+  lotSource?: LotSource;
   productId?: string;
   parentLabelId?: string;
 }

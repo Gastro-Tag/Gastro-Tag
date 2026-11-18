@@ -1678,8 +1678,8 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect([...body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
 
       const rows = rowsOf(body);
-      expect(rows[0].split(';')).toHaveLength(22);
-      expect(rows[0]).toContain('"Código";"Produto";"Marca";"Lote"');
+      expect(rows[0].split(';')).toHaveLength(23);
+      expect(rows[0]).toContain('"Código";"Produto";"Marca";"Lote";"Lote cadastrado";"Validade do fabricante"');
       const row = rows.find((line) => line.startsWith(`"${formula.shortCode}"`))!;
       expect(row).toBeTruthy();
       expect(row).toContain(`"'=1+1"`);
@@ -1711,6 +1711,90 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect(rowsOf((await exportCsv({ productId, to: daysFromToday(-1) })).body)).toHaveLength(1);
       expect((await exportCsv({ from: today(), to: daysFromToday(-1) })).status).toBe(422);
       expect((await exportCsv({ due: 'ontem' })).status).toBe(422);
+    });
+
+    it('filters by lot source (registered lot or "Outra embalagem") in the list and the export', async () => {
+      const lot = await request(app).post(`/api/products/${productId}/lots`).set('Authorization', asAdmin())
+        .send({ code: `LOTE-CAD-${suffix.slice(0, 6)}`, expiryDate: daysFromToday(60) }).expect(201);
+      const registered = await newLabel({ lot: undefined, originalExpiryDate: undefined, lotId: lot.body.data.id });
+      const typed = await newLabel();
+      // Etiqueta de antes da migração dos lotes: lot_id nulo e criada antes do fim da migração.
+      const [migration] = await prisma.$queryRaw<{ finished_at: Date }[]>`
+        SELECT finished_at FROM _prisma_migrations WHERE migration_name = '20261103000000_product_lots'`;
+      expect(migration?.finished_at).toBeTruthy();
+      const legacy = await newLabel();
+      await prisma.label.update({
+        where: { id: legacy.id }, data: { createdAt: new Date(migration.finished_at.getTime() - 86_400_000) },
+      });
+      // A filha do Dividir nasce depois do corte, mas herda a embalagem da origem anterior.
+      const split = await request(app).post(`/api/labels/${legacy.id}/split`).set('Authorization', asAdmin())
+        .send({ count: 1, storageType: 'REFRIGERADO', storageTemperature: 4, responsibleName: 'Fracionador' });
+      expect(split.status).toBe(201);
+      const legacyChild = split.body.data.children[0] as { id: string; shortCode: string };
+      const legacyIds = [legacy.id, legacyChild.id];
+
+      const list = (query: Record<string, string>) =>
+        request(app).get('/api/labels').query({ productId, limit: '100', ...query }).set('Authorization', asAdmin());
+      const idsOf = (res: { body: { data: { id: string }[] } }) => res.body.data.map((label: { id: string }) => label.id) as string[];
+
+      const all = await list({});
+      expect(all.status).toBe(200);
+      const byId = (id: string) => all.body.data.find((label: { id: string }) => label.id === id);
+      expect(byId(registered.id).lotId).toBe(lot.body.data.id);
+      expect(byId(typed.id).lotId).toBeNull();
+      expect(byId(registered.id).lotSource).toBe('cadastrado');
+      expect(byId(typed.id).lotSource).toBe('informado');
+      expect(byId(legacy.id)).toMatchObject({ lotId: null, lotSource: 'anterior' });
+      expect(byId(legacyChild.id)).toMatchObject({ lotId: null, lotSource: 'anterior', parentLabelId: legacy.id });
+
+      const cadastrado = await list({ lotSource: 'cadastrado' });
+      const informado = await list({ lotSource: 'informado' });
+      const anterior = await list({ lotSource: 'anterior' });
+      expect(cadastrado.status).toBe(200);
+      expect(informado.status).toBe(200);
+      expect(anterior.status).toBe(200);
+      expect(idsOf(cadastrado)).toContain(registered.id);
+      expect(idsOf(cadastrado)).not.toContain(typed.id);
+      expect(idsOf(informado)).toContain(typed.id);
+      expect(idsOf(informado)).not.toContain(registered.id);
+      expect(idsOf(anterior).sort()).toEqual([...legacyIds].sort());
+      for (const id of legacyIds) {
+        expect(idsOf(informado)).not.toContain(id);
+        expect(idsOf(cadastrado)).not.toContain(id);
+      }
+      const sourcesOf = (res: { body: { data: { lotSource: string }[] } }) => new Set(res.body.data.map((l) => l.lotSource));
+      expect([...sourcesOf(cadastrado)]).toEqual(['cadastrado']);
+      expect([...sourcesOf(informado)]).toEqual(['informado']);
+      expect([...sourcesOf(anterior)]).toEqual(['anterior']);
+      // Sem o filtro, nada muda: os três grupos somam a lista inteira.
+      expect(cadastrado.body.meta.total + informado.body.meta.total + anterior.body.meta.total)
+        .toBe(all.body.meta.total);
+      expect((await list({ lotSource: 'outro' })).status).toBe(422);
+      expect((await list({ lotSource: 'Cadastrado' })).status).toBe(422);
+
+      const csvAll = rowsOf((await exportCsv({ productId })).body);
+      const csvCad = rowsOf((await exportCsv({ productId, lotSource: 'cadastrado' })).body);
+      const csvInf = rowsOf((await exportCsv({ productId, lotSource: 'informado' })).body);
+      const rowOf = (rows: string[], code: string) => rows.find((line) => line.startsWith(`"${code}"`));
+      // Coluna "Lote cadastrado" (5ª), logo depois de "Lote".
+      expect(rowOf(csvAll, registered.shortCode)!.split(';')[4]).toBe('"Sim"');
+      expect(rowOf(csvAll, typed.shortCode)!.split(';')[4]).toBe('"Não"');
+      expect(rowOf(csvAll, legacyChild.shortCode)!.split(';')[4]).toBe('"Anterior aos lotes"');
+      // A origem anterior tem criação antes do corte: some do período de hoje, mas sai sem período.
+      const csvAnt = rowsOf((await exportCsv({ lotSource: 'anterior', q: legacy.shortCode })).body);
+      expect(csvAnt).toHaveLength(2);
+      expect(csvAnt[1].split(';')[4]).toBe('"Anterior aos lotes"');
+      expect(rowOf(rowsOf((await exportCsv({ productId, lotSource: 'informado' })).body), legacyChild.shortCode))
+        .toBeUndefined();
+      expect(rowOf(csvCad, registered.shortCode)).toBeTruthy();
+      expect(rowOf(csvCad, typed.shortCode)).toBeUndefined();
+      expect(rowOf(csvInf, typed.shortCode)).toBeTruthy();
+      expect(rowOf(csvInf, registered.shortCode)).toBeUndefined();
+      expect(csvCad.slice(1).every((line) => line.split(';')[4] === '"Sim"')).toBe(true);
+      expect(csvInf.slice(1).every((line) => line.split(';')[4] === '"Não"')).toBe(true);
+      const csvAntAll = rowsOf((await exportCsv({ productId, lotSource: 'anterior' })).body);
+      expect(csvCad.length - 1 + csvInf.length - 1 + csvAntAll.length - 1).toBe(csvAll.length - 1);
+      expect((await exportCsv({ lotSource: 'qualquer' })).status).toBe(422);
     });
   });
 

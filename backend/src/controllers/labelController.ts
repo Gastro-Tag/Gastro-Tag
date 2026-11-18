@@ -64,6 +64,9 @@ const filterFields = z.object({
   // Pela data da cozinha. Faz sentido junto com status=ATIVA.
   due: z.enum(['expired', 'today', 'upcoming']).optional(),
   parentLabelId: z.string().uuid().optional(),
+  // cadastrado: lote registrado (lotId); informado: "Outra embalagem", validade digitada na hora;
+  // anterior: etiqueta de antes dos lotes (sem lote, mas com a validade que ficava no produto).
+  lotSource: z.enum(['cadastrado', 'informado', 'anterior']).optional(),
 });
 const periodOrder = [(query: { from?: string; to?: string }) => !query.from || !query.to || query.from <= query.to, {
   message: 'A data inicial deve ser menor ou igual à data final.',
