@@ -42,6 +42,22 @@ O volume fica no mesmo disco do servidor: **um backup que só existe ali se perd
 com o servidor**. Copie com regularidade para outro lugar (outro computador, pendrive,
 armazenamento em nuvem).
 
+Com o servidor no notebook, o jeito mais simples é um HD externo ou pendrive:
+
+```sh
+./scripts/copiar-backup.sh F:/GastroTag-backups        # mantém os 30 mais recentes no destino
+./scripts/copiar-backup.sh E:/GastroTag-backups 10     # mantém só os 10 mais recentes
+```
+
+O script só lê o volume (não para nem altera containers), copia apenas o que ainda não está
+no destino e confere o tamanho de cada arquivo. No destino, apaga só dumps com o nome dos
+backups (`<banco>_AAAA-MM-DD_HHMMSS.dump`) além do limite. Cada dump tem poucas dezenas de KB
+(19/11/2026), então qualquer pendrive serve. Depois de copiar, guarde o pendrive ou HD
+**longe do notebook**: uma cópia na mesma mochila se perde junto. Para conferir uma cópia, restaure-a
+num banco novo (veja "Conferir antes", abaixo; `restaurar.sh` aceita o caminho do `.dump` no pendrive).
+
+Manualmente, sem o script:
+
 ```sh
 # 1) do volume para uma pasta do servidor
 mkdir -p ~/backups-gastrotag
@@ -101,6 +117,7 @@ O nome do banco do sistema é o `POSTGRES_DB` do `.env` (padrão `gastrotag`).
 - `restaurar-postgres.sh` — roda dentro do serviço `backup`; exige `CONFIRMA_BANCO`
   igual ao nome do banco;
 - `backup-agora.sh`, `restaurar.sh` — atalhos para usar no servidor;
+- `copiar-backup.sh` — copia os dumps do volume para um HD externo, pendrive ou outra pasta;
 - `tunel.sh` — liga o túnel gratuito da Cloudflare (perfil `tunel` do Compose) e mostra o
   link `https://...trycloudflare.com`; `tunel.sh parar` desliga (guia no README da raiz);
 - `.gitattributes` — mantém os `.sh` com fim de linha LF (os containers são Linux).
