@@ -1,4 +1,4 @@
-// Modelos de etiqueta. A escolha é por aparelho (a impressora fica ligada ao aparelho).
+// Modelos de etiqueta. Padrão da cozinha, com exceção por aparelho (a impressora fica ligada ao aparelho).
 export type LabelTemplateId = 'a4' | 't100x60' | 't60x40' | 't50x30';
 
 /** full: todas as informações; short: resumida; minimal: só o essencial. */
@@ -37,17 +37,61 @@ export function getLabelTemplate(id: string | null | undefined): LabelTemplate {
 // impressão concordarem. Gravada com sucesso, quem manda é o localStorage, e outra aba vê a troca.
 let unsavedTemplateId: LabelTemplateId | null = null;
 
-/** Modelo em uso neste aparelho. `explicit` é false quando ninguém escolheu: a impressão cai em A4 (padrão). */
-export function getLabelTemplateChoice(): { id: LabelTemplateId; explicit: boolean } {
-  if (unsavedTemplateId) return { id: unsavedTemplateId, explicit: true };
+// Padrão da cozinha (GET /auth/me). Fica em memória para a impressão (fora do React) usar o mesmo modelo da tela.
+let kitchenTemplateId: LabelTemplateId | null = null;
+
+/** De onde vem o modelo que vale: exceção do aparelho, padrão da cozinha ou nenhum (A4 com aviso). */
+export type LabelTemplateSource = 'device' | 'kitchen' | 'none';
+
+export interface LabelTemplateChoice {
+  id: LabelTemplateId;
+  /** false quando ninguém definiu: a impressão cai em A4. */
+  explicit: boolean;
+  source: LabelTemplateSource;
+}
+
+/** Prioridade: exceção do aparelho > padrão da cozinha > A4 (não escolhido). Valores inválidos são ignorados. */
+export function resolveLabelTemplate(device: unknown, kitchen: unknown): LabelTemplateChoice {
+  if (isLabelTemplateId(device)) return { id: device, explicit: true, source: 'device' };
+  if (isLabelTemplateId(kitchen)) return { id: kitchen, explicit: true, source: 'kitchen' };
+  return { id: DEFAULT_LABEL_TEMPLATE, explicit: false, source: 'none' };
+}
+
+export const LABEL_TEMPLATE_SOURCE_TEXT: Record<LabelTemplateSource, string> = {
+  kitchen: 'Padrão da cozinha',
+  device: 'Exceção deste aparelho',
+  none: 'Não escolhido: A4',
+};
+
+/** Escolha própria deste aparelho (a exceção), ou null. */
+function readDeviceTemplate(): LabelTemplateId | null {
+  if (unsavedTemplateId) return unsavedTemplateId;
   try {
     const value = localStorage.getItem(LABEL_TEMPLATE_KEY);
-    return isLabelTemplateId(value)
-      ? { id: value, explicit: true }
-      : { id: DEFAULT_LABEL_TEMPLATE, explicit: false };
+    return isLabelTemplateId(value) ? value : null;
   } catch {
-    return { id: DEFAULT_LABEL_TEMPLATE, explicit: false };
+    return null;
   }
+}
+
+/** Modelo em uso: exceção do aparelho, senão padrão da cozinha, senão A4 sem escolha (nunca trava a impressão). */
+export function getLabelTemplateChoice(): LabelTemplateChoice {
+  return resolveLabelTemplate(readDeviceTemplate(), kitchenTemplateId);
+}
+
+/** Guarda o padrão da cozinha vindo do servidor (valor desconhecido vira nulo) e avisa as telas abertas. */
+export function setKitchenLabelTemplate(value: unknown): void {
+  const next = isLabelTemplateId(value) ? value : null;
+  if (next === kitchenTemplateId) return;
+  kitchenTemplateId = next;
+  window.dispatchEvent(new Event(LABEL_TEMPLATE_EVENT));
+}
+
+/** Remove a exceção deste aparelho: passa a valer o padrão da cozinha. */
+export function clearLabelTemplateId(): void {
+  unsavedTemplateId = null;
+  try { localStorage.removeItem(LABEL_TEMPLATE_KEY); } catch { /* sem armazenamento: nada a apagar */ }
+  window.dispatchEvent(new Event(LABEL_TEMPLATE_EVENT));
 }
 
 export function loadLabelTemplateId(): LabelTemplateId {
@@ -57,7 +101,7 @@ export function loadLabelTemplateId(): LabelTemplateId {
 /** Avisa as telas abertas (mesma aba) de que o modelo mudou; outras abas recebem o evento `storage`. */
 export const LABEL_TEMPLATE_EVENT = 'gastrotag:label-template';
 
-export const LABEL_TEMPLATE_NOT_CHOSEN_TEXT = 'Modelo de etiqueta não escolhido neste aparelho: imprimindo em A4.';
+export const LABEL_TEMPLATE_NOT_CHOSEN_TEXT = 'Modelo de etiqueta não escolhido (nem na cozinha nem neste aparelho): imprimindo em A4.';
 
 export function saveLabelTemplateId(id: LabelTemplateId): void {
   try {

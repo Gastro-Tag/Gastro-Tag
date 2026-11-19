@@ -56,12 +56,14 @@ export const AuthController = {
   async me(req: Request, res: Response) {
     // Data da cozinha e limite para trás: o formulário limita a data de abertura (o servidor confere de novo).
     // requireValidatedRule: a tela avisa antes; quem recusa a etiqueta sem regra é o servidor.
-    const { requireValidatedRule } = await SettingsService.get();
+    // labelTemplate: padrão da cozinha; a exceção do aparelho (se houver) vale antes dele, no navegador.
+    const { requireValidatedRule, labelTemplate } = await SettingsService.get();
     res.json({
       success: true,
       data: req.user,
       meta: {
         kitchenToday: kitchenToday().toISOString().slice(0, 10), maxBackdateDays: MAX_BACKDATE_DAYS, requireValidatedRule,
+        labelTemplate,
       },
     });
   },

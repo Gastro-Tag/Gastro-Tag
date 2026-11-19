@@ -4,8 +4,8 @@ import { Check, LayoutDashboard, LogOut, ShieldCheck, User } from 'lucide-react'
 import { useAuthStore } from '@/store/authStore';
 import { useTotemStore } from '@/store/totemStore';
 import { useIdle } from '@/hooks/useIdle';
-import { useLabelTemplate } from '@/hooks/useLabelTemplate';
-import { LABEL_TEMPLATES, LABEL_TEMPLATE_NOT_CHOSEN_TEXT } from '@/utils/labelTemplates';
+import { useKitchenTemplateSync, useLabelTemplate } from '@/hooks/useLabelTemplate';
+import { LABEL_TEMPLATES, LABEL_TEMPLATE_NOT_CHOSEN_TEXT, getLabelTemplate } from '@/utils/labelTemplates';
 import { cn } from '@/utils/cn';
 import { createPressGesture } from '@/utils/pressGesture';
 import { AdminUnlockDialog } from './AdminUnlockDialog';
@@ -22,6 +22,7 @@ export function TotemRoute() {
 }
 
 function TotemShell() {
+  useKitchenTemplateSync(); // padrão da cozinha também na reimpressão do início
   const navigate = useNavigate();
   const location = useLocation();
   const logout = useAuthStore((state) => state.logout);
@@ -167,13 +168,27 @@ function TotemShell() {
 
 /** Modelo de etiqueta deste aparelho (a impressora fica ligada a ele). Só aparece no menu do administrador. */
 function LabelTemplateChooser() {
-  const { templateId, explicit, choose } = useLabelTemplate();
+  const { templateId, explicit, source, choose, useKitchenDefault } = useLabelTemplate();
   return (
     <div role="radiogroup" aria-label="Modelo da etiqueta" className="space-y-2 rounded-2xl border-2 border-slate-200 p-3">
       <p className="text-base font-extrabold">Modelo da etiqueta</p>
       {!explicit && <p role="status" className="text-sm font-bold text-amber-800">{LABEL_TEMPLATE_NOT_CHOSEN_TEXT}</p>}
+      {source === 'kitchen' && <p role="status" className="text-sm font-bold text-slate-600">Valendo: {getLabelTemplate(templateId).name} (padrão da cozinha).</p>}
+      <button
+        type="button"
+        role="radio"
+        aria-checked={source !== 'device'}
+        onClick={useKitchenDefault}
+        className={cn(
+          'flex min-h-[3.5rem] w-full touch-manipulation items-center gap-3 rounded-xl border-2 px-3 py-2 text-left text-base font-bold active:scale-[0.99]',
+          source !== 'device' ? 'border-brand-500 bg-orange-50' : 'border-slate-200 bg-white',
+        )}
+      >
+        <span className="min-w-0 flex-1">Padrão da cozinha</span>
+        {source !== 'device' && <Check className="h-5 w-5 shrink-0 text-brand-600" aria-hidden="true" />}
+      </button>
       {LABEL_TEMPLATES.map((template) => {
-        const selected = explicit && template.id === templateId;
+        const selected = source === 'device' && template.id === templateId;
         return (
           <button
             key={template.id}
@@ -191,7 +206,7 @@ function LabelTemplateChooser() {
           </button>
         );
       })}
-      <p className="text-sm text-slate-500">Vale só para este aparelho. Na impressora, use o mesmo tamanho de papel.</p>
+      <p className="text-sm text-slate-500">Escolher um modelo é uma exceção que vale só para este aparelho. Na impressora, use o mesmo tamanho de papel.</p>
     </div>
   );
 }

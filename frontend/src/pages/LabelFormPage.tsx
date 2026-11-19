@@ -22,7 +22,7 @@ import {
   SUGGESTED_TEMPERATURE, TEMP_MAX, TEMP_MIN, formatTemperature, formatTemperatureShort, formatTemperatureRange, parseTemperature, temperatureDraft,
 } from '@/utils/temperature';
 import {
-  LABEL_TEMPLATES, getLabelTemplate, type LabelTemplateId,
+  LABEL_TEMPLATES, LABEL_TEMPLATE_SOURCE_TEXT, getLabelTemplate, type LabelTemplateId,
 } from '@/utils/labelTemplates';
 import { useLabelTemplate } from '@/hooks/useLabelTemplate';
 import { LabelTemplateStatus } from '@/components/labels/LabelTemplateStatus';
@@ -50,7 +50,7 @@ export function LabelFormPage() {
   const [expiryConfirmed, setExpiryConfirmed] = useState('');
   const [previewErrorCode, setPreviewErrorCode] = useState<string | undefined>();
   const [logoUrl, setLogoUrl] = useState<string | null>(() => localStorage.getItem('gastrotag_logo'));
-  const { templateId, explicit: templateChosen, choose: chooseTemplate } = useLabelTemplate();
+  const { templateId, source: templateSource, choose: chooseTemplate, useKitchenDefault } = useLabelTemplate();
   // A data de abertura começa vazia e é preenchida uma vez com o "hoje" do servidor, não o do aparelho.
   const [dateFilled, setDateFilled] = useState(false);
   // Abertura: do limite para trás até hoje da cozinha (o servidor valida de novo).
@@ -478,9 +478,27 @@ export function LabelFormPage() {
             <p className="text-xs font-bold uppercase tracking-wider text-slate-400 pb-2 border-b border-slate-100 mb-3">
               Modelo da Etiqueta
             </p>
+            <p role="status" className="mb-2 text-xs font-semibold text-slate-600">
+              Vale: {getLabelTemplate(templateId).name} ({LABEL_TEMPLATE_SOURCE_TEXT[templateSource].toLowerCase()})
+            </p>
             <div role="radiogroup" aria-label="Modelo da etiqueta" className="space-y-2">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={templateSource !== 'device'}
+                onClick={useKitchenDefault}
+                className={cn(
+                  'flex w-full min-h-[3.25rem] items-center gap-3 rounded-xl border p-3 text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+                  templateSource !== 'device' ? 'border-brand-500 bg-orange-50/50' : 'border-slate-200 hover:border-slate-300'
+                )}
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-bold text-slate-700">Padrão da cozinha</span>
+                  <span className="block text-[11px] text-slate-400">Usa o modelo definido pelo administrador em Regras e remove a exceção deste aparelho.</span>
+                </span>
+              </button>
               {LABEL_TEMPLATES.map((template) => {
-                const selected = templateChosen && template.id === templateId;
+                const selected = templateSource === 'device' && template.id === templateId;
                 const ratio = template.widthMm && template.heightMm ? template.widthMm / template.heightMm : 0.75;
                 return (
                   <button
@@ -511,7 +529,7 @@ export function LabelFormPage() {
               })}
             </div>
             <p className="mt-3 text-[11px] text-slate-400">
-              Vale só para este aparelho, na impressão pelo painel e pelo totem. Em etiqueta térmica, escolha o mesmo
+              Escolher um modelo aqui é uma exceção que vale só para este aparelho, na impressão pelo painel e pelo totem. Em etiqueta térmica, escolha o mesmo
               tamanho de papel na impressora ({getLabelTemplate(templateId).name}).
             </p>
           </div>

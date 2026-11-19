@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { SettingsService } from '../services/settingsService';
+import { LABEL_TEMPLATE_IDS, SettingsService } from '../services/settingsService';
 import { ProductService } from '../services/productService';
 
 const EXPIRY_WARNING_MONTHS_ERROR = 'Informe o limite do aviso de validade em meses inteiros, de 1 a 60, ou null para desligar.';
@@ -11,8 +11,10 @@ const updateSchema = z.strictObject({
   expiryWarningMonths: z.number({ error: EXPIRY_WARNING_MONTHS_ERROR })
     .int(EXPIRY_WARNING_MONTHS_ERROR).min(1, EXPIRY_WARNING_MONTHS_ERROR).max(60, EXPIRY_WARNING_MONTHS_ERROR)
     .nullable().optional(),
+  labelTemplate: z.enum(LABEL_TEMPLATE_IDS, { error: 'Modelo de etiqueta inválido.' }).nullable().optional(),
 }).refine(
-  (data) => data.requireValidatedRule !== undefined || data.expiryWarningMonths !== undefined,
+  (data) => data.requireValidatedRule !== undefined || data.expiryWarningMonths !== undefined
+    || data.labelTemplate !== undefined,
   { message: 'Informe ao menos uma configuração para alterar.' },
 );
 

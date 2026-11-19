@@ -56,6 +56,8 @@ model KitchenSettings {
   requireValidatedRule Boolean  @default(false) @map("require_validated_rule")
   // Aviso na prévia quando a validade digitada passa de abertura + N meses (1..60). Nulo: desligado.
   expiryWarningMonths  Int?     @map("expiry_warning_months")
+  // Modelo de etiqueta padrão da cozinha (a4, t100x60, t60x40, t50x30; validado na API). Nulo: não definido.
+  labelTemplate        String?  @map("label_template")
   updatedAt            DateTime @updatedAt @map("updated_at")
   updatedById          String?  @map("updated_by_id")
   updatedByName        String?  @map("updated_by_name") // cópia do nome de quem alterou
