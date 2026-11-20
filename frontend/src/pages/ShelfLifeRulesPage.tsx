@@ -17,6 +17,7 @@ import { useToastContext } from '@/components/ui/Toast';
 import { formatBR, formatDateTimeBR } from '@/utils/date';
 import { formatTemperatureRange } from '@/utils/temperature';
 import { cn } from '@/utils/cn';
+import { LABEL_TEMPLATES, setKitchenLabelTemplate, type LabelTemplateId } from '@/utils/labelTemplates';
 import { EXPIRY_MONTHS_MAX, EXPIRY_MONTHS_MIN, parseExpiryMonths, toastAvisoValidade } from '@/utils/expiryWarning';
 import { BLOQUEADO_NAO_IMPRIME, confirmaBloqueio, semRegraResumo, toastBloqueio, usaDiasDoCadastro } from '@/utils/semRegra';
 
@@ -136,6 +137,21 @@ export function ShelfLifeRulesPage() {
     }
   }
 
+  async function saveLabelTemplate(value: LabelTemplateId | null) {
+    setSettingsBusy(true);
+    try {
+      const { data } = await settingsApi.update({ labelTemplate: value });
+      setSettings(data.data);
+      setKitchenLabelTemplate(data.data.labelTemplate);
+      toast(value ? 'Modelo de etiqueta padrão da cozinha salvo.' : 'Modelo de etiqueta padrão da cozinha removido.', 'success');
+    } catch (error) {
+      toast(extractError(error), 'error');
+      void fetchSettings();
+    } finally {
+      setSettingsBusy(false);
+    }
+  }
+
   const fetchMissing = useCallback(async () => {
     const request = ++missingRequest.current;
     setMissingLoading(true);
@@ -250,6 +266,8 @@ export function ShelfLifeRulesPage() {
           else void askEnable();
         }}
       />
+
+      {settings && <KitchenTemplateCard settings={settings} busy={settingsBusy} onSave={(value) => void saveLabelTemplate(value)} />}
 
       {settings && <ExpiryWarningCard settings={settings} busy={settingsBusy} onSave={(value) => void saveExpiryMonths(value)} />}
 
@@ -428,6 +446,45 @@ function RequireRuleCard({ settings, error, busy, onRetry, onToggle }: {
           <span className={cn('inline-block h-6 w-6 rounded-full bg-white shadow transition-transform', on ? 'translate-x-7' : 'translate-x-1')} />
           <span className="sr-only">{on ? 'Ligado' : 'Desligado'}</span>
         </button>
+      </div>
+    </section>
+  );
+}
+
+function KitchenTemplateCard({ settings, busy, onSave }: {
+  settings: AppSettings;
+  busy: boolean;
+  onSave: (value: LabelTemplateId | null) => void;
+}) {
+  const current = settings.labelTemplate ?? null;
+  const options: { id: LabelTemplateId | null; name: string }[] = [{ id: null, name: 'Não definido' }, ...LABEL_TEMPLATES];
+  return (
+    <section className="card bg-white p-4 sm:p-5" aria-labelledby="modelo-cozinha-titulo">
+      <h2 id="modelo-cozinha-titulo" className="text-base font-bold text-charcoal-800">Modelo de etiqueta padrão da cozinha</h2>
+      <p className="mt-1 text-xs leading-relaxed text-slate-600">
+        Vale em todos os aparelhos, no painel e no totem. Um aparelho com exceção própria continua usando a dele.
+        Sem padrão e sem exceção, a etiqueta sai em A4 com aviso.
+      </p>
+      <div role="radiogroup" aria-labelledby="modelo-cozinha-titulo" className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+        {options.map((option) => {
+          const selected = option.id === current;
+          return (
+            <button
+              key={option.id ?? 'none'}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={busy}
+              onClick={() => { if (!selected) onSave(option.id); }}
+              className={cn(
+                'min-h-11 rounded-xl border p-3 text-left text-xs font-bold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 disabled:opacity-60',
+                selected ? 'border-brand-500 bg-orange-50/50 text-charcoal-800' : 'border-slate-200 text-slate-700 hover:border-slate-300',
+              )}
+            >
+              {option.name}
+            </button>
+          );
+        })}
       </div>
     </section>
   );

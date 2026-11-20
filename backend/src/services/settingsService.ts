@@ -6,27 +6,43 @@ type Db = Prisma.TransactionClient;
 /** Linha única até a Fase 2, quando a configuração passa a ser por cliente. */
 const SETTINGS_ID = 1;
 
+/** Modelos de etiqueta (os mesmos de frontend/src/utils/labelTemplates.ts). */
+export const LABEL_TEMPLATE_IDS = ['a4', 't100x60', 't60x40', 't50x30'] as const;
+export type LabelTemplateId = (typeof LABEL_TEMPLATE_IDS)[number];
+
+/** Sem enum no banco: um valor desconhecido gravado vira null (não definido), nunca erro. */
+function toLabelTemplate(value: string | null): LabelTemplateId | null {
+  return (LABEL_TEMPLATE_IDS as readonly string[]).includes(value ?? '') ? value as LabelTemplateId : null;
+}
+
 export interface KitchenSettingsData {
   requireValidatedRule: boolean;
   /** Aviso na prévia quando a validade digitada passa de abertura + N meses. Nulo: desligado. */
   expiryWarningMonths: number | null;
+  /** Modelo de etiqueta padrão da cozinha. Nulo: não definido (cada aparelho segue a própria escolha ou A4). */
+  labelTemplate: LabelTemplateId | null;
   updatedAt: Date | null;
   updatedByName: string | null;
 }
 
 /** Sem linha gravada, valem os padrões (bloqueio desligado). */
 const DEFAULTS: KitchenSettingsData = {
-  requireValidatedRule: false, expiryWarningMonths: null, updatedAt: null, updatedByName: null,
+  requireValidatedRule: false, expiryWarningMonths: null, labelTemplate: null, updatedAt: null, updatedByName: null,
 };
 
 const settingsSelect = {
-  requireValidatedRule: true, expiryWarningMonths: true, updatedAt: true, updatedByName: true,
+  requireValidatedRule: true, expiryWarningMonths: true, labelTemplate: true, updatedAt: true, updatedByName: true,
 } as const;
+
+type SettingsRow = Omit<KitchenSettingsData, 'labelTemplate' | 'updatedAt'> & { labelTemplate: string | null; updatedAt: Date };
+
+const toData = (row: SettingsRow): KitchenSettingsData => ({ ...row, labelTemplate: toLabelTemplate(row.labelTemplate) });
 
 /** Corpo parcial do PUT: só o que vier é alterado. */
 export interface KitchenSettingsUpdate {
   requireValidatedRule?: boolean;
   expiryWarningMonths?: number | null;
+  labelTemplate?: LabelTemplateId | null;
 }
 
 export const SettingsService = {
@@ -36,7 +52,7 @@ export const SettingsService = {
       where: { id: SETTINGS_ID },
       select: settingsSelect,
     });
-    return row ?? DEFAULTS;
+    return row ? toData(row) : DEFAULTS;
   },
 
   async update(data: KitchenSettingsUpdate, actor: { id: string; name: string }): Promise<KitchenSettingsData> {
@@ -44,13 +60,15 @@ export const SettingsService = {
     const fields = {
       requireValidatedRule: data.requireValidatedRule,
       expiryWarningMonths: data.expiryWarningMonths,
+      labelTemplate: data.labelTemplate,
       updatedById: actor.id, updatedByName: actor.name,
     };
-    return prisma.kitchenSettings.upsert({
+    const row = await prisma.kitchenSettings.upsert({
       where: { id: SETTINGS_ID },
       create: { id: SETTINGS_ID, ...fields },
       update: fields,
       select: settingsSelect,
     });
+    return toData(row);
   },
 };

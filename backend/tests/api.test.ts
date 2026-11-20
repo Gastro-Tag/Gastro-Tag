@@ -1654,7 +1654,9 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
     it('reports the kitchen date and the backdate limit in /auth/me', async () => {
       const me = await request(app).get('/api/auth/me').set('Authorization', asOperator).expect(200);
       expect(me.body.data.sub).toBe(operatorId);
-      expect(me.body.meta).toEqual({ kitchenToday: today(), maxBackdateDays: 2, requireValidatedRule: false });
+      expect(me.body.meta).toEqual({
+        kitchenToday: today(), maxBackdateDays: 2, requireValidatedRule: false, labelTemplate: null,
+      });
     });
 
     it('accepts an opening 2 days ago and rejects 3 days ago and the future', async () => {
@@ -2694,6 +2696,77 @@ describe('aviso de validade digitada muito distante', () => {
     expect(res.status).toBe(200);
     expect(res.body.data.lot.id).toBe(lot.id);
     expect(res.body.data.expiryWarning).toBeNull();
+  });
+});
+
+describe('modelo de etiqueta padrão da cozinha', () => {
+  let adminToken = '';
+  let operatorAuth = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const reset = () => prisma.kitchenSettings.updateMany({
+    data: { requireValidatedRule: false, expiryWarningMonths: null, labelTemplate: null },
+  });
+  const putSettings = (body: object, token = asAdmin()) =>
+    request(app).put('/api/settings').set('Authorization', token).send(body);
+  const getSettings = () => request(app).get('/api/settings').set('Authorization', asAdmin());
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.80')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operatorLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.81')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operatorLogin.body.data.accessToken}`;
+  });
+
+  // Cada teste volta ao padrão no fim.
+  afterEach(reset);
+  afterAll(reset);
+
+  it('starts undefined and only changes the template on a partial PUT', async () => {
+    expect((await getSettings()).body.data.labelTemplate).toBeNull();
+
+    expect((await putSettings({ requireValidatedRule: true, expiryWarningMonths: 12 })).status).toBe(200);
+    const set = await putSettings({ labelTemplate: 't60x40' });
+    expect(set.status).toBe(200);
+    expect(set.body.data).toMatchObject({ requireValidatedRule: true, expiryWarningMonths: 12, labelTemplate: 't60x40' });
+    expect(set.body.meta).toEqual({ blockedProducts: expect.any(Number), blockedCombinations: expect.any(Number) });
+
+    // Os outros campos sozinhos não mexem no modelo.
+    const others = await putSettings({ requireValidatedRule: false, expiryWarningMonths: null });
+    expect(others.body.data).toMatchObject({ requireValidatedRule: false, expiryWarningMonths: null, labelTemplate: 't60x40' });
+
+    // null limpa o modelo e não mexe no resto.
+    expect((await putSettings({ expiryWarningMonths: 6 })).status).toBe(200);
+    const cleared = await putSettings({ labelTemplate: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.data).toMatchObject({ requireValidatedRule: false, expiryWarningMonths: 6, labelTemplate: null });
+    expect((await getSettings()).body.data.labelTemplate).toBeNull();
+  });
+
+  it('refuses an unknown template and a non-ADMIN', async () => {
+    expect((await putSettings({ labelTemplate: 't100x60' })).status).toBe(200);
+    for (const value of ['A4', 'zebra', '', 1, true]) {
+      const res = await putSettings({ labelTemplate: value });
+      expect(res.status).toBe(422);
+      expect(res.body.error.message).toBe('Modelo de etiqueta inválido.');
+    }
+    expect((await putSettings({ labelTemplate: 'a4' }, operatorAuth)).status).toBe(403);
+    expect((await getSettings()).body.data.labelTemplate).toBe('t100x60');
+  });
+
+  it('returns the template on /auth/me and hides an unknown stored value', async () => {
+    expect((await putSettings({ labelTemplate: 't50x30' })).status).toBe(200);
+    const me = await request(app).get('/api/auth/me').set('Authorization', operatorAuth);
+    expect(me.status).toBe(200);
+    expect(me.body.meta.labelTemplate).toBe('t50x30');
+
+    // Valor fora da lista gravado direto no banco: vira null, sem erro.
+    await prisma.kitchenSettings.updateMany({ data: { labelTemplate: 'antigo' } });
+    expect((await getSettings()).body.data.labelTemplate).toBeNull();
+    const meUnknown = await request(app).get('/api/auth/me').set('Authorization', operatorAuth);
+    expect(meUnknown.status).toBe(200);
+    expect(meUnknown.body.meta.labelTemplate).toBeNull();
   });
 });
 

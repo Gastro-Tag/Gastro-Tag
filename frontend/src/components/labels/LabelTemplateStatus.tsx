@@ -1,11 +1,11 @@
 import { AlertTriangle, Printer } from 'lucide-react';
-import { LABEL_TEMPLATE_NOT_CHOSEN_TEXT, getLabelTemplate } from '@/utils/labelTemplates';
+import { LABEL_TEMPLATE_NOT_CHOSEN_TEXT, LABEL_TEMPLATE_SOURCE_TEXT, getLabelTemplate } from '@/utils/labelTemplates';
 import { useLabelTemplate } from '@/hooks/useLabelTemplate';
 import { cn } from '@/utils/cn';
 
-/** Modelo de etiqueta ativo neste aparelho; destaca o aviso quando ninguém escolheu (impressão em A4). */
+/** Modelo de etiqueta que vale e sua origem; destaca o aviso quando ninguém escolheu (impressão em A4). */
 export function LabelTemplateStatus({ large = false, className }: { large?: boolean; className?: string }) {
-  const { templateId, explicit } = useLabelTemplate();
+  const { templateId, explicit, source } = useLabelTemplate();
   if (!explicit) {
     return (
       <p role="status" className={cn('flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 font-bold text-amber-800', large ? 'p-3 text-base [@media(max-height:500px)]:p-1.5 [@media(max-height:500px)]:text-xs' : 'p-2.5 text-xs', className)}>
@@ -17,7 +17,7 @@ export function LabelTemplateStatus({ large = false, className }: { large?: bool
   return (
     <p className={cn('flex items-center justify-center gap-1.5 font-semibold text-slate-500', large ? 'text-base [@media(max-height:500px)]:text-xs' : 'text-xs', className)}>
       <Printer className={large ? 'h-4 w-4' : 'h-3.5 w-3.5'} aria-hidden="true" />
-      <span>Etiqueta: {getLabelTemplate(templateId).name}</span>
+      <span>Etiqueta: {getLabelTemplate(templateId).name} ({LABEL_TEMPLATE_SOURCE_TEXT[source].toLowerCase()})</span>
     </p>
   );
 }

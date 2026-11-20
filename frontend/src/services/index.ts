@@ -8,6 +8,7 @@ import type {
   DashboardStats,
   DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
+import type { LabelTemplateId } from '@/utils/labelTemplates';
 
 // ── Auth ────────────────────────────────────────────────
 export const authApi = {
@@ -187,6 +188,6 @@ export const settingsApi = {
     api.get<ApiResponse<AppSettings>>('/settings'),
 
   /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
-  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null }) =>
+  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null; labelTemplate?: LabelTemplateId | null }) =>
     api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', changes),
 };

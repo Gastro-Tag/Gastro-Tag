@@ -19,6 +19,7 @@ import {
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
+import { useKitchenTemplateSync } from '@/hooks/useLabelTemplate';
 
 const navItems = [
   { to: '/',         label: 'Dashboard',  icon: LayoutDashboard },
@@ -30,6 +31,7 @@ const navItems = [
 ];
 
 export function AppLayout({ children }: { children: ReactNode }) {
+  useKitchenTemplateSync(); // padrão da cozinha também na reimpressão da lista
   const { user, logout } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();

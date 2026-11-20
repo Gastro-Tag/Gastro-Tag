@@ -1,3 +1,5 @@
+import type { LabelTemplateId } from '@/utils/labelTemplates';
+
 // ── API envelope ───────────────────────────────────────
 export interface ApiResponse<T> {
   success: boolean;
@@ -287,6 +289,8 @@ export interface KitchenInfo {
   kitchenToday:    string;
   maxBackdateDays: number;
   requireValidatedRule?: boolean;
+  /** Modelo de etiqueta padrão da cozinha; null = não definido. */
+  labelTemplate?: LabelTemplateId | null;
 }
 
 export interface LabelPreview {
@@ -402,6 +406,8 @@ export interface AppSettings {
   requireValidatedRule: boolean;
   /** Meses acima dos quais a validade digitada gera aviso; null = desligado. */
   expiryWarningMonths:  number | null;
+  /** Modelo de etiqueta padrão da cozinha; null = não definido. */
+  labelTemplate:        LabelTemplateId | null;
   updatedAt:            string | null;
   updatedByName:        string | null;
 }
