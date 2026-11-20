@@ -169,7 +169,25 @@ Espere os serviços `db`, `api` e `frontend` ficarem `healthy` (a primeira subid
 ipconfig
 ```
 
-No adaptador **Wi-Fi**, anote o **Endereço IPv4** (por exemplo `192.168.0.15`). Se trocar de rede ou usar o hotspot do celular, o IP muda: rode o comando de novo.
+No adaptador em uso (**Wi-Fi** ou **Ethernet**, se estiver no cabo), anote o **Endereço IPv4** (por exemplo `192.168.0.15`). Se trocar de rede ou usar o hotspot do celular, o IP muda: rode o comando de novo.
+
+#### Fixar o IP (reserva no roteador)
+
+O roteador entrega um IP ao notebook e pode trocá-lo depois de reiniciar ou de alguns dias. Quando isso acontece, os tablets **não abrem mais a página** (o endereço salvo aponta para o IP antigo) e, ao abrir pelo IP novo, pedem **login de novo** e esquecem a exceção de modelo de etiqueta do aparelho (para o navegador, é outro site). A solução sem código é pedir ao roteador que reserve sempre o mesmo IP para o notebook:
+
+1. **Desligue o endereço aleatório do Windows para esta rede** (senão a reserva não funciona): Configurações → Rede e Internet → Wi-Fi → propriedades da rede → **Endereços de hardware aleatórios: Desativado**. No cabo, não há essa opção.
+2. **Anote o endereço físico (MAC) do adaptador em uso:**
+
+   ```powershell
+   Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object Name, MacAddress
+   ```
+
+3. **Entre no roteador** pelo navegador: o endereço é o **Gateway Padrão** do `ipconfig` (costuma ser `192.168.0.1` ou `192.168.1.1`); usuário e senha ficam na etiqueta do roteador ou com quem o administra.
+4. Procure **DHCP → Reserva de endereço** (o nome varia: "Address Reservation", "DHCP estático", "IP fixo por MAC"), adicione o MAC do passo 2 com o IP atual do notebook e salve.
+5. Reinicie o notebook e confira no `ipconfig` que o IP continua o mesmo.
+6. Em cada tablet, abra `http://<IP>/totem/login` e use **Adicionar à tela inicial** (Chrome: menu ⋮; Safari: Compartilhar): o atalho continua valendo enquanto o IP for o reservado.
+
+Sem acesso ao roteador (rede de terceiros, hotspot do celular), não há reserva: confira o IP a cada uso e, se mudou, abra o endereço novo nos tablets (passo 5). Não configure IP fixo direto no Windows numa rede que você não administra: pode conflitar com outro aparelho.
 
 ### 4. Firewall do Windows (ação sua, como administrador)
 
@@ -246,8 +264,7 @@ Rode antes e depois da demonstração. **Estes comandos são para o Git Bash** (
 
 ```bash
 ./scripts/backup-agora.sh
-mkdir -p ~/backups-gastrotag
-docker compose cp backup:/backups/. ~/backups-gastrotag/
+./scripts/copiar-backup.sh F:/GastroTag-backups   # troque F: pela letra do pendrive ou HD externo
 ```
 
 Detalhes e restauração em [`scripts/README.md`](scripts/README.md). Os backups contêm usuários e hashes de senha: guarde em local restrito.
@@ -257,7 +274,7 @@ Detalhes e restauração em [`scripts/README.md`](scripts/README.md). Os backups
 - **Sem HTTPS na rede local:** `http://<IP>` trafega sem criptografia na Wi-Fi; use apenas em rede de confiança. Só o link do túnel tem HTTPS.
 - **O notebook precisa ficar ligado e sem suspender.** Enquanto estiver na tomada, ajuste em Configurações → Sistema → Energia e bateria → Tela e suspensão para "Nunca" na opção "conectado" (e confira a ação ao fechar a tampa). Depois da demonstração, volte à configuração anterior.
 - **Limite de login por IP:** no Docker Desktop, aparelhos da rede local podem chegar à API com o mesmo IP, então tentativas de login falhas de um aparelho podem bloquear outros temporariamente.
-- O IP do notebook pode mudar entre redes; refaça o passo 3.
+- O IP do notebook pode mudar entre redes; refaça o passo 3 (ou fixe com a reserva no roteador, no mesmo passo).
 
 ## Modo totem
 
