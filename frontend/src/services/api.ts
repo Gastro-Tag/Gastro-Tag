@@ -1,5 +1,6 @@
 ﻿import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { clearVerifiedOperator } from '@/utils/totem';
+import { loginUrl } from '@/utils/redirect';
 
 export const api = axios.create({
   baseURL: '/api',
@@ -71,7 +72,8 @@ function logout() {
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
   localStorage.removeItem('gastrotag-auth');
-  window.location.href = window.location.pathname.startsWith('/totem') ? '/totem/login' : '/login';
+  const { pathname, search } = window.location;
+  window.location.href = pathname.startsWith('/totem') ? '/totem/login' : loginUrl(pathname, search);
 }
 
 /** Código do erro da API (`error.code`), ex.: RULE_REQUIRED; undefined sem resposta. */

@@ -1,5 +1,6 @@
 import { useId, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
+import { safeNext } from '@/utils/redirect';
 import { Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Spinner } from '@/components/ui/Spinner';
@@ -12,13 +13,15 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const { login, isLoading, error, clearError } = useAuthStore();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     clearError();
     try {
       await login(email, password);
-      navigate('/');
+      // Volta para a página que levou ao login (sessão recusada, URL aberta direto); senão, o início.
+      navigate(safeNext(searchParams.get('next')), { replace: true });
     } catch { /* error shown from store */ }
   }
 
