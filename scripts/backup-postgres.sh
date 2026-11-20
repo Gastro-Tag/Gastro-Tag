@@ -116,6 +116,10 @@ case "$MODO" in
     fi
     # Restos de um dump interrompido (container parado no meio) não são backups válidos.
     rm -f "$BACKUP_DIR"/.*.dump.parcial
+    # Depois de uma queda (energia, Docker reiniciado), o Docker sobe os containers sem esperar o
+    # banco ficar saudável: espera o banco aceitar conexões (até 3 min) antes do dump inicial.
+    i=0
+    until pg_isready -q || [ "$i" -ge 36 ]; do i=$((i + 1)); sleep 5; done
     # Dump ao subir; uma falha aqui não derruba o serviço (tenta de novo no horário).
     fazer_dump || erro "o dump inicial não foi feito; próxima tentativa às $BACKUP_HORARIO."
     ultimo_dia=""
