@@ -24,9 +24,12 @@ const updateSchema = z.strictObject({
   labelTemplate: z.enum(LABEL_TEMPLATE_IDS, { error: 'Modelo de etiqueta inválido.' }).nullable().optional(),
   kitchenName: reportHeaderText('O nome da cozinha'),
   technicalResponsible: reportHeaderText('O responsável técnico'),
+  equipmentTemperatureEnabled: z.boolean({ error: 'Informe se o registro de temperatura dos equipamentos está ligado (true ou false).' })
+    .optional(),
 }).refine(
   (data) => data.requireValidatedRule !== undefined || data.expiryWarningMonths !== undefined
-    || data.labelTemplate !== undefined || data.kitchenName !== undefined || data.technicalResponsible !== undefined,
+    || data.labelTemplate !== undefined || data.kitchenName !== undefined || data.technicalResponsible !== undefined
+    || data.equipmentTemperatureEnabled !== undefined,
   { message: 'Informe ao menos uma configuração para alterar.' },
 );
 

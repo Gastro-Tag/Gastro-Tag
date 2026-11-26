@@ -24,6 +24,8 @@ export interface KitchenSettingsData {
   /** Cabeçalho do relatório do período. Nulo: não informado. */
   kitchenName: string | null;
   technicalResponsible: string | null;
+  /** Registro de temperatura dos equipamentos. Desligado (padrão): a leitura é recusada. */
+  equipmentTemperatureEnabled: boolean;
   updatedAt: Date | null;
   updatedByName: string | null;
 }
@@ -31,12 +33,12 @@ export interface KitchenSettingsData {
 /** Sem linha gravada, valem os padrões (bloqueio desligado). */
 const DEFAULTS: KitchenSettingsData = {
   requireValidatedRule: false, expiryWarningMonths: null, labelTemplate: null,
-  kitchenName: null, technicalResponsible: null, updatedAt: null, updatedByName: null,
+  kitchenName: null, technicalResponsible: null, equipmentTemperatureEnabled: false, updatedAt: null, updatedByName: null,
 };
 
 const settingsSelect = {
   requireValidatedRule: true, expiryWarningMonths: true, labelTemplate: true,
-  kitchenName: true, technicalResponsible: true, updatedAt: true, updatedByName: true,
+  kitchenName: true, technicalResponsible: true, equipmentTemperatureEnabled: true, updatedAt: true, updatedByName: true,
 } as const;
 
 type SettingsRow = Omit<KitchenSettingsData, 'labelTemplate' | 'updatedAt'> & { labelTemplate: string | null; updatedAt: Date };
@@ -50,6 +52,7 @@ export interface KitchenSettingsUpdate {
   labelTemplate?: LabelTemplateId | null;
   kitchenName?: string | null;
   technicalResponsible?: string | null;
+  equipmentTemperatureEnabled?: boolean;
 }
 
 export const SettingsService = {
@@ -70,6 +73,7 @@ export const SettingsService = {
       labelTemplate: data.labelTemplate,
       kitchenName: data.kitchenName,
       technicalResponsible: data.technicalResponsible,
+      equipmentTemperatureEnabled: data.equipmentTemperatureEnabled,
       updatedById: actor.id, updatedByName: actor.name,
     };
     const row = await prisma.kitchenSettings.upsert({
