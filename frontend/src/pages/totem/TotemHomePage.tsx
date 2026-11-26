@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import {
   AlarmClock, AlertTriangle, CheckCircle2, History, PackageOpen, Printer,
-  Refrigerator, RefreshCw, Search, Snowflake, Tag, X,
+  Refrigerator, RefreshCw, Search, Snowflake, Tag, Thermometer, X,
 } from 'lucide-react';
 import { labelApi, productApi } from '@/services';
 import { extractError } from '@/services/api';
@@ -10,6 +10,7 @@ import type { Label, Product } from '@/types';
 import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { useDueLabels } from '@/hooks/useDueLabels';
+import { useEquipmentSummary } from '@/hooks/useEquipmentSummary';
 import { formatBR, formatDateTimeBR } from '@/utils/date';
 import { printLabel } from '@/utils/printLabel';
 import { getUsage, normalizeText } from '@/utils/totem';
@@ -42,6 +43,8 @@ export function TotemHomePage() {
   const due = useDueLabels(60_000);
   const dueCount = due.meta ? due.meta.counts.expired + due.meta.counts.today : null;
   const dueExpired = (due.meta?.counts.expired ?? 0) > 0;
+  // Atalho "Temperaturas": só com o registro ligado; se a leitura da configuração falhar, não aparece.
+  const equipment = useEquipmentSummary(60_000);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,7 +111,7 @@ export function TotemHomePage() {
       {/* Fixo no topo só quando a tela tem altura de sobra; em telas baixas rola junto com a lista. */}
       <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#F3F4F6]/95 px-3 pb-3 pt-3 backdrop-blur sm:px-5 sm:pt-4 [@media(max-height:700px)]:static">
         <div className="mx-auto w-full max-w-[1600px]">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3">
+        <div className={cn('grid grid-cols-2 gap-2 sm:gap-3', equipment.enabled ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
           <TabButton active={tab === 'nova'} icon={<Tag className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />} onClick={() => setTab('nova')}>
             Nova etiqueta
           </TabButton>
@@ -119,7 +122,8 @@ export function TotemHomePage() {
             type="button"
             onClick={() => navigate('/totem/descartar')}
             className={cn(
-              'col-span-2 flex h-14 min-w-0 touch-manipulation items-center justify-center gap-2 rounded-2xl border-2 px-2 text-base font-extrabold leading-tight transition-colors active:scale-[0.99] sm:col-span-1 sm:h-16 sm:gap-3 sm:text-xl',
+              'flex h-14 min-w-0 touch-manipulation items-center justify-center gap-2 rounded-2xl border-2 px-2 text-base font-extrabold leading-tight transition-colors active:scale-[0.99] sm:col-span-1 sm:h-16 sm:gap-3 sm:text-xl',
+              !equipment.enabled && 'col-span-2',
               dueCount ? (dueExpired ? 'border-rose-400 bg-rose-50 text-rose-700' : 'border-amber-400 bg-amber-50 text-amber-800') : 'border-slate-200 bg-white text-slate-600',
             )}
           >
@@ -134,6 +138,27 @@ export function TotemHomePage() {
               </span>
             )}
           </button>
+          {equipment.enabled && (
+            <button
+              type="button"
+              onClick={() => navigate('/totem/temperaturas')}
+              className={cn(
+                'flex h-14 min-w-0 touch-manipulation items-center justify-center gap-2 rounded-2xl border-2 px-2 text-base font-extrabold leading-tight transition-colors active:scale-[0.99] sm:col-span-1 sm:h-16 sm:gap-3 sm:text-xl',
+                equipment.missing ? 'border-amber-400 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600',
+              )}
+            >
+              <Thermometer className="h-5 w-5 shrink-0 sm:h-6 sm:w-6" />
+              Temperaturas
+              {equipment.missing !== null && (
+                <span
+                  aria-label={`${equipment.missing} ${equipment.missing === 1 ? 'equipamento sem leitura hoje' : 'equipamentos sem leitura hoje'}`}
+                  className={cn('min-w-[2rem] rounded-full px-2.5 py-0.5 text-base font-extrabold sm:text-lg', equipment.missing > 0 ? 'bg-amber-500 text-white' : 'bg-slate-200 text-slate-600')}
+                >
+                  {equipment.missing}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         {tab === 'nova' && (

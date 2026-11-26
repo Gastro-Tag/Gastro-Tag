@@ -33,6 +33,7 @@ let operatorId = '';
 const productIds: string[] = [];
 const ruleIds: string[] = [];
 const createdUserIds: string[] = [];
+const equipmentIds: string[] = [];
 let accessToken = '';
 let refreshToken = '';
 let operatorToken = '';
@@ -45,7 +46,9 @@ const ruleBody = {
 
 beforeAll(async () => {
   // Uma execução interrompida pode ter deixado o bloqueio ou o limite do aviso ligados: começa sempre desligado.
-  await prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false, expiryWarningMonths: null } });
+  await prisma.kitchenSettings.updateMany({
+    data: { requireValidatedRule: false, expiryWarningMonths: null, equipmentTemperatureEnabled: false },
+  });
   const user = await prisma.user.create({ data: {
     name: 'Teste de integração', email,
     passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
@@ -60,6 +63,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Temperatura dos equipamentos: leituras apontam para equipamento e usuários (Restrict); apaga antes deles.
+  const testUserIds = [userId, operatorId, ...createdUserIds].filter(Boolean);
+  await prisma.temperatureReading.deleteMany({
+    where: { OR: [{ equipmentId: { in: equipmentIds } }, { userId: { in: testUserIds } }, { handlerId: { in: testUserIds } }] },
+  });
+  if (equipmentIds.length) await prisma.equipment.deleteMany({ where: { id: { in: equipmentIds } } });
   // Plano B: registros apontam para produto, regra e usuário (Restrict); apaga antes deles.
   if (productIds.length) await prisma.contingencyRecord.deleteMany({ where: { productId: { in: productIds } } });
   await prisma.connectivityOutage.deleteMany({ where: { reportedById: { in: [userId, operatorId].filter(Boolean) } } });
@@ -1660,6 +1669,7 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect(me.body.data.sub).toBe(operatorId);
       expect(me.body.meta).toEqual({
         kitchenToday: today(), maxBackdateDays: 2, requireValidatedRule: false, labelTemplate: null,
+        equipmentTemperatureEnabled: false,
       });
     });
 
@@ -3609,5 +3619,294 @@ describe('plano B: queda de conexão e registro de contingência', () => {
     expect(onlyOpen.body.data.every((item: Item) => item.outcome === 'EM_USO')).toBe(true);
     expect(onlyOpen.body.data.some((item: Item) => item.id === later.body.data.id)).toBe(true);
     expect((await listRecords('closed')).status).toBe(422);
+  });
+});
+
+describe('temperatura dos equipamentos', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  let pinUserId = '';
+  const pinUserName = `Operador temperatura ${tag}`;
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const DAY = 86_400_000;
+  const setEnabled = (value: boolean) => request(app).put('/api/settings').set('Authorization', asAdmin())
+    .send({ equipmentTemperatureEnabled: value });
+  const createEquipment = async (body: object = {}) => {
+    const res = await request(app).post('/api/equipment').set('Authorization', asAdmin()).send({
+      name: `Geladeira ${randomUUID().slice(0, 8)}`, storageType: 'REFRIGERADO', minTemperature: 0, maxTemperature: 5, ...body,
+    });
+    expect(res.status).toBe(201);
+    equipmentIds.push(res.body.data.id);
+    return res.body.data as { id: string; name: string; active: boolean; minTemperature: number; maxTemperature: number };
+  };
+  const postReading = (id: string, body: object = {}, token = operatorAuth) =>
+    request(app).post(`/api/equipment/${id}/readings`).set('Authorization', token)
+      .send({ temperature: 3, responsibleName: 'Cozinheira da manhã', ...body });
+  const getToday = (token = operatorAuth) => request(app).get('/api/equipment/today').set('Authorization', token);
+  const getReadings = (query: Record<string, string> = {}) =>
+    request(app).get('/api/equipment/readings').query(query).set('Authorization', asAdmin());
+  /** Move a leitura para N dias atrás (dia da cozinha e hora juntos). */
+  const moveReading = (id: string, daysAgo: number) => prisma.temperatureReading.update({
+    where: { id },
+    data: { readAt: new Date(Date.now() - daysAgo * DAY), kitchenDate: new Date(kitchenToday().getTime() - daysAgo * DAY) },
+  });
+  const resetSettings = () => prisma.kitchenSettings.updateMany({ data: { equipmentTemperatureEnabled: false } });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.140')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.141')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: pinUserName, email: `api-temp-pin-${suffix}@example.test`, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    pinUserId = created.body.data.id;
+    createdUserIds.push(pinUserId);
+    await request(app).patch(`/api/users/${pinUserId}/pin`).set('Authorization', asAdmin()).send({ pin: '2468' }).expect(200);
+    await resetSettings();
+  });
+  afterAll(resetSettings);
+
+  it('lets only admins manage equipment and validates the body', async () => {
+    expect((await request(app).get('/api/equipment')).status).toBe(401);
+    const body = { name: `Freezer ${tag}`, storageType: 'CONGELADO', minTemperature: -25, maxTemperature: -15 };
+    expect((await request(app).post('/api/equipment').set('Authorization', operatorAuth).send(body)).status).toBe(403);
+    const freezer = await createEquipment(body);
+    expect(freezer).toMatchObject({ name: `Freezer ${tag}`, active: true, minTemperature: -25, maxTemperature: -15 });
+
+    expect((await request(app).put(`/api/equipment/${freezer.id}`).set('Authorization', operatorAuth).send({ name: 'X' })).status).toBe(403);
+    expect((await request(app).delete(`/api/equipment/${freezer.id}`).set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/equipment/readings').set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/equipment').query({ all: 'true' }).set('Authorization', operatorAuth)).status).toBe(403);
+    const list = await request(app).get('/api/equipment').set('Authorization', operatorAuth);
+    expect(list.status).toBe(200);
+    expect(list.body.data.some((item: { id: string }) => item.id === freezer.id)).toBe(true);
+
+    const post = (extra: object) => request(app).post('/api/equipment').set('Authorization', asAdmin()).send({ ...body, ...extra });
+    expect((await post({ name: `freezer ${tag}` })).status).toBe(409); // mesmo nome ativo, sem diferenciar maiúsculas
+    expect((await post({ name: `Outro ${tag}`, minTemperature: -10, maxTemperature: -20 })).status).toBe(422);
+    expect((await post({ name: `Outro ${tag}`, minTemperature: -51 })).status).toBe(422);
+    expect((await post({ name: `Outro ${tag}`, active: false })).status).toBe(422);
+    expect((await post({ name: '   ' })).status).toBe(422);
+    expect((await post({ name: 'x'.repeat(61) })).status).toBe(422);
+
+    const put = (data: object) => request(app).put(`/api/equipment/${freezer.id}`).set('Authorization', asAdmin()).send(data);
+    expect((await put({ storageType: 'REFRIGERADO' })).status).toBe(422);
+    expect((await put({})).status).toBe(422);
+    expect((await put({ minTemperature: -10 })).status).toBe(422); // passaria da máxima gravada (−15)
+    expect((await request(app).put(`/api/equipment/${randomUUID()}`).set('Authorization', asAdmin()).send({ name: 'Y' })).status).toBe(404);
+  });
+
+  it('exposes the setting and refuses readings while it is off', async () => {
+    const equipment = await createEquipment();
+    const settings = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(settings.body.data.equipmentTemperatureEnabled).toBe(false);
+    expect((await request(app).get('/api/auth/me').set('Authorization', operatorAuth)).body.meta.equipmentTemperatureEnabled).toBe(false);
+
+    const refused = await postReading(equipment.id);
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toEqual({
+      message: 'O registro de temperatura dos equipamentos está desligado.', code: 'EQUIPMENT_TEMPERATURE_DISABLED',
+    });
+    // Desligado, o "hoje" continua funcionando para o ADMIN preparar.
+    const today = await getToday(asAdmin());
+    expect(today.status).toBe(200);
+    expect(today.body.data.some((item: { id: string }) => item.id === equipment.id)).toBe(true);
+
+    expect((await request(app).put('/api/settings').set('Authorization', operatorAuth).send({ equipmentTemperatureEnabled: true })).status).toBe(403);
+    expect((await request(app).put('/api/settings').set('Authorization', asAdmin()).send({ equipmentTemperatureEnabled: 'sim' })).status).toBe(422);
+    const on = await setEnabled(true);
+    expect(on.status).toBe(200);
+    expect(on.body.data.equipmentTemperatureEnabled).toBe(true);
+    expect((await request(app).get('/api/auth/me').set('Authorization', operatorAuth)).body.meta.equipmentTemperatureEnabled).toBe(true);
+    // PUT parcial: mexer em outra configuração não desliga o registro.
+    await request(app).put('/api/settings').set('Authorization', asAdmin()).send({ requireValidatedRule: false }).expect(200);
+    expect((await request(app).get('/api/settings').set('Authorization', asAdmin())).body.data.equipmentTemperatureEnabled).toBe(true);
+  });
+
+  it('stores readings inside and outside the range without refusing them', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+
+    const inside = await postReading(equipment.id, { temperature: 4.25, note: '  porta fechada  ' });
+    expect(inside.status).toBe(201);
+    expect(inside.body.data).toMatchObject({
+      equipmentId: equipment.id, equipmentName: equipment.name, temperature: 4.3, minTemperature: 0, maxTemperature: 5,
+      outOfRange: false, responsibleName: 'Cozinheira da manhã', handlerId: null, handlerVerified: false,
+      userId: operatorId, note: 'porta fechada', kitchenDate: today(),
+    });
+
+    const outside = await postReading(equipment.id, { temperature: 9 });
+    expect(outside.status).toBe(201);
+    expect(outside.body.data.outOfRange).toBe(true);
+    expect((await postReading(equipment.id, { temperature: -0.1 })).body.data.outOfRange).toBe(true);
+    expect((await postReading(equipment.id, { temperature: 5 })).body.data.outOfRange).toBe(false);
+
+    expect((await postReading(equipment.id, { responsibleName: undefined })).status).toBe(422);
+    expect((await postReading(equipment.id, { responsibleName: 'A' })).status).toBe(422);
+    expect((await postReading(equipment.id, { temperature: 31 })).status).toBe(422);
+    expect((await postReading(equipment.id, { temperature: '4' })).status).toBe(422);
+    expect((await postReading(equipment.id, { note: 'x'.repeat(201) })).status).toBe(422);
+    expect((await postReading(equipment.id, { storageType: 'REFRIGERADO' })).status).toBe(422);
+    expect((await postReading(randomUUID())).status).toBe(404);
+    expect((await postReading('nao-e-id')).status).toBe(422);
+    expect((await request(app).post(`/api/equipment/${equipment.id}/readings`).send({ temperature: 3 })).status).toBe(401);
+  });
+
+  it('uses the PIN operator as responsible and refuses an invalid handler token', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment();
+    const verified = await request(app).post('/api/totem/operators/verify').set('Authorization', operatorAuth)
+      .set('X-Forwarded-For', '198.51.100.142').send({ userId: pinUserId, pin: '2468' });
+    expect(verified.status).toBe(200);
+    const { handlerToken } = verified.body.data;
+
+    const withToken = await postReading(equipment.id, { handlerToken, responsibleName: 'Ignorado' });
+    expect(withToken.status).toBe(201);
+    expect(withToken.body.data).toMatchObject({
+      responsibleName: pinUserName, handlerId: pinUserId, handlerVerified: true, userId: operatorId,
+    });
+    expect((await postReading(equipment.id, { handlerToken, responsibleName: undefined })).status).toBe(201);
+
+    const invalid = await postReading(equipment.id, { handlerToken: 'nao-e-um-token' });
+    expect(invalid.status).toBe(401);
+    expect(invalid.body.error.code).toBe('HANDLER_INVALID');
+    // Token de outra sessão (o ADMIN não conferiu este PIN) também é recusado.
+    const otherSession = await postReading(equipment.id, { handlerToken }, asAdmin());
+    expect(otherSession.body.error.code).toBe('HANDLER_INVALID');
+  });
+
+  it('returns the same reading on an idempotent resend, before the setting and the token are checked', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment();
+    const other = await createEquipment();
+    const requestId = randomUUID();
+
+    const first = await postReading(equipment.id, { requestId, temperature: 2 });
+    expect(first.status).toBe(201);
+    const resent = await postReading(equipment.id, { requestId, temperature: 2 });
+    expect(resent.status).toBe(200);
+    expect(resent.body.data.id).toBe(first.body.data.id);
+    expect(await prisma.temperatureReading.count({ where: { equipmentId: equipment.id } })).toBe(1);
+
+    expect((await postReading(other.id, { requestId })).status).toBe(409);
+    await setEnabled(false).expect(200);
+    const replayOff = await postReading(equipment.id, { requestId, handlerToken: 'nao-e-um-token' });
+    expect(replayOff.status).toBe(200);
+    expect(replayOff.body.data.id).toBe(first.body.data.id);
+    // O mesmo requestId de outra conta é outro pedido.
+    await setEnabled(true).expect(200);
+    const fromAdmin = await postReading(equipment.id, { requestId }, asAdmin());
+    expect(fromAdmin.status).toBe(201);
+    expect(fromAdmin.body.data.id).not.toBe(first.body.data.id);
+  });
+
+  it('counts only the kitchen day in today', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+    const empty = await createEquipment();
+    const yesterday = await postReading(equipment.id, { temperature: 8 });
+    await moveReading(yesterday.body.data.id, 1);
+    await postReading(equipment.id, { temperature: 9, responsibleName: 'Primeira de hoje' }).expect(201);
+    const last = await postReading(equipment.id, { temperature: 3, responsibleName: 'Última de hoje' });
+    expect(last.status).toBe(201);
+
+    const res = await getToday();
+    expect(res.status).toBe(200);
+    expect(res.body.meta.kitchenToday).toBe(today());
+    const item = res.body.data.find((row: { id: string }) => row.id === equipment.id);
+    expect(item).toMatchObject({
+      id: equipment.id, name: equipment.name, storageType: 'REFRIGERADO', minTemperature: 0, maxTemperature: 5,
+      readingsToday: 2, outOfRangeToday: 1,
+      lastReading: { temperature: 3, responsibleName: 'Última de hoje', outOfRange: false },
+    });
+    expect(item.lastReading.readAt).toBe(last.body.data.readAt);
+    expect(res.body.data.find((row: { id: string }) => row.id === empty.id))
+      .toMatchObject({ lastReading: null, readingsToday: 0, outOfRangeToday: 0 });
+  });
+
+  it('lists readings by kitchen day with defaults, filters and limits', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+    const old = await postReading(equipment.id, { temperature: 7 });
+    await moveReading(old.body.data.id, 10);
+    const edge = await postReading(equipment.id, { temperature: 2 });
+    await moveReading(edge.body.data.id, 6);
+    const recent = await postReading(equipment.id, { temperature: 8 });
+    expect(recent.status).toBe(201);
+
+    const byDefault = await getReadings({ equipmentId: equipment.id });
+    expect(byDefault.status).toBe(200);
+    expect(byDefault.headers['cache-control']).toBe('no-store');
+    expect(byDefault.body.data.map((row: { id: string }) => row.id)).toEqual([recent.body.data.id, edge.body.data.id]);
+    expect(byDefault.body.meta).toMatchObject({ from: daysFromToday(-6), to: today(), total: 2, outOfRange: 1, truncated: false });
+    expect(byDefault.body.data[0]).toMatchObject({ equipmentName: equipment.name, temperature: 8, outOfRange: true });
+
+    const wide = await getReadings({ equipmentId: equipment.id, from: daysFromToday(-10), to: today() });
+    expect(wide.body.meta).toMatchObject({ total: 3, outOfRange: 2 });
+    const onlyOld = await getReadings({ equipmentId: equipment.id, from: daysFromToday(-10), to: daysFromToday(-10) });
+    expect(onlyOld.body.data.map((row: { id: string }) => row.id)).toEqual([old.body.data.id]);
+
+    expect((await getReadings({ from: daysFromToday(-91), to: today() })).status).toBe(200);
+    expect((await getReadings({ from: daysFromToday(-92), to: today() })).status).toBe(422);
+    expect((await getReadings({ from: today(), to: daysFromToday(-1) })).status).toBe(422);
+    expect((await getReadings({ from: '2026-02-31' })).status).toBe(422);
+    expect((await getReadings({ equipmentId: 'x' })).status).toBe(422);
+  });
+
+  it('keeps the old range on past readings after the equipment is edited', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+    const before = await postReading(equipment.id, { temperature: 6 });
+    expect(before.body.data.outOfRange).toBe(true);
+
+    const newName = `Geladeira editada ${randomUUID().slice(0, 8)}`;
+    const edited = await request(app).put(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin())
+      .send({ name: newName, maxTemperature: 7 });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data).toMatchObject({ name: newName, minTemperature: 0, maxTemperature: 7 });
+
+    const stored = await prisma.temperatureReading.findUniqueOrThrow({ where: { id: before.body.data.id } });
+    expect(Number(stored.maxTemperature)).toBe(5);
+    expect(stored.outOfRange).toBe(true);
+    // O nome também é a cópia da época; o atual vem em equipmentCurrentName.
+    expect(stored.equipmentName).toBe(equipment.name);
+    const history = await request(app).get('/api/equipment/readings').query({ equipmentId: equipment.id })
+      .set('Authorization', asAdmin()).expect(200);
+    expect(history.body.data.find((row: { id: string }) => row.id === before.body.data.id))
+      .toMatchObject({ equipmentName: equipment.name, equipmentCurrentName: newName, equipmentActive: true });
+    const after = await postReading(equipment.id, { temperature: 6 });
+    expect(after.body.data).toMatchObject({ outOfRange: false, maxTemperature: 7, equipmentName: newName });
+  });
+
+  it('only deactivates equipment and refuses readings for it', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment();
+    const reading = await postReading(equipment.id);
+    expect(reading.status).toBe(201);
+
+    const removed = await request(app).delete(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin());
+    expect(removed.status).toBe(200);
+    expect(removed.body.data.active).toBe(false);
+    expect((await request(app).delete(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin())).status).toBe(200);
+    expect((await request(app).delete(`/api/equipment/${randomUUID()}`).set('Authorization', asAdmin())).status).toBe(404);
+    expect(await prisma.temperatureReading.count({ where: { equipmentId: equipment.id } })).toBe(1);
+
+    const active = await request(app).get('/api/equipment').set('Authorization', operatorAuth);
+    expect(active.body.data.some((item: { id: string }) => item.id === equipment.id)).toBe(false);
+    const all = await request(app).get('/api/equipment').query({ all: 'true' }).set('Authorization', asAdmin());
+    expect(all.body.data.find((item: { id: string }) => item.id === equipment.id)).toMatchObject({ active: false });
+    expect((await getToday()).body.data.some((item: { id: string }) => item.id === equipment.id)).toBe(false);
+
+    const refused = await postReading(equipment.id);
+    expect(refused.status).toBe(409);
+    expect((await request(app).put(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin()).send({ name: 'Z' })).status).toBe(409);
+    // O nome fica livre para um equipamento novo; as leituras antigas continuam no período.
+    await createEquipment({ name: equipment.name });
+    const history = await getReadings({ equipmentId: equipment.id });
+    expect(history.body.data.map((row: { id: string }) => row.id)).toEqual([reading.body.data.id]);
   });
 });

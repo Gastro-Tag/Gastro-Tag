@@ -17,6 +17,7 @@ import {
   BookOpenCheck,
   ClipboardList,
   FileText,
+  Thermometer,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
@@ -30,6 +31,7 @@ const navItems = [
   { to: '/rules',    label: 'Regras de validade', icon: BookOpenCheck, adminOnly: true },
   { to: '/reports',  label: 'Relatório',  icon: FileText, adminOnly: true },
   { to: '/contingency', label: 'Plano B', icon: ClipboardList, adminOnly: true },
+  { to: '/equipment', label: 'Temperaturas', icon: Thermometer, adminOnly: true },
   { to: '/users',    label: 'Usuários',   icon: Users, adminOnly: true },
   { to: '/totem',    label: 'Modo Totem', icon: Tablet          },
 ];
@@ -55,6 +57,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (location.pathname.startsWith('/rules')) return { title: 'Regras de validade', subtitle: 'Prazos com fonte, responsável e versões' };
     if (location.pathname.startsWith('/reports')) return { title: 'Relatório do período', subtitle: 'Etiquetas criadas, para imprimir ou salvar em PDF' };
     if (location.pathname.startsWith('/contingency')) return { title: 'Plano B', subtitle: 'Etiquetas de papel usadas quando a rede caiu' };
+    if (location.pathname.startsWith('/equipment')) return { title: 'Temperaturas', subtitle: 'Leituras digitadas por geladeira e freezer' };
     if (location.pathname.startsWith('/users')) return { title: 'Usuários', subtitle: 'Contas, perfis e acesso ao sistema' };
     return { title: 'GastroTag', subtitle: 'Gestão Inteligente de Alimentos' };
   };

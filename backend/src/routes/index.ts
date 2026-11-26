@@ -10,6 +10,7 @@ import { RuleController } from '../controllers/ruleController';
 import { TotemController } from '../controllers/totemController';
 import { SettingsController } from '../controllers/settingsController';
 import { ContingencyController } from '../controllers/contingencyController';
+import { EquipmentController } from '../controllers/equipmentController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
@@ -130,6 +131,17 @@ router.post('/contingency/records/preview', authenticate, requireAdmin, Continge
 router.post('/contingency/records', authenticate, requireAdmin, ContingencyController.createRecord);
 router.get('/contingency/records', authenticate, requireAdmin, ContingencyController.listRecords);
 router.post('/contingency/records/:id/close', authenticate, requireAdmin, ContingencyController.closeRecord);
+
+// Temperatura dos equipamentos: registro separado da etiqueta. Ler e registrar é de qualquer conta logada;
+// cadastrar, editar, desativar e consultar o período é só do ADMIN.
+// "today" e "readings" antes de qualquer /equipment/:id.
+router.get('/equipment', authenticate, EquipmentController.list);
+router.get('/equipment/today', authenticate, EquipmentController.today);
+router.get('/equipment/readings', authenticate, requireAdmin, EquipmentController.readings);
+router.post('/equipment', authenticate, requireAdmin, EquipmentController.create);
+router.put('/equipment/:id', authenticate, requireAdmin, EquipmentController.update);
+router.delete('/equipment/:id', authenticate, requireAdmin, EquipmentController.remove);
+router.post('/equipment/:id/readings', authenticate, EquipmentController.createReading);
 
 router.get('/dashboard/stats', authenticate, DashboardController.getStats);
 
