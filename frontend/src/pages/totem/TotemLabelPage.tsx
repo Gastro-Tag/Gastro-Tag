@@ -13,6 +13,7 @@ import { Spinner } from '@/components/ui/Spinner';
 import { KeyboardSheet } from '@/components/totem/KeyboardSheet';
 import { useTotemStore } from '@/store/totemStore';
 import { formatBR } from '@/utils/date';
+import { expiresInText, firstToUseLotIds } from '@/utils/useFirst';
 import { printLabel } from '@/utils/printLabel';
 import {
   DEFAULT_TEMP, STORAGE_LABEL, UNREADABLE_LOT, dateDraft, formatDateDraft,
@@ -114,6 +115,8 @@ export function TotemLabelPage() {
   const options = useMemo(() => (product ? storagesOf(product) : []), [product]);
 
   const lots = useMemo(() => (product ? usableLots(product) : []), [product]);
+  // O SEM-LOTE (needsReview) tem validade provisória: não entra no selo nem mostra os dias.
+  const firstToUse = useMemo(() => firstToUseLotIds(lots.filter((item) => !item.needsReview)), [lots]);
   const expiredLots = useMemo(() => (product?.lots ?? []).filter((item) => item.computedStatus === 'expired' && !item.needsReview), [product]);
 
   // Pré-cálculo de cada armazenamento. A regra, o teto e a data de hoje são do servidor.
@@ -338,7 +341,8 @@ export function TotemLabelPage() {
               key={item.id}
               selected={source?.lotId === item.id}
               title={`Validade ${formatBR(item.expiryDate)}`}
-              subtitle={item.needsReview ? 'Confira na embalagem' : `Lote ${item.code}`}
+              subtitle={item.needsReview ? 'Confira na embalagem' : `Lote ${item.code} · ${expiresInText(item.daysUntilExpiry)}`}
+              badge={firstToUse.has(item.id) ? 'Usar primeiro' : undefined}
               onClick={() => { setSource({ lotId: item.id }); setSubmitError(''); }}
             />
           ))}
@@ -565,8 +569,8 @@ export function Centered({ children }: { children: React.ReactNode }) {
   );
 }
 
-function SourceButton({ selected, title, subtitle, onClick }: {
-  selected: boolean; title: string; subtitle: string; onClick: () => void;
+function SourceButton({ selected, title, subtitle, badge, onClick }: {
+  selected: boolean; title: string; subtitle: string; badge?: string; onClick: () => void;
 }) {
   return (
     <button
@@ -580,6 +584,11 @@ function SourceButton({ selected, title, subtitle, onClick }: {
     >
       <CalendarDays className={cn('h-7 w-7 shrink-0 sm:h-8 sm:w-8', selected ? 'text-brand-600' : 'text-slate-400')} />
       <span className="min-w-0">
+        {badge && (
+          <span className="mb-1 inline-block rounded-lg bg-amber-100 px-2 py-0.5 text-sm font-extrabold uppercase tracking-wide text-amber-800 sm:text-base">
+            {badge}
+          </span>
+        )}
         <span className="block break-words text-xl font-extrabold leading-tight sm:text-2xl">{title}</span>
         <span className="block break-words text-base font-semibold leading-tight text-slate-500 sm:text-lg">{subtitle}</span>
       </span>

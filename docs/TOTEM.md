@@ -13,7 +13,7 @@ Rota: `http://<servidor>/totem` (mesmo frontend e mesma API do painel). A tela s
 | (5) | Navegador | Sem `--kiosk-printing`, o diálogo de impressão do navegador pede mais um toque (ver Instalação do totem) |
 | — | Pronto | Confirmação + Reimprimir / Concluir; volta sozinho ao início em 10 s |
 
-O caso simples (4 toques, 5 contando o diálogo de impressão) vale para produto com um único lote em uso e responsável do turno já escolhido. Se houver mais de um lote, nada vem marcado: o operador toca no lote da embalagem em mãos. Sem lote, ou com outra embalagem, toca em **Outra embalagem** e digita a validade impressa. Sem responsável do turno, há mais um passo para escolhê-lo.
+O caso simples (4 toques, 5 contando o diálogo de impressão) vale para produto com um único lote em uso e responsável do turno já escolhido. Se houver mais de um lote, nada vem marcado: o operador toca no lote da embalagem em mãos. Cada lote mostra quanto falta para vencer ("vence em N dias", contado pela data da cozinha), e o de menor validade ganha o selo **Usar primeiro** (empate marca todos; com um lote só, ou todos com a mesma validade, não há selo; o lote provisório "Confira na embalagem" fica fora do selo e da contagem). O selo só orienta: não escolhe o lote. Sem lote, ou com outra embalagem, toca em **Outra embalagem** e digita a validade impressa. Sem responsável do turno, há mais um passo para escolhê-lo.
 
 Se precisar trocar o armazenamento (refrigerado/congelado), é 1 toque a mais. Cada cartão já mostra a data de descarte daquele armazenamento.
 
