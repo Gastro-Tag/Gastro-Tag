@@ -46,7 +46,7 @@ O administrador pode definir um PIN de 4 a 6 dígitos para uma conta em **Usuár
 
 - O PIN é opcional e não substitui o login do totem: ele confirma **quem** está operando. Com PIN confirmado, a etiqueta grava o operador (`handlerId`) e o histórico mostra "Operador confirmado"; com nome digitado, fica só o nome.
 - A confirmação vale por 10 h (ou até o fim do turno no aparelho) e só na sessão deste totem. Trocar ou remover o PIN, desativar a conta ou encerrar a sessão do totem a invalida, e o totem pede o operador de novo.
-- 5 PINs errados para o mesmo operador, neste aparelho, bloqueiam novas tentativas por 15 minutos.
+- 5 PINs errados para o mesmo operador, neste aparelho, bloqueiam novas tentativas por 15 minutos. O administrador pode desbloquear antes em **Usuários → Desbloquear PIN** (vale para todos os aparelhos e mantém o PIN); trocar o PIN também desbloqueia.
 - O token do operador fica no `localStorage` do aparelho (chave `gastrotag:totem:operator`) e é enviado ao criar etiqueta, dividir e descartar.
 
 ## Para descartar

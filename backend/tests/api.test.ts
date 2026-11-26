@@ -1549,6 +1549,42 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.4')).status).toBe(200);
     }, 30_000);
 
+    it('lets the ADMIN unlock a blocked PIN on every device without changing it', async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect((await verify({ userId: pinUserId, pin: '9999' }, asOperator, '198.51.100.30')).status).toBe(401);
+      }
+      expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.30')).status).toBe(429);
+
+      const unlockPath = `/api/users/${pinUserId}/pin/unlock`;
+      expect((await request(app).post(unlockPath).set('Authorization', asOperator)).status).toBe(403);
+      expect((await request(app).post(unlockPath)).status).toBe(401);
+      expect((await request(app).post('/api/users/00000000-0000-4000-8000-000000000000/pin/unlock').set('Authorization', asAdmin())).status).toBe(404);
+
+      const unlocked = await request(app).post(unlockPath).set('Authorization', asAdmin());
+      expect(unlocked.status).toBe(200);
+      expect(unlocked.body.data).toMatchObject({ id: pinUserId, hasPin: true });
+      expect(unlocked.body.data.pinHash).toBeUndefined();
+      // Mesmo aparelho volta a tentar, com o mesmo PIN.
+      expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.30')).status).toBe(200);
+    }, 30_000);
+
+    it('unlocking another user does not release this block', async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect((await verify({ userId: pinUserId, pin: '9999' }, asOperator, '198.51.100.32')).status).toBe(401);
+      }
+      expect((await request(app).post(`/api/users/${userId}/pin/unlock`).set('Authorization', asAdmin())).status).toBe(200);
+      expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.32')).status).toBe(429);
+    }, 30_000);
+
+    it('a new PIN set by the ADMIN also releases the block', async () => {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        expect((await verify({ userId: pinUserId, pin: '9999' }, asOperator, '198.51.100.31')).status).toBe(401);
+      }
+      expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.31')).status).toBe(429);
+      expect((await setPin(pinUserId, '4321')).status).toBe(200);
+      expect((await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.31')).status).toBe(200);
+    }, 30_000);
+
     it('records the confirmed operator on labels, children and closing', async () => {
       const { handlerToken } = (await verify({ userId: pinUserId, pin: '4321' }, asOperator, '198.51.100.5')).body.data;
 

@@ -30,6 +30,7 @@ export function UsersPage() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toToggle, setToToggle] = useState<ManagedUser | null>(null);
   const [toRemovePin, setToRemovePin] = useState<ManagedUser | null>(null);
+  const [toUnlockPin, setToUnlockPin] = useState<ManagedUser | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -54,6 +55,18 @@ export function UsersPage() {
       await userApi.update(target.id, { active: !target.active });
       toast(target.active ? 'Usuário desativado.' : 'Usuário reativado.', 'success');
       void load();
+    } catch (err) {
+      toast(extractError(err), 'error');
+    }
+  }
+
+  async function confirmUnlockPin() {
+    if (!toUnlockPin) return;
+    const target = toUnlockPin;
+    setToUnlockPin(null);
+    try {
+      await userApi.unlockPin(target.id);
+      toast(`Novas tentativas de PIN liberadas para ${target.name}. O PIN continua o mesmo.`, 'success');
     } catch (err) {
       toast(extractError(err), 'error');
     }
@@ -125,6 +138,11 @@ export function UsersPage() {
                     <Hash className="h-3.5 w-3.5" /> {user.hasPin ? 'Trocar PIN' : 'Definir PIN'}
                   </button>
                   {user.hasPin && (
+                    <button className="btn btn-ghost btn-sm" onClick={() => setToUnlockPin(user)}>
+                      Desbloquear PIN
+                    </button>
+                  )}
+                  {user.hasPin && (
                     <button className="btn btn-ghost btn-sm" onClick={() => setToRemovePin(user)}>
                       Remover PIN
                     </button>
@@ -149,6 +167,15 @@ export function UsersPage() {
           onSaved={(message) => { setDialog(null); toast(message, 'success'); void load(); }}
         />
       )}
+
+      <ConfirmDialog
+        open={!!toUnlockPin}
+        title="Desbloquear PIN"
+        body={`Libera novas tentativas de PIN de ${toUnlockPin?.name ?? ''} em todos os aparelhos, sem esperar os 15 minutos. O PIN continua o mesmo; se a pessoa esqueceu, use "Trocar PIN".`}
+        confirmLabel="Desbloquear"
+        onConfirm={() => void confirmUnlockPin()}
+        onCancel={() => setToUnlockPin(null)}
+      />
 
       <ConfirmDialog
         open={!!toRemovePin}

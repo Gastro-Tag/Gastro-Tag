@@ -4,6 +4,7 @@ import { Errors } from '../utils/errors';
 import { AuthService } from './authService';
 import { SessionService } from './sessionService';
 import { OperatorService } from './operatorService';
+import { releasePinLockout } from '../utils/pinLockout';
 
 const publicFields = {
   id: true, name: true, email: true, role: true, active: true, createdAt: true, pinHash: true,
@@ -59,7 +60,17 @@ export const UserService = {
   /** Define (4 a 6 dígitos) ou remove (null) o PIN do operador no totem. */
   async setPin(id: string, pin: string | null) {
     await OperatorService.setPin(id, pin);
+    // PIN novo (o "esqueci o PIN") também solta um bloqueio por erros.
+    releasePinLockout(id);
     return toPublic(await prisma.user.findUniqueOrThrow({ where: { id }, select: publicFields }));
+  },
+
+  /** Libera novas tentativas de PIN do operador em todos os aparelhos, sem trocar o PIN. */
+  async unlockPin(id: string) {
+    const user = await prisma.user.findUnique({ where: { id }, select: publicFields });
+    if (!user) throw Errors.notFound('Usuário');
+    releasePinLockout(id);
+    return toPublic(user);
   },
 
   async resetPassword(id: string, password: string) {
