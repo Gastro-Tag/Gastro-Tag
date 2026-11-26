@@ -676,7 +676,9 @@ export interface EquipmentReading {
 
 /** Linha do histórico (ADMIN): a leitura com o nome do equipamento. */
 export interface EquipmentReadingRow extends EquipmentReading {
-  equipmentName?: string;
+  equipmentName?: string;           // nome na época da leitura
+  equipmentCurrentName?: string;
+  equipmentActive?: boolean;
   equipment?: { id: string; name: string };
 }
 

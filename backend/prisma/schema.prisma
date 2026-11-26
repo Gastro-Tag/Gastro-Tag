@@ -349,6 +349,7 @@ model Equipment {
 model TemperatureReading {
   id              String   @id @default(uuid())
   equipmentId     String   @map("equipment_id")
+  equipmentName   String   @map("equipment_name") // cópia do nome no momento da leitura
   temperature     Decimal  @db.Decimal(4, 1)
   minTemperature  Decimal  @map("min_temperature") @db.Decimal(4, 1) // cópia da faixa no momento da leitura
   maxTemperature  Decimal  @map("max_temperature") @db.Decimal(4, 1)

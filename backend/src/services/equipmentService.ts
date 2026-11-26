@@ -59,7 +59,7 @@ function serializeEquipment(row: EquipmentRow) {
   return { ...row, minTemperature: num(row.minTemperature), maxTemperature: num(row.maxTemperature) };
 }
 
-function serializeReading(row: ReadingRow & { equipment?: { name: string } }) {
+function serializeReading(row: ReadingRow & { equipment?: { name: string; active: boolean } }) {
   const { equipment, ...reading } = row;
   return {
     ...reading,
@@ -68,7 +68,8 @@ function serializeReading(row: ReadingRow & { equipment?: { name: string } }) {
     maxTemperature: num(reading.maxTemperature),
     kitchenDate: dateOnly(reading.kitchenDate),
     handlerVerified: reading.handlerId !== null,
-    ...(equipment ? { equipmentName: equipment.name } : {}),
+    // equipmentName é a cópia da época (renomear não muda leituras antigas); o atual vem à parte.
+    ...(equipment ? { equipmentCurrentName: equipment.name, equipmentActive: equipment.active } : {}),
   };
 }
 
@@ -90,7 +91,7 @@ async function findReplay(data: ReadingInput) {
   if (!data.requestId) return null;
   const existing = await prisma.temperatureReading.findUnique({
     where: { userId_requestId: { userId: data.userId, requestId: data.requestId } },
-    include: { equipment: { select: { name: true } } },
+    include: { equipment: { select: { name: true, active: true } } },
   });
   if (existing && existing.equipmentId !== data.equipmentId) {
     throw Errors.conflict('Este pedido já registrou a temperatura de outro equipamento.');
@@ -158,14 +159,14 @@ export const EquipmentService = {
     try {
       const reading = await prisma.temperatureReading.create({
         data: {
-          equipmentId: equipment.id, temperature: data.temperature,
+          equipmentId: equipment.id, equipmentName: equipment.name, temperature: data.temperature,
           minTemperature: equipment.minTemperature, maxTemperature: equipment.maxTemperature,
           outOfRange: data.temperature < min || data.temperature > max,
           readAt, kitchenDate: kitchenToday(readAt),
           responsibleName: responsible.responsibleName.trim(), handlerId: responsible.handlerId,
           userId: data.userId, note: data.note ?? null, requestId: data.requestId ?? null,
         },
-        include: { equipment: { select: { name: true } } },
+        include: { equipment: { select: { name: true, active: true } } },
       });
       return { reading: serializeReading(reading), replayed: false };
     } catch (error) {
@@ -227,7 +228,7 @@ export const EquipmentService = {
       prisma.temperatureReading.count({ where: { ...where, outOfRange: true } }),
       prisma.temperatureReading.findMany({
         where, orderBy: [{ readAt: 'desc' }, { id: 'desc' }], take: READINGS_MAX_ROWS,
-        include: { equipment: { select: { name: true } } },
+        include: { equipment: { select: { name: true, active: true } } },
       }),
     ]);
     return {

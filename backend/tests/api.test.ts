@@ -3872,8 +3872,14 @@ describe('temperatura dos equipamentos', () => {
     const stored = await prisma.temperatureReading.findUniqueOrThrow({ where: { id: before.body.data.id } });
     expect(Number(stored.maxTemperature)).toBe(5);
     expect(stored.outOfRange).toBe(true);
+    // O nome também é a cópia da época; o atual vem em equipmentCurrentName.
+    expect(stored.equipmentName).toBe(equipment.name);
+    const history = await request(app).get('/api/equipment/readings').query({ equipmentId: equipment.id })
+      .set('Authorization', asAdmin()).expect(200);
+    expect(history.body.data.find((row: { id: string }) => row.id === before.body.data.id))
+      .toMatchObject({ equipmentName: equipment.name, equipmentCurrentName: newName, equipmentActive: true });
     const after = await postReading(equipment.id, { temperature: 6 });
-    expect(after.body.data).toMatchObject({ outOfRange: false, maxTemperature: 7 });
+    expect(after.body.data).toMatchObject({ outOfRange: false, maxTemperature: 7, equipmentName: newName });
   });
 
   it('only deactivates equipment and refuses readings for it', async () => {

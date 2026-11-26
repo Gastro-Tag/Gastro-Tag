@@ -56,7 +56,7 @@ const readingSchema = z.strictObject({
   temperature: temperature('A temperatura'),
   // Sem token do operador (PIN), o nome digitado é obrigatório; com token, o nome vem dele.
   responsibleName: z.string({ error: 'Informe o nome do responsável.' }).trim()
-    .min(2, 'Informe o nome do responsável (mínimo 2 caracteres).').max(80, 'O nome deve ter no máximo 80 caracteres.')
+    .min(2, 'Informe o nome do responsável (mínimo 2 caracteres).').max(100, 'O nome deve ter no máximo 100 caracteres.')
     .refine(noNul, 'Nome inválido.').optional(),
   handlerToken: z.string().min(1).max(2000).optional(),
   note: z.string({ error: 'A observação deve ser texto.' }).trim().max(200, 'A observação deve ter no máximo 200 caracteres.')

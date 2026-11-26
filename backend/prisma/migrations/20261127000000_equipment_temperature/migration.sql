@@ -22,6 +22,7 @@ CREATE TABLE "equipment" (
 CREATE TABLE "temperature_readings" (
     "id" TEXT NOT NULL,
     "equipment_id" TEXT NOT NULL,
+    "equipment_name" TEXT NOT NULL,
     "temperature" DECIMAL(4,1) NOT NULL,
     "min_temperature" DECIMAL(4,1) NOT NULL,
     "max_temperature" DECIMAL(4,1) NOT NULL,

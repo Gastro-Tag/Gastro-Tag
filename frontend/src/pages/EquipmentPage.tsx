@@ -370,7 +370,13 @@ function History({ equipment, kitchenToday }: { equipment: Equipment[]; kitchenT
                   {rows.map((row) => (
                     <tr key={row.id} className={cn(row.outOfRange && 'bg-rose-50')}>
                       <td className="py-2 pr-3 whitespace-nowrap">{formatDateTimeBR(row.readAt)}</td>
-                      <td className="py-2 pr-3 font-semibold">{row.equipmentName ?? row.equipment?.name ?? '—'}</td>
+                      <td className="py-2 pr-3 font-semibold">
+                        {row.equipmentName ?? row.equipment?.name ?? '—'}
+                        {row.equipmentCurrentName && row.equipmentCurrentName !== row.equipmentName && (
+                          <span className="block text-xs font-normal text-slate-500">hoje: {row.equipmentCurrentName}</span>
+                        )}
+                        {row.equipmentActive === false && <span className="block text-xs font-normal text-slate-500">(desativado)</span>}
+                      </td>
                       <td className={cn('py-2 pr-3 font-bold', row.outOfRange ? 'text-rose-700' : 'text-slate-800')}>
                         {formatTemperatureShort(row.temperature)}
                         {row.outOfRange && <span className="ml-2 rounded-full bg-rose-600 px-2 py-0.5 text-xs font-bold text-white">Fora da faixa</span>}
@@ -408,7 +414,11 @@ function EquipmentFormModal({ item, onClose, onSaved }: {
     setBusy(true);
     setError('');
     try {
-      if (item) await equipmentApi.update(item.id, result.value);
+      // O armazenamento não muda depois de cadastrado (a API recusa): a edição manda só nome e faixa.
+      if (item) {
+        const { storageType: _fixed, ...editable } = result.value;
+        await equipmentApi.update(item.id, editable);
+      }
       else await equipmentApi.create(result.value);
       onSaved(item ? 'Equipamento atualizado.' : 'Equipamento cadastrado.');
     } catch (err) {
@@ -426,7 +436,7 @@ function EquipmentFormModal({ item, onClose, onSaved }: {
         </div>
         <div className="sm:col-span-2">
           <label htmlFor="eq-storage" className="mb-1 block text-xs font-bold text-slate-500">Armazenamento</label>
-          <select id="eq-storage" className="input min-h-[44px]" value={storageType} onChange={(e) => setStorageType(e.target.value as StorageType)}>
+          <select id="eq-storage" className="input min-h-[44px]" disabled={Boolean(item)} title={item ? 'O armazenamento não muda depois de cadastrado.' : undefined} value={storageType} onChange={(e) => setStorageType(e.target.value as StorageType)}>
             <option value="REFRIGERADO">Refrigerado</option>
             <option value="CONGELADO">Congelado</option>
           </select>
