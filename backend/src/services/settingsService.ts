@@ -21,17 +21,22 @@ export interface KitchenSettingsData {
   expiryWarningMonths: number | null;
   /** Modelo de etiqueta padrão da cozinha. Nulo: não definido (cada aparelho segue a própria escolha ou A4). */
   labelTemplate: LabelTemplateId | null;
+  /** Cabeçalho do relatório do período. Nulo: não informado. */
+  kitchenName: string | null;
+  technicalResponsible: string | null;
   updatedAt: Date | null;
   updatedByName: string | null;
 }
 
 /** Sem linha gravada, valem os padrões (bloqueio desligado). */
 const DEFAULTS: KitchenSettingsData = {
-  requireValidatedRule: false, expiryWarningMonths: null, labelTemplate: null, updatedAt: null, updatedByName: null,
+  requireValidatedRule: false, expiryWarningMonths: null, labelTemplate: null,
+  kitchenName: null, technicalResponsible: null, updatedAt: null, updatedByName: null,
 };
 
 const settingsSelect = {
-  requireValidatedRule: true, expiryWarningMonths: true, labelTemplate: true, updatedAt: true, updatedByName: true,
+  requireValidatedRule: true, expiryWarningMonths: true, labelTemplate: true,
+  kitchenName: true, technicalResponsible: true, updatedAt: true, updatedByName: true,
 } as const;
 
 type SettingsRow = Omit<KitchenSettingsData, 'labelTemplate' | 'updatedAt'> & { labelTemplate: string | null; updatedAt: Date };
@@ -43,6 +48,8 @@ export interface KitchenSettingsUpdate {
   requireValidatedRule?: boolean;
   expiryWarningMonths?: number | null;
   labelTemplate?: LabelTemplateId | null;
+  kitchenName?: string | null;
+  technicalResponsible?: string | null;
 }
 
 export const SettingsService = {
@@ -61,6 +68,8 @@ export const SettingsService = {
       requireValidatedRule: data.requireValidatedRule,
       expiryWarningMonths: data.expiryWarningMonths,
       labelTemplate: data.labelTemplate,
+      kitchenName: data.kitchenName,
+      technicalResponsible: data.technicalResponsible,
       updatedById: actor.id, updatedByName: actor.name,
     };
     const row = await prisma.kitchenSettings.upsert({

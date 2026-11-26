@@ -58,6 +58,9 @@ model KitchenSettings {
   expiryWarningMonths  Int?     @map("expiry_warning_months")
   // Modelo de etiqueta padrão da cozinha (a4, t100x60, t60x40, t50x30; validado na API). Nulo: não definido.
   labelTemplate        String?  @map("label_template")
+  // Cabeçalho do relatório do período (1..80 caracteres, validado na API). Nulo: não informado.
+  kitchenName          String?  @map("kitchen_name") // nome da cozinha
+  technicalResponsible String?  @map("technical_responsible") // responsável técnico
   updatedAt            DateTime @updatedAt @map("updated_at")
   updatedById          String?  @map("updated_by_id")
   updatedByName        String?  @map("updated_by_name") // cópia do nome de quem alterou

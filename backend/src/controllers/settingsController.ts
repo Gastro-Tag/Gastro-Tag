@@ -5,6 +5,16 @@ import { ProductService } from '../services/productService';
 
 const EXPIRY_WARNING_MONTHS_ERROR = 'Informe o limite do aviso de validade em meses inteiros, de 1 a 60, ou null para desligar.';
 
+/**
+ * Texto do cabeçalho do relatório: trim, até 80 caracteres. Vazio (depois do trim) ou null limpa o campo.
+ */
+const reportHeaderText = (label: string) => z.string({ error: `Informe ${label.toLowerCase()} como texto ou null.` })
+  .trim()
+  .max(80, `${label} deve ter no máximo 80 caracteres.`)
+  .refine((value) => !value.includes('\u0000'), `${label}: texto inválido.`)
+  .nullable().optional()
+  .transform((value) => (value === '' ? null : value));
+
 // Corpo parcial: só o que vier é alterado, mas ao menos um campo.
 const updateSchema = z.strictObject({
   requireValidatedRule: z.boolean({ error: 'Informe se a etiqueta exige regra validada (true ou false).' }).optional(),
@@ -12,9 +22,11 @@ const updateSchema = z.strictObject({
     .int(EXPIRY_WARNING_MONTHS_ERROR).min(1, EXPIRY_WARNING_MONTHS_ERROR).max(60, EXPIRY_WARNING_MONTHS_ERROR)
     .nullable().optional(),
   labelTemplate: z.enum(LABEL_TEMPLATE_IDS, { error: 'Modelo de etiqueta inválido.' }).nullable().optional(),
+  kitchenName: reportHeaderText('O nome da cozinha'),
+  technicalResponsible: reportHeaderText('O responsável técnico'),
 }).refine(
   (data) => data.requireValidatedRule !== undefined || data.expiryWarningMonths !== undefined
-    || data.labelTemplate !== undefined,
+    || data.labelTemplate !== undefined || data.kitchenName !== undefined || data.technicalResponsible !== undefined,
   { message: 'Informe ao menos uma configuração para alterar.' },
 );
 

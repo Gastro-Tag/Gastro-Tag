@@ -6,7 +6,7 @@ import type {
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
   ShelfLifeRule, RuleFilters, AppSettings, SettingsUpdateMeta, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
-  DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelExportParams, TotemOperator, VerifyOperatorResult,
+  DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelReport, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
 import type { LabelTemplateId } from '@/utils/labelTemplates';
 
@@ -107,6 +107,10 @@ export const lotApi = {
 
 // ── Labels ──────────────────────────────────────────────
 export const labelApi = {
+  /** ADMIN. Sem from/to: últimos 7 dias da cozinha. */
+  report: (params?: { from?: string; to?: string }) =>
+    api.get<ApiResponse<LabelReport>>('/labels/report', { params }),
+
   list: (params?: LabelListParams) =>
     api.get<PaginatedResponse<Label>>('/labels', { params }),
 
@@ -191,6 +195,6 @@ export const settingsApi = {
     api.get<ApiResponse<AppSettings>>('/settings'),
 
   /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
-  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null; labelTemplate?: LabelTemplateId | null }) =>
+  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null; labelTemplate?: LabelTemplateId | null; kitchenName?: string | null; technicalResponsible?: string | null }) =>
     api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', changes),
 };

@@ -408,6 +408,9 @@ export interface AppSettings {
   expiryWarningMonths:  number | null;
   /** Modelo de etiqueta padrão da cozinha; null = não definido. */
   labelTemplate:        LabelTemplateId | null;
+  /** Cabeçalho do relatório do período; null = não definido. */
+  kitchenName:          string | null;
+  technicalResponsible: string | null;
   updatedAt:            string | null;
   updatedByName:        string | null;
 }
@@ -492,3 +495,58 @@ export interface LabelMetrics {
 }
 
 export interface LabelMetricsParams { from?: string; to?: string }
+
+/** GET /labels/report (ADMIN): relatório do período por data de criação. */
+export interface ReportRow {
+  id: string;
+  shortCode: string;
+  createdAt: string;
+  productName: string;
+  productBrand: string;
+  lot: string;
+  lotSource: LotSource;
+  openedAt: string;
+  discardAt: string;
+  storageType: StorageType;
+  storageTemp: string;
+  shelfLifeDays: number;
+  ruleVersion: number | null;
+  noRule: boolean;
+  responsibleName: string | null;
+  handlerVerified: boolean;
+  status: LabelStatus;
+  outcome: LabelOutcome | null;
+  discardReason: DiscardReason | null;
+  closeNote: string | null;
+  closedAt: string | null;
+  closedByName: string | null;
+  parentShortCode: string | null;
+  /** Ativa criada antes de existir o encerramento (15/11): não havia como encerrar. */
+  beforeClosing?: boolean;
+}
+
+export interface ReportSummary {
+  total: number;
+  active: number;
+  activeExpired: number;
+  activeBeforeClosing?: number;
+  used: number;
+  discarded: number;
+  cancelled: number;
+  discardedByReason: Record<DiscardReason, number>;
+  handlerVerified: number;
+  withoutRule: number;
+  temperatureSuggested: number;
+  temperatureTyped: number;
+  temperatureUnknown?: number;
+}
+
+export interface LabelReport {
+  kitchen: { name: string | null; technicalResponsible: string | null };
+  from: string;
+  to: string;
+  today: string;
+  generatedAt: string;
+  summary: ReportSummary;
+  rows: ReportRow[];
+}

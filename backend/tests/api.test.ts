@@ -5,6 +5,7 @@ import app from '../src/app';
 import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
+import { resetMigrationCutoffsForTests } from '../src/services/labelService';
 import { logger } from '../src/utils/logger';
 import { addMonths, generateShortCode, kitchenToday } from '../src/utils/dateUtils';
 import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
@@ -3106,5 +3107,225 @@ describe('medição de tempo e origem da temperatura', () => {
       expect((await metrics({ to: '10/03/2001' })).status).toBe(422);
       expect((await metrics({ productId: 'x' })).status).toBe(422);
     });
+  });
+});
+
+describe('relatório do período para imprimir', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const resetSettings = () => prisma.kitchenSettings.updateMany({ data: { kitchenName: null, technicalResponsible: null } });
+  const putSettings = (body: object, token = asAdmin()) =>
+    request(app).put('/api/settings').set('Authorization', token).send(body);
+  const report = (query: Record<string, string>, token = asAdmin()) =>
+    request(app).get('/api/labels/report').query(query).set('Authorization', token);
+  const newProduct = async () => {
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Relatório ${tag} ${randomUUID().slice(0, 6)}`, brand: 'Teste', daysValidRefrigerated: 5, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    return product.id;
+  };
+  const newLabel = async (productId: string, body: object = {}) => {
+    const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+      productId, lot: 'LOT-REL', originalExpiryDate: daysFromToday(60), openedAt: today(),
+      responsibleName: 'Turno do relatório', storageType: 'REFRIGERADO', storageTemperature: 4, ...body,
+    });
+    expect(res.status).toBe(201);
+    return res.body.data as { id: string; shortCode: string };
+  };
+  const close = (id: string, body: object) =>
+    request(app).post(`/api/labels/${id}/close`).set('Authorization', asAdmin()).send(body).expect(200);
+  // Um dia antigo sorteado por execução: nenhuma outra etiqueta do banco cai nele.
+  const randomOldDay = () => isoDate(new Date(Date.UTC(1980, 0, 1) + Math.floor(Math.random() * 7000) * 86_400_000));
+  const nextDay = (day: string) => isoDate(new Date(Date.parse(`${day}T00:00:00.000Z`) + 86_400_000));
+  // Horas UTC entre 10 e 14: no mesmo dia em qualquer fuso de −10 a +9 h (a cozinha padrão é UTC−4).
+  const moveTo = (ids: string[], day: string, hour = 12) =>
+    prisma.label.updateMany({
+      where: { id: { in: ids } }, data: { createdAt: new Date(`${day}T${String(hour).padStart(2, '0')}:00:00.000Z`) },
+    });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.90')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.91')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+  afterAll(resetSettings);
+
+  it('stores the kitchen name and technical responsible: trim, empty → null, more than 80 → 422', async () => {
+    const set = await putSettings({ kitchenName: '  Cozinha Central  ', technicalResponsible: 'Nutricionista de Teste' });
+    expect(set.status).toBe(200);
+    expect(set.body.data).toMatchObject({ kitchenName: 'Cozinha Central', technicalResponsible: 'Nutricionista de Teste' });
+    const got = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(got.body.data).toMatchObject({ kitchenName: 'Cozinha Central', technicalResponsible: 'Nutricionista de Teste' });
+    expect((await report({})).body.data.kitchen)
+      .toEqual({ name: 'Cozinha Central', technicalResponsible: 'Nutricionista de Teste' });
+
+    // Parcial: só o nome muda; só espaços vira null.
+    const blank = await putSettings({ kitchenName: '   ' });
+    expect(blank.status).toBe(200);
+    expect(blank.body.data).toMatchObject({ kitchenName: null, technicalResponsible: 'Nutricionista de Teste' });
+    const cleared = await putSettings({ technicalResponsible: null });
+    expect(cleared.body.data).toMatchObject({ kitchenName: null, technicalResponsible: null });
+
+    expect((await putSettings({ kitchenName: 'x'.repeat(80) })).status).toBe(200);
+    const tooLong = await putSettings({ kitchenName: 'x'.repeat(81) });
+    expect(tooLong.status).toBe(422);
+    expect(tooLong.body.error.message).toBe('O nome da cozinha deve ter no máximo 80 caracteres.');
+    // O trim vem antes da contagem: 81 letras com espaços em volta continuam passando do limite.
+    const tooLongResp = await putSettings({ technicalResponsible: ` ${'y'.repeat(81)} ` });
+    expect(tooLongResp.status).toBe(422);
+    expect(tooLongResp.body.error.message).toBe('O responsável técnico deve ter no máximo 80 caracteres.');
+    expect((await putSettings({ kitchenName: 12 })).status).toBe(422);
+    expect((await putSettings({ kitchenName: 'Outra' }, operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/settings').set('Authorization', asAdmin())).body.data.kitchenName)
+      .toBe('x'.repeat(80));
+    await resetSettings();
+  });
+
+  it('defaults to the last 7 kitchen days, oldest first', async () => {
+    const productId = await newProduct();
+    const first = await newLabel(productId);
+    const second = await newLabel(productId);
+    const res = await report({});
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({ from: daysFromToday(-6), to: today(), today: today() });
+    expect(Number.isNaN(Date.parse(res.body.data.generatedAt))).toBe(false);
+    const rows = res.body.data.rows as { id: string; createdAt: string }[];
+    expect(res.body.data.summary.total).toBe(rows.length);
+    const ids = rows.map((row) => row.id);
+    expect(ids.indexOf(first.id)).toBeGreaterThanOrEqual(0);
+    // Criada hoje com a validade digitada (sem lote cadastrado).
+    expect(rows.find((row) => row.id === first.id)).toMatchObject({ lotSource: 'informado', noRule: true });
+    expect(ids.indexOf(first.id)).toBeLessThan(ids.indexOf(second.id));
+    expect(rows.map((row) => row.createdAt)).toEqual([...rows.map((row) => row.createdAt)].sort());
+
+    // Só um extremo: o outro segue o padrão de metrics (to = hoje; from = to − 6).
+    expect((await report({ to: '2001-03-10' })).body.data).toMatchObject({ from: '2001-03-04', to: '2001-03-10' });
+    expect((await report({ from: daysFromToday(-2) })).body.data).toMatchObject({ from: daysFromToday(-2), to: today() });
+  });
+
+  it('counts every situation over the same rows, cancelled included', async () => {
+    const productId = await newProduct();
+    const ruleRes = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin()).send({
+      ...ruleBody, productId, storageType: 'CONGELADO', shelfLifeDays: 20, minTemperature: -30, maxTemperature: -12,
+    });
+    expect(ruleRes.status).toBe(201);
+    ruleIds.push(ruleRes.body.data.id);
+
+    const active = await newLabel(productId, { temperatureSource: 'SUGERIDO' });
+    const expired = await newLabel(productId, { temperatureSource: 'DIGITADO' });
+    const used = await newLabel(productId);
+    const sensorial = await newLabel(productId, { temperatureSource: 'DIGITADO' });
+    const other = await newLabel(productId);
+    const cancelled = await newLabel(productId, { temperatureSource: 'SUGERIDO' });
+    const frozen = await newLabel(productId, { storageType: 'CONGELADO', storageTemperature: -18 });
+    await close(used.id, { outcome: 'USADO' });
+    await close(sensorial.id, { outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL' });
+    await close(other.id, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'Caiu no chão' });
+    await close(cancelled.id, { outcome: 'CANCELADO' });
+    // Uma ativa com o descarte antes de hoje; e uma com operador confirmado por PIN.
+    await prisma.label.update({ where: { id: expired.id }, data: { discardAt: new Date(`${daysFromToday(-1)}T00:00:00.000Z`) } });
+    await prisma.label.update({ where: { id: frozen.id }, data: { handlerId: operatorId } });
+    const split = await request(app).post(`/api/labels/${frozen.id}/split`).set('Authorization', asAdmin())
+      .send({ count: 1, storageType: 'CONGELADO', storageTemperature: -18, responsibleName: 'Fracionador' });
+    expect(split.status).toBe(201);
+    const child = split.body.data.children[0] as { id: string; shortCode: string };
+
+    const day = randomOldDay();
+    const next = nextDay(day);
+    await moveTo([active.id], day, 10);
+    await moveTo([expired.id], day, 11);
+    await moveTo([used.id], day, 12);
+    await moveTo([sensorial.id], day, 13);
+    await moveTo([other.id, cancelled.id, frozen.id], day, 14);
+    await moveTo([child.id], next);
+
+    // O dia sorteado é antigo: com o corte real (migração do encerramento aplicada hoje no banco de teste),
+    // as ativas são "anteriores ao encerramento" e não contam como vencidas sem encerrar.
+    const withRealCutoff = await report({ from: day, to: next });
+    expect(withRealCutoff.body.data.summary).toMatchObject({ active: 0, activeExpired: 0, activeBeforeClosing: 4 });
+    expect(withRealCutoff.body.data.rows.find((row: { id: string }) => row.id === expired.id).beforeClosing).toBe(true);
+
+    // Com o corte antes do dia sorteado, as mesmas linhas contam como ativas de verdade.
+    const closeMigration = '20261115000000_label_close_split';
+    const [original] = await prisma.$queryRaw<{ finished_at: Date }[]>`
+      SELECT finished_at FROM _prisma_migrations WHERE migration_name = ${closeMigration}`;
+    await prisma.$executeRaw`UPDATE _prisma_migrations SET finished_at = '1970-01-02' WHERE migration_name = ${closeMigration}`;
+    resetMigrationCutoffsForTests();
+    let res: Awaited<ReturnType<typeof report>>;
+    try {
+      res = await report({ from: day, to: next });
+    } finally {
+      await prisma.$executeRaw`UPDATE _prisma_migrations SET finished_at = ${original.finished_at} WHERE migration_name = ${closeMigration}`;
+      resetMigrationCutoffsForTests();
+    }
+    expect(res.status).toBe(200);
+    expect(res.body.data.summary).toEqual({
+      total: 8, active: 4, activeExpired: 1, activeBeforeClosing: 0, used: 1, discarded: 2, cancelled: 1,
+      discardedByReason: { PRAZO_VENCIDO: 0, ALTERACAO_SENSORIAL: 1, EMBALAGEM_DANIFICADA: 0, OUTRO: 1 },
+      handlerVerified: 1, withoutRule: 6,
+      // Sem a cancelada (SUGERIDO): 1 sugerida, 2 digitadas, 4 sem registro.
+      temperatureSuggested: 1, temperatureTyped: 2, temperatureUnknown: 4,
+    });
+    const rows = res.body.data.rows as Record<string, unknown>[];
+    expect(rows).toHaveLength(8);
+    // Ordem de criação; os três criados no mesmo instante ficam entre o 4º e a filha.
+    expect(rows.slice(0, 4).map((row) => row.id)).toEqual([active.id, expired.id, used.id, sensorial.id]);
+    expect(rows.slice(4, 7).map((row) => row.id).sort()).toEqual([other.id, cancelled.id, frozen.id].sort());
+    expect(rows[7].id).toBe(child.id);
+
+    const row = (id: string) => rows.find((item) => item.id === id)!;
+    expect(row(other.id)).toMatchObject({
+      shortCode: other.shortCode, status: 'ENCERRADA', outcome: 'DESCARTADO', discardReason: 'OUTRO',
+      closeNote: 'Caiu no chão', noRule: true, handlerVerified: false,
+      // Criada (pelo teste) antes da migração dos lotes, sem lote cadastrado: igual à lista, "anterior".
+      lotSource: 'anterior', lot: 'LOT-REL',
+      storageTemp: '4,0 °C', openedAt: today(), discardAt: daysFromToday(4), shelfLifeDays: 5, ruleVersion: null,
+      parentShortCode: null, responsibleName: 'Turno do relatório', closedByName: 'Teste de integração',
+      productBrand: 'Teste', storageType: 'REFRIGERADO',
+    });
+    expect(typeof row(other.id).closedAt).toBe('string');
+    expect(row(cancelled.id)).toMatchObject({ status: 'ENCERRADA', outcome: 'CANCELADO' });
+    expect(row(active.id)).toMatchObject({ status: 'ATIVA', outcome: null, closedAt: null, createdAt: `${day}T10:00:00.000Z` });
+    expect(row(expired.id)).toMatchObject({ status: 'ATIVA', discardAt: daysFromToday(-1) });
+    expect(row(frozen.id)).toMatchObject({ noRule: false, ruleVersion: 1, handlerVerified: true, storageType: 'CONGELADO' });
+    expect(row(child.id)).toMatchObject({ parentShortCode: frozen.shortCode, noRule: false, status: 'ATIVA', lotSource: 'anterior' });
+
+    // Só o segundo dia: só a filha.
+    const single = await report({ from: next, to: next });
+    expect(single.body.data.summary).toMatchObject({ total: 1, active: 0, activeBeforeClosing: 1, withoutRule: 0 });
+  });
+
+  it('is only for admins and validates the period', async () => {
+    expect((await report({}, operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/labels/report')).status).toBe(401);
+    // 31 dias contando os dois extremos: aceito; 32: recusado.
+    expect((await report({ from: '2001-01-01', to: '2001-01-31' })).status).toBe(200);
+    const tooLong = await report({ from: '2001-01-01', to: '2001-02-01' });
+    expect(tooLong.status).toBe(422);
+    expect(tooLong.body.error.message).toBe('O período do relatório é de no máximo 31 dias.');
+    const reversed = await report({ from: '2001-01-10', to: '2001-01-09' });
+    expect(reversed.status).toBe(422);
+    expect(reversed.body.error.message).toBe('A data inicial deve ser menor ou igual à data final.');
+    // Só o início, no futuro: o fim padrão (hoje) fica antes dele.
+    expect((await report({ from: daysFromToday(1) })).status).toBe(422);
+    expect((await report({ from: '2001-02-30' })).status).toBe(422);
+  });
+
+  it('refuses a period with more than 2,000 labels before fetching the rows', async () => {
+    const count = vi.spyOn(prisma.label, 'count').mockResolvedValueOnce(2_001);
+    const findMany = vi.spyOn(prisma.label, 'findMany');
+    const res = await report({ from: '2001-01-01', to: '2001-01-02' });
+    expect(count).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toBe('O período tem mais de 2.000 etiquetas. Escolha um período menor.');
+    expect(findMany).not.toHaveBeenCalled();
   });
 });

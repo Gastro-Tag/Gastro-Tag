@@ -320,19 +320,34 @@ export type LotSource = 'cadastrado' | 'informado' | 'anterior';
 
 /** Migração que criou `labels.lot_id`: as etiquetas de antes dela têm `lot_id` nulo sem validade digitada. */
 const PRODUCT_LOTS_MIGRATION = '20261103000000_product_lots';
-let lotsCutoff: Promise<Date | null> | undefined;
+const migrationCutoffs = new Map<string, Promise<Date | null>>();
 
-/** Fim da migração dos lotes (lido uma vez por processo). Sem o registro, não há corte e nada é anterior. */
-function lotsCutoffDate(): Promise<Date | null> {
-  lotsCutoff ??= prisma.$queryRaw<{ finished_at: Date | null }[]>`
-    SELECT finished_at FROM _prisma_migrations
-    WHERE migration_name = ${PRODUCT_LOTS_MIGRATION} AND finished_at IS NOT NULL AND rolled_back_at IS NULL
-    ORDER BY finished_at DESC LIMIT 1`
-    .then((rows) => rows[0]?.finished_at ?? null)
-    // Falha de leitura não fica no cache: a próxima consulta tenta de novo.
-    .catch((error) => { lotsCutoff = undefined; throw error; });
-  return lotsCutoff;
+/** Fim de uma migração (lido uma vez por processo). Sem o registro, não há corte e nada é anterior. */
+function migrationFinishedAt(name: string): Promise<Date | null> {
+  let cutoff = migrationCutoffs.get(name);
+  if (!cutoff) {
+    cutoff = prisma.$queryRaw<{ finished_at: Date | null }[]>`
+      SELECT finished_at FROM _prisma_migrations
+      WHERE migration_name = ${name} AND finished_at IS NOT NULL AND rolled_back_at IS NULL
+      ORDER BY finished_at DESC LIMIT 1`
+      .then((rows) => rows[0]?.finished_at ?? null)
+      // Falha de leitura não fica no cache: a próxima consulta tenta de novo.
+      .catch((error) => { migrationCutoffs.delete(name); throw error; });
+    migrationCutoffs.set(name, cutoff);
+  }
+  return cutoff;
 }
+
+/** Só para testes: esquece os cortes lidos, para reler `_prisma_migrations`. */
+export function resetMigrationCutoffsForTests() {
+  migrationCutoffs.clear();
+}
+
+/** Fim da migração dos lotes. */
+const lotsCutoffDate = () => migrationFinishedAt(PRODUCT_LOTS_MIGRATION);
+
+/** Migração que criou o encerramento (status/destino): as etiquetas de antes dela nasceram ATIVA e nunca puderam ser encerradas. */
+const LABEL_CLOSE_MIGRATION = '20261115000000_label_close_split';
 
 /**
  * Etiquetas anteriores aos lotes: `lot_id` nulo e criadas antes do corte, mais as filhas do Dividir
@@ -449,6 +464,20 @@ const METRICS_DEFAULT_DAYS = 7;
 export const METRICS_MAX_DAYS = 92;
 
 export interface MetricsFilters { from?: string; to?: string; productId?: string }
+
+/** Relatório do período para imprimir: padrão (dias da cozinha, contando hoje), máximo de dias e de etiquetas. */
+const REPORT_DEFAULT_DAYS = 7;
+export const REPORT_MAX_DAYS = 31;
+export const REPORT_MAX_ROWS = 2_000;
+
+export interface ReportFilters { from?: string; to?: string }
+
+const reportSelect = {
+  id: true, shortCode: true, createdAt: true, productName: true, productBrand: true, lot: true, lotId: true,
+  openedAt: true, discardAt: true, storageType: true, storageTemp: true, shelfLifeDays: true, ruleId: true,
+  ruleVersion: true, responsibleName: true, handlerId: true, status: true, outcome: true, discardReason: true,
+  closeNote: true, closedAt: true, closedByName: true, temperatureSource: true, parent: { select: { shortCode: true } },
+} as const;
 
 /** Instante UTC sem fuso, no formato de `labels.created_at` (TIMESTAMP(3) gravado em UTC). */
 const utcTimestamp = (date: Date) => date.toISOString().slice(0, 23);
@@ -801,6 +830,87 @@ export const LabelService = {
       byDay: days.map((day) => ({
         date: day.date, total: day.total, flowMedianMs: roundMs(day.flow_median),
         suggestedCount: day.suggested, typedCount: day.typed,
+      })),
+    };
+  },
+
+  /**
+   * Relatório do período para imprimir ou salvar em PDF. Período pela data de criação no fuso da cozinha,
+   * `from` e `to` inclusive (padrão: os últimos 7 dias da cozinha, como em `metrics`; no máximo 31).
+   * Inclui as canceladas (contadas em `cancelled`). A situação é a do momento da emissão; as contagens do
+   * resumo são sobre as mesmas linhas devolvidas. Mais de `REPORT_MAX_ROWS` etiquetas: 422 (conta antes de buscar).
+   */
+  async report(filters: ReportFilters) {
+    const today = kitchenToday();
+    const toDate = filters.to ? parseDateOnly(filters.to, 'Data final') : today;
+    const fromDate = filters.from ? parseDateOnly(filters.from, 'Data inicial')
+      : addDays(toDate, -(REPORT_DEFAULT_DAYS - 1));
+    if (fromDate > toDate) throw Errors.validation('A data inicial deve ser menor ou igual à data final.');
+    if (daysBetween(fromDate, toDate) + 1 > REPORT_MAX_DAYS) {
+      throw Errors.validation(`O período do relatório é de no máximo ${REPORT_MAX_DAYS} dias.`);
+    }
+    const where = labelWhere({ from: dateOnly(fromDate)!, to: dateOnly(toDate)! }, 'createdAt');
+    const count = await prisma.label.count({ where });
+    if (count > REPORT_MAX_ROWS) {
+      throw Errors.validation(
+        `O período tem mais de ${REPORT_MAX_ROWS.toLocaleString('pt-BR')} etiquetas. Escolha um período menor.`,
+      );
+    }
+    const [settings, labels] = await Promise.all([
+      SettingsService.get(),
+      prisma.label.findMany({
+        where, select: reportSelect, take: REPORT_MAX_ROWS, orderBy: [{ createdAt: 'asc' }, { shortCode: 'asc' }],
+      }),
+    ]);
+    const legacyIds = labels.some((label) => label.lotId === null) ? await lazyLegacyIds()() : new Set<string>();
+    // Ativas criadas antes do encerramento existir não são "vencidas sem encerrar": não havia como encerrar.
+    const closeCutoff = await migrationFinishedAt(LABEL_CLOSE_MIGRATION);
+    const beforeClosing = (label: (typeof labels)[number]) =>
+      label.status === 'ATIVA' && closeCutoff !== null && label.createdAt < closeCutoff;
+    const notCancelled = (label: (typeof labels)[number]) => label.outcome !== 'CANCELADO';
+
+    const byReason: Record<DiscardReason, number> = {
+      PRAZO_VENCIDO: 0, ALTERACAO_SENSORIAL: 0, EMBALAGEM_DANIFICADA: 0, OUTRO: 0,
+    };
+    const countWhere = (test: (label: (typeof labels)[number]) => boolean) => labels.filter(test).length;
+    for (const label of labels) {
+      if (label.outcome === 'DESCARTADO' && label.discardReason) byReason[label.discardReason] += 1;
+    }
+
+    return {
+      kitchen: { name: settings.kitchenName, technicalResponsible: settings.technicalResponsible },
+      from: dateOnly(fromDate)!, to: dateOnly(toDate)!, today: dateOnly(today)!,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        total: labels.length,
+        active: countWhere((label) => label.status === 'ATIVA' && !beforeClosing(label)),
+        // Ainda ativa e com o descarte antes de hoje (dia da cozinha): deveria ter saído.
+        activeExpired: countWhere((label) => label.status === 'ATIVA' && !beforeClosing(label) && label.discardAt < today),
+        // Ativas de antes do encerramento (migração de 15/11): ficam fora de active/activeExpired.
+        activeBeforeClosing: countWhere(beforeClosing),
+        used: countWhere((label) => label.outcome === 'USADO'),
+        discarded: countWhere((label) => label.outcome === 'DESCARTADO'),
+        cancelled: countWhere((label) => label.outcome === 'CANCELADO'),
+        discardedByReason: byReason,
+        handlerVerified: countWhere((label) => label.handlerId !== null),
+        withoutRule: countWhere((label) => label.ruleId === null),
+        // Origem da temperatura sem as canceladas, como em /labels/metrics; nulo = sem registro (antigas).
+        temperatureSuggested: countWhere((label) => notCancelled(label) && label.temperatureSource === 'SUGERIDO'),
+        temperatureTyped: countWhere((label) => notCancelled(label) && label.temperatureSource === 'DIGITADO'),
+        temperatureUnknown: countWhere((label) => notCancelled(label) && label.temperatureSource === null),
+      },
+      rows: labels.map((label) => ({
+        id: label.id, shortCode: label.shortCode, createdAt: label.createdAt.toISOString(),
+        productName: label.productName, productBrand: label.productBrand, lot: label.lot,
+        lotSource: lotSourceOf(label, legacyIds),
+        openedAt: dateOnly(label.openedAt)!, discardAt: dateOnly(label.discardAt)!,
+        storageType: label.storageType, storageTemp: label.storageTemp, shelfLifeDays: label.shelfLifeDays,
+        ruleVersion: label.ruleVersion, noRule: label.ruleId === null,
+        responsibleName: label.responsibleName, handlerVerified: label.handlerId !== null,
+        status: label.status, outcome: label.outcome, discardReason: label.discardReason, closeNote: label.closeNote,
+        closedAt: label.closedAt ? label.closedAt.toISOString() : null, closedByName: label.closedByName,
+        parentShortCode: label.parent?.shortCode ?? null,
+        beforeClosing: beforeClosing(label),
       })),
     };
   },

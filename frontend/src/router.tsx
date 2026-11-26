@@ -10,6 +10,7 @@ import { LabelFormPage }    from '@/pages/LabelFormPage';
 import { LabelsPage }       from '@/pages/LabelsPage';
 import { UsersPage }        from '@/pages/UsersPage';
 import { ShelfLifeRulesPage } from '@/pages/ShelfLifeRulesPage';
+import { ReportPage }       from '@/pages/ReportPage';
 import { RouteErrorScreen } from '@/components/errors/ErrorBoundary';
 import { TotemRoute }       from '@/components/totem/TotemShell';
 import { TotemLoginPage }   from '@/pages/totem/TotemLoginPage';
@@ -61,6 +62,7 @@ export const router = createBrowserRouter([
                   { path: '/products/:id/lots', element: <ProductLotsPage /> },
                   { path: '/users',             element: <UsersPage /> },
                   { path: '/rules',             element: <ShelfLifeRulesPage /> },
+                  { path: '/reports',           element: <ReportPage /> },
                 ],
               },
             ],
