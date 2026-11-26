@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma/client';
 import { Errors } from '../utils/errors';
 import { REFRESH_TTL_MS, signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/jwt';
@@ -77,9 +78,9 @@ export const SessionService = {
     await prisma.userSession.updateMany({ where: { id: sid, revokedAt: null }, data: { revokedAt: new Date() } });
   },
 
-  /** Encerra todas as sessões do usuário, exceto a do aparelho que pediu a mudança. */
-  async revokeAll(userId: string, exceptSid?: string) {
-    await prisma.userSession.updateMany({
+  /** Encerra todas as sessões do usuário, exceto a do aparelho que pediu a mudança. `db`: dentro de uma transação. */
+  async revokeAll(userId: string, exceptSid?: string, db: Prisma.TransactionClient = prisma) {
+    await db.userSession.updateMany({
       where: { userId, revokedAt: null, ...(exceptSid ? { id: { not: exceptSid } } : {}) },
       data: { revokedAt: new Date() },
     });

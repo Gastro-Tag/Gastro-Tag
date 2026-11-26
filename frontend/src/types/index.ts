@@ -34,6 +34,8 @@ export interface ManagedUser extends User {
   createdAt: string;
   /** Tem PIN de operador definido (o PIN em si nunca vem do servidor). */
   hasPin?:   boolean;
+  /** Dados pessoais já removidos (nome, e-mail e PIN anonimizados; conta desativada). */
+  pseudonymized?: boolean;
 }
 
 export interface CreateUserDTO {

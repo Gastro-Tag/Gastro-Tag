@@ -87,6 +87,8 @@ router.put('/users/:id', authenticate, requireAdmin, UserController.update);
 router.patch('/users/:id/password', authenticate, requireAdmin, UserController.resetPassword);
 router.patch('/users/:id/pin', authenticate, requireAdmin, UserController.setPin);
 router.post('/users/:id/pin/unlock', authenticate, requireAdmin, UserController.unlockPin);
+router.get('/users/:id/export', authenticate, requireAdmin, UserController.exportData);
+router.post('/users/:id/pseudonymize', authenticate, requireAdmin, UserController.pseudonymize);
 
 router.get('/totem/operators', authenticate, TotemController.operators);
 router.post('/totem/operators/verify', authenticate, verifyPinRateLimit, TotemController.verifyOperator);

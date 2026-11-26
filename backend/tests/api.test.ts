@@ -6,6 +6,7 @@ import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
 import { resetMigrationCutoffsForTests } from '../src/services/labelService';
+import { UserService } from '../src/services/userService';
 import { logger } from '../src/utils/logger';
 import { addMonths, generateShortCode, kitchenToday } from '../src/utils/dateUtils';
 import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
@@ -3327,5 +3328,230 @@ describe('relatório do período para imprimir', () => {
     expect(res.status).toBe(422);
     expect(res.body.error.message).toBe('O período tem mais de 2.000 etiquetas. Escolha um período menor.');
     expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('dados do titular: exportar e remover dados pessoais', () => {
+  const tag = suffix.slice(0, 8);
+  const titularName = `Titular Exportação ${tag}`;
+  const titularEmail = `api-titular-${suffix}@example.test`;
+  let adminAuth = '';
+  let operatorAuth = '';
+  let titularId = '';
+  let titularRefresh = '';
+  const labelIds: Record<'created' | 'handler' | 'closed' | 'typed', string> = { created: '', handler: '', closed: '', typed: '' };
+  const asAdmin = () => `Bearer ${adminAuth}`;
+  const exportOf = (id: string, token = asAdmin()) =>
+    request(app).get(`/api/users/${id}/export`).set('Authorization', token);
+  const pseudonymize = (id: string, confirmName: unknown, token = asAdmin()) =>
+    request(app).post(`/api/users/${id}/pseudonymize`).set('Authorization', token).send({ confirmName });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.90')
+      .send({ email, password: 'TestPassword123!' }).expect(200);
+    adminAuth = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.91')
+      .send({ email: operatorEmail, password: 'TestPassword123!' }).expect(200);
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: titularName, email: titularEmail, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    titularId = created.body.data.id;
+    createdUserIds.push(titularId);
+    await request(app).patch(`/api/users/${titularId}/pin`).set('Authorization', asAdmin()).send({ pin: '2468' }).expect(200);
+    const titularLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.92')
+      .send({ email: titularEmail, password: 'TestPassword123!' }).expect(200);
+    titularRefresh = titularLogin.body.data.refreshToken;
+
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Titular ${tag}`, brand: 'Teste', daysValidRefrigerated: 5, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    for (const key of Object.keys(labelIds) as (keyof typeof labelIds)[]) {
+      const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+        productId: product.id, lot: 'LOT-TIT', originalExpiryDate: daysFromToday(60), openedAt: today(),
+        responsibleName: 'Outra pessoa', storageType: 'REFRIGERADO', storageTemperature: 4,
+      }).expect(201);
+      labelIds[key] = res.body.data.id;
+    }
+    // Cada etiqueta liga o titular de um jeito; a "typed" só pelo nome digitado, com outra caixa.
+    await prisma.label.update({ where: { id: labelIds.created }, data: { userId: titularId, responsibleName: titularName } });
+    await prisma.label.update({ where: { id: labelIds.handler }, data: { handlerId: titularId, responsibleName: titularName } });
+    await prisma.label.update({ where: { id: labelIds.closed }, data: { closedById: titularId, closedByName: titularName } });
+    await prisma.label.update({ where: { id: labelIds.typed }, data: { responsibleName: titularName.toUpperCase() } });
+  });
+
+  it('exports the data subject file without hashes and with every label link', async () => {
+    const res = await exportOf(titularId);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(res.headers['content-disposition']).toBe(`attachment; filename="titular-${titularId.slice(0, 8)}.json"`);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body.success).toBeUndefined();
+    expect(res.text).not.toMatch(/passwordHash|pinHash|tokenHash|previousHash|\$2[aby]\$/);
+
+    const body = res.body;
+    expect(typeof body.exportedAt).toBe('string');
+    expect(body.notice).toContain('logs do Docker');
+    expect(body.notice).toContain('30 MB');
+    expect(body.notice).toContain('rastreabilidade');
+    expect(body.user).toMatchObject({
+      id: titularId, name: titularName, email: titularEmail, role: 'OPERATOR', active: true,
+      hasPin: true, pseudonymized: false,
+    });
+    expect(body.user.updatedAt).toBeTruthy();
+    expect(body.sessions.length).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(body.sessions[0]).sort()).toEqual(['createdAt', 'expiresAt', 'revokedAt']);
+
+    const codes = (list: { items: { shortCode: string }[] }) => list.items.map((item) => item.shortCode);
+    const code = async (id: string) => (await prisma.label.findUniqueOrThrow({ where: { id } })).shortCode;
+    expect(body.labels.created).toMatchObject({ total: 1, truncated: false });
+    expect(codes(body.labels.created)).toEqual([await code(labelIds.created)]);
+    expect(Object.keys(body.labels.created.items[0]).sort()).toEqual(['createdAt', 'openedAt', 'productName', 'shortCode']);
+    expect(codes(body.labels.confirmedAsOperator)).toEqual([await code(labelIds.handler)]);
+    expect(codes(body.labels.closed)).toEqual([await code(labelIds.closed)]);
+    // Só a etiqueta sem ligação por id; as ligadas (mesmo com o nome igual) ficam nas outras listas.
+    expect(codes(body.labels.typedNameMatches)).toEqual([await code(labelIds.typed)]);
+    expect(body.rules).toEqual([]);
+    expect(body.settingsEdits).toEqual([]);
+  });
+
+  it('is only for admins and returns 404 for an unknown user', async () => {
+    expect((await exportOf(titularId, operatorAuth)).status).toBe(403);
+    expect((await pseudonymize(titularId, titularName, operatorAuth)).status).toBe(403);
+    expect((await exportOf(titularId, '')).status).toBe(401);
+    expect((await exportOf(randomUUID())).status).toBe(404);
+    expect((await pseudonymize(randomUUID(), 'Qualquer')).status).toBe(404);
+  });
+
+  it('refuses a wrong name, the own account, an extra field and an e-mail in the reserved domain', async () => {
+    const wrong = await pseudonymize(titularId, 'Outro nome');
+    expect(wrong.status).toBe(422);
+    expect(wrong.body.error.message).toBe('Digite o nome exatamente como está para confirmar.');
+    expect((await pseudonymize(titularId, undefined)).status).toBe(422);
+    const extra = await request(app).post(`/api/users/${titularId}/pseudonymize`).set('Authorization', asAdmin())
+      .send({ confirmName: titularName, force: true });
+    expect(extra.status).toBe(422);
+
+    const self = await pseudonymize(userId, 'Teste de integração');
+    expect(self.status).toBe(409);
+    expect(self.body.error.message).toBe('Você não pode remover os dados da própria conta.');
+
+    const reserved = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: 'Falso removido', email: `x-${tag}@removido.invalid`, password: 'TestPassword123!', role: 'OPERATOR',
+    });
+    expect(reserved.status).toBe(422);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: titularId } })).active).toBe(true);
+  });
+
+  it('removes the personal data, keeps the label copies and locks the account', async () => {
+    // Turno aberto no totem antes da remoção: o token de operador tem que cair junto.
+    const verified = await request(app).post('/api/totem/operators/verify').set('Authorization', asAdmin())
+      .set('X-Forwarded-For', '198.51.100.94').send({ userId: titularId, pin: '2468' });
+    expect(verified.status).toBe(200);
+    const handlerToken = verified.body.data.handlerToken as string;
+
+    const res = await pseudonymize(titularId, `  ${titularName}  `);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      id: titularId, name: `Usuário removido ${titularId.slice(0, 8)}`,
+      email: `removido-${titularId}@removido.invalid`, active: false, hasPin: false, pseudonymized: true,
+    });
+    expect(res.body.data.pinHash).toBeUndefined();
+
+    // Some da lista do totem e o token do turno deixa de valer.
+    const operators = await request(app).get('/api/totem/operators').set('Authorization', asAdmin()).expect(200);
+    expect(operators.body.data.some((op: { id: string }) => op.id === titularId)).toBe(false);
+    const withToken = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+      productId: productIds[productIds.length - 1], lot: 'LOT-TIT', originalExpiryDate: daysFromToday(60), openedAt: today(),
+      storageType: 'REFRIGERADO', storageTemperature: 4, handlerToken,
+    });
+    expect(withToken.status).toBe(401);
+    expect(withToken.body.error.code).toBe('HANDLER_INVALID');
+
+    // A senha antiga não entra mais e as sessões foram revogadas (o refresh falha).
+    const oldLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.93')
+      .send({ email: titularEmail, password: 'TestPassword123!' });
+    expect(oldLogin.status).toBe(401);
+    expect((await request(app).post('/api/auth/refresh').send({ refreshToken: titularRefresh })).status).toBe(401);
+    const sessions = await prisma.userSession.findMany({ where: { userId: titularId } });
+    expect(sessions.length).toBeGreaterThanOrEqual(1);
+    expect(sessions.every((session) => session.revokedAt !== null)).toBe(true);
+
+    // As cópias de nome nas etiquetas não mudam (decisão pendente do jurídico).
+    const kept = await prisma.label.findUniqueOrThrow({ where: { id: labelIds.created } });
+    expect(kept.responsibleName).toBe(titularName);
+    expect(kept.userId).toBe(titularId);
+    expect((await prisma.label.findUniqueOrThrow({ where: { id: labelIds.closed } })).closedByName).toBe(titularName);
+
+    const again = await pseudonymize(titularId, res.body.data.name);
+    expect(again.status).toBe(409);
+
+    const locked = 'Dados pessoais removidos: o usuário não pode ser alterado.';
+    const put = await request(app).put(`/api/users/${titularId}`).set('Authorization', asAdmin()).send({ active: true });
+    expect(put.status).toBe(409);
+    expect(put.body.error.message).toBe(locked);
+    const password = await request(app).patch(`/api/users/${titularId}/password`).set('Authorization', asAdmin())
+      .send({ password: 'OutraSenha12345!' });
+    expect(password.status).toBe(409);
+    expect(password.body.error.message).toBe(locked);
+    const pin = await request(app).patch(`/api/users/${titularId}/pin`).set('Authorization', asAdmin()).send({ pin: '1357' });
+    expect(pin.status).toBe(409);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: titularId } })).active).toBe(false);
+
+    const list = await request(app).get('/api/users').set('Authorization', asAdmin()).expect(200);
+    const byId = (id: string) => list.body.data.find((user: { id: string }) => user.id === id);
+    expect(byId(titularId).pseudonymized).toBe(true);
+    expect(byId(userId).pseudonymized).toBe(false);
+
+    // O arquivo depois da remoção: o nome trocado não procura etiquetas digitadas.
+    const after = await exportOf(titularId).expect(200);
+    expect(after.body.user).toMatchObject({ pseudonymized: true, active: false, hasPin: false });
+    expect(after.body.labels.typedNameMatches).toEqual({ items: [], total: 0, truncated: false });
+    expect(after.body.labels.created.total).toBe(1);
+  });
+
+  it('refuses to remove the ADMIN_EMAIL account, which the boot would recreate', async () => {
+    const bootName = `Admin do boot ${tag}`;
+    const bootEmailAddr = `api-boot-admin-${suffix}@example.test`;
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: bootName, email: bootEmailAddr, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    createdUserIds.push(created.body.data.id);
+    const previous = process.env.ADMIN_EMAIL;
+    process.env.ADMIN_EMAIL = ` ${bootEmailAddr.toUpperCase()} `;
+    try {
+      const res = await pseudonymize(created.body.data.id, bootName);
+      expect(res.status).toBe(409);
+      expect(res.body.error.message).toContain('ADMIN_EMAIL');
+    } finally {
+      if (previous === undefined) delete process.env.ADMIN_EMAIL; else process.env.ADMIN_EMAIL = previous;
+    }
+    expect((await pseudonymize(created.body.data.id, bootName)).status).toBe(200);
+  });
+
+  it('refuses to remove the last active admin', async () => {
+    const lastAdmin = await prisma.user.create({ data: {
+      name: `Último admin ${tag}`, email: `api-last-admin-${suffix}@example.test`,
+      passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
+    } });
+    createdUserIds.push(lastAdmin.id);
+    // Pela API o autor é sempre outro ADMIN ativo; o caso real é a corrida (dois admins removendo um ao outro).
+    // Aqui os outros ADMIN ficam inativos por um instante e voltam no finally.
+    const others = await prisma.user.findMany({
+      where: { role: 'ADMIN', active: true, id: { not: lastAdmin.id } }, select: { id: true },
+    });
+    const otherIds = others.map((user) => user.id);
+    try {
+      await prisma.user.updateMany({ where: { id: { in: otherIds } }, data: { active: false } });
+      await expect(UserService.pseudonymize(lastAdmin.id, randomUUID(), lastAdmin.name))
+        .rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      await prisma.user.updateMany({ where: { id: { in: otherIds } }, data: { active: true } });
+    }
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: lastAdmin.id } }))
+      .toMatchObject({ name: lastAdmin.name, active: true });
   });
 });
