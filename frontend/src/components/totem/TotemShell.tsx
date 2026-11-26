@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router';
-import { Check, LayoutDashboard, LogOut, ShieldCheck, User } from 'lucide-react';
+import { Check, LayoutDashboard, LogOut, ShieldCheck, User, WifiOff, X } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useTotemStore } from '@/store/totemStore';
 import { useIdle } from '@/hooks/useIdle';
+import { useOutageTracker } from '@/hooks/useOutageTracker';
+import { outageNoticeText } from '@/utils/outage';
 import { useKitchenTemplateSync, useLabelTemplate } from '@/hooks/useLabelTemplate';
 import { LABEL_TEMPLATES, LABEL_TEMPLATE_NOT_CHOSEN_TEXT, getLabelTemplate } from '@/utils/labelTemplates';
 import { cn } from '@/utils/cn';
@@ -23,6 +25,7 @@ export function TotemRoute() {
 
 function TotemShell() {
   useKitchenTemplateSync(); // padrão da cozinha também na reimpressão do início
+  const { noticeMs, dismiss: dismissOutage } = useOutageTracker(); // plano B: só observa a rede
   const navigate = useNavigate();
   const location = useLocation();
   const logout = useAuthStore((state) => state.logout);
@@ -123,6 +126,21 @@ function TotemShell() {
           <span className="truncate">{operator || 'Informar responsável'}</span>
         </button>
       </header>
+
+      {noticeMs !== null && (
+        <div role="status" className="flex shrink-0 items-start gap-3 border-b-2 border-amber-300 bg-amber-100 px-4 py-3 text-amber-950">
+          <WifiOff className="mt-1 h-7 w-7 shrink-0 text-amber-700" aria-hidden="true" />
+          <p className="min-w-0 flex-1 text-lg font-bold leading-snug sm:text-xl">{outageNoticeText(noticeMs)}</p>
+          <button
+            type="button"
+            onClick={dismissOutage}
+            aria-label="Dispensar aviso"
+            className="flex h-12 w-12 shrink-0 touch-manipulation items-center justify-center rounded-xl bg-white/70 active:scale-95"
+          >
+            <X className="h-6 w-6" aria-hidden="true" />
+          </button>
+        </div>
+      )}
 
       <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <Outlet />

@@ -14,11 +14,28 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config;
 });
 
+/** Inscrição mínima no resultado das chamadas (plano B do totem): só avisa, nunca altera a resposta nem o refresh. */
+export type ApiActivity = 'success' | 'network-error';
+type ApiActivityListener = (activity: ApiActivity) => void;
+const activityListeners = new Set<ApiActivityListener>();
+export function subscribeApiActivity(listener: ApiActivityListener): () => void {
+  activityListeners.add(listener);
+  return () => { activityListeners.delete(listener); };
+}
+function notifyActivity(activity: ApiActivity) {
+  activityListeners.forEach((listener) => { try { listener(activity); } catch { /* o ouvinte nunca afeta a requisição */ } });
+}
+
 let refreshPromise: Promise<string> | null = null;
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => { notifyActivity('success'); return response; },
   async (error: AxiosError) => {
+    // Sem resposta, ou o nginx/túnel respondendo que a API não está lá: conta como queda para o plano B.
+    const status = error.response?.status;
+    if ((!error.response || status === 502 || status === 503 || status === 504 || status === 530) && !axios.isCancel(error)) {
+      notifyActivity('network-error');
+    }
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? '';
     // Login, refresh e logout devolvem 401 por motivo próprio. PIN errado e token de operador recusado são 401 do

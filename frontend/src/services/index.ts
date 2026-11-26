@@ -6,7 +6,9 @@ import type {
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
   ShelfLifeRule, RuleFilters, AppSettings, SettingsUpdateMeta, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
+  ContingencyOutage, ContingencyOutagesResponse, ContingencyRecordDTO, ContingencyPreview, ContingencyRecord, ContingencyCloseDTO,
   DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelReport, LabelExportParams, TotemOperator, VerifyOperatorResult,
+  Equipment, EquipmentInput, EquipmentReading, EquipmentReadingDTO, EquipmentReadingRow, EquipmentReadingsMeta, EquipmentToday,
 } from '@/types';
 import type { LabelTemplateId } from '@/utils/labelTemplates';
 import { exportFilename } from '@/utils/titular';
@@ -215,6 +217,61 @@ export const settingsApi = {
     api.get<ApiResponse<AppSettings>>('/settings'),
 
   /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
-  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null; labelTemplate?: LabelTemplateId | null; kitchenName?: string | null; technicalResponsible?: string | null }) =>
+  update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null; labelTemplate?: LabelTemplateId | null; kitchenName?: string | null; technicalResponsible?: string | null; equipmentTemperatureEnabled?: boolean }) =>
     api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', changes),
+};
+
+// ── Plano B / contingência ──────────────────────────────
+export const contingencyApi = {
+  /** Totem (qualquer usuário logado): 201 na criação, 200 no reenvio. `durationMs` de 60 000 a 7 dias. */
+  reportOutage: (durationMs: number, endedAgoMs = 0) =>
+    api.post<ApiResponse<ContingencyOutage>>('/contingency/outages', { durationMs, endedAgoMs }),
+
+  /** ADMIN. `meta.pendingCount` = quedas ainda não revisadas. */
+  listOutages: (pending = true) =>
+    api.get<ContingencyOutagesResponse>('/contingency/outages', { params: pending ? { pending: true } : undefined }),
+
+  reviewOutage: (id: string) =>
+    api.post<ApiResponse<ContingencyOutage>>(`/contingency/outages/${id}/review`),
+
+  preview: (data: ContingencyRecordDTO) =>
+    api.post<ApiResponse<ContingencyPreview>>('/contingency/records/preview', data),
+
+  create: (data: ContingencyRecordDTO) =>
+    api.post<ApiResponse<ContingencyRecord>>('/contingency/records', data),
+
+  list: (status: 'open' | 'all' = 'open') =>
+    api.get<ApiResponse<ContingencyRecord[]>>('/contingency/records', { params: { status } }),
+
+  /** 409 se o registro não estiver mais em uso. */
+  close: (id: string, data: ContingencyCloseDTO) =>
+    api.post<ApiResponse<ContingencyRecord>>(`/contingency/records/${id}/close`, data),
+};
+
+// ── Temperatura por equipamento ─────────────────────────
+export const equipmentApi = {
+  /** Ativos; `all` (só ADMIN) inclui os desativados. */
+  list: (all = false) =>
+    api.get<ApiResponse<Equipment[]>>('/equipment', { params: all ? { all: true } : undefined }),
+
+  create: (data: EquipmentInput) =>
+    api.post<ApiResponse<Equipment>>('/equipment', data),
+
+  update: (id: string, data: Partial<EquipmentInput> & { active?: boolean }) =>
+    api.put<ApiResponse<Equipment>>(`/equipment/${id}`, data),
+
+  /** Desativa (o histórico fica). */
+  deactivate: (id: string) =>
+    api.delete<ApiResponse<Equipment>>(`/equipment/${id}`),
+
+  /** 201 na criação, 200 no reenvio com o mesmo `requestId`. */
+  addReading: (id: string, data: EquipmentReadingDTO) =>
+    api.post<ApiResponse<EquipmentReading>>(`/equipment/${id}/readings`, data),
+
+  today: () =>
+    api.get<ApiResponse<EquipmentToday[]>>('/equipment/today'),
+
+  /** ADMIN. */
+  readings: (params: { from?: string; to?: string; equipmentId?: string }) =>
+    api.get<ApiResponse<EquipmentReadingRow[]> & { meta: EquipmentReadingsMeta }>('/equipment/readings', { params }),
 };

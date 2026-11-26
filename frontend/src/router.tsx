@@ -11,6 +11,8 @@ import { LabelsPage }       from '@/pages/LabelsPage';
 import { UsersPage }        from '@/pages/UsersPage';
 import { ShelfLifeRulesPage } from '@/pages/ShelfLifeRulesPage';
 import { ReportPage }       from '@/pages/ReportPage';
+import { ContingencyPage }  from '@/pages/ContingencyPage';
+import { EquipmentPage }    from '@/pages/EquipmentPage';
 import { RouteErrorScreen } from '@/components/errors/ErrorBoundary';
 import { TotemRoute }       from '@/components/totem/TotemShell';
 import { TotemLoginPage }   from '@/pages/totem/TotemLoginPage';
@@ -18,6 +20,7 @@ import { TotemHomePage }    from '@/pages/totem/TotemHomePage';
 import { TotemLabelPage }   from '@/pages/totem/TotemLabelPage';
 import { TotemSplitPage }   from '@/pages/totem/TotemSplitPage';
 import { TotemDuePage }     from '@/pages/totem/TotemDuePage';
+import { TotemEquipmentPage } from '@/pages/totem/TotemEquipmentPage';
 
 export const router = createBrowserRouter([
   // Erro inesperado fora das áreas (login, 404): tela cheia. Cada área tem o seu errorElement abaixo,
@@ -40,6 +43,7 @@ export const router = createBrowserRouter([
               { path: '/totem/etiqueta/:productId', element: <TotemLabelPage /> },
               { path: '/totem/etiqueta/:productId/dividir', element: <TotemSplitPage /> },
               { path: '/totem/descartar',            element: <TotemDuePage /> },
+              { path: '/totem/temperaturas',          element: <TotemEquipmentPage /> },
             ],
           },
         ],
@@ -63,6 +67,8 @@ export const router = createBrowserRouter([
                   { path: '/users',             element: <UsersPage /> },
                   { path: '/rules',             element: <ShelfLifeRulesPage /> },
                   { path: '/reports',           element: <ReportPage /> },
+                  { path: '/contingency',       element: <ContingencyPage /> },
+                  { path: '/equipment',         element: <EquipmentPage /> },
                 ],
               },
             ],
