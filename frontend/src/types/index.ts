@@ -34,6 +34,8 @@ export interface ManagedUser extends User {
   createdAt: string;
   /** Tem PIN de operador definido (o PIN em si nunca vem do servidor). */
   hasPin?:   boolean;
+  /** Dados pessoais já removidos (nome, e-mail e PIN anonimizados; conta desativada). */
+  pseudonymized?: boolean;
 }
 
 export interface CreateUserDTO {
@@ -291,6 +293,8 @@ export interface KitchenInfo {
   requireValidatedRule?: boolean;
   /** Modelo de etiqueta padrão da cozinha; null = não definido. */
   labelTemplate?: LabelTemplateId | null;
+  /** Registro de temperatura dos equipamentos ligado (item 14); ausente = tratar como desligado. */
+  equipmentTemperatureEnabled?: boolean;
 }
 
 export interface LabelPreview {
@@ -411,6 +415,8 @@ export interface AppSettings {
   /** Cabeçalho do relatório do período; null = não definido. */
   kitchenName:          string | null;
   technicalResponsible: string | null;
+  /** Registro de temperatura por equipamento (desligado por padrão). */
+  equipmentTemperatureEnabled: boolean;
   updatedAt:            string | null;
   updatedByName:        string | null;
 }
@@ -549,4 +555,152 @@ export interface LabelReport {
   generatedAt: string;
   summary: ReportSummary;
   rows: ReportRow[];
+}
+
+// ── Plano B (contingência) ──────────────────────────────
+export type ContingencyOutcome = 'EM_USO' | 'USADO' | 'DESCARTADO';
+
+export interface ContingencyOutage {
+  id:             string;
+  durationMs:     number;
+  startedAt:      string;
+  reportedAt:     string;
+  reportedByName: string | null;
+  reviewedAt:     string | null;
+  reviewedByName: string | null;
+}
+
+export interface ContingencyOutagesResponse {
+  success: boolean;
+  data:    ContingencyOutage[];
+  meta:    { pendingCount: number };
+}
+
+export interface ContingencyRecordDTO {
+  productId:        string;
+  storageType:      StorageType;
+  lot:              string;
+  originalExpiryDate: string;   // YYYY-MM-DD
+  openedAt:         string;     // ISO com hora
+  responsibleName:  string;
+  paperRef?:        string;
+  note?:            string;
+  outcome:          ContingencyOutcome;
+  discardReason?:   DiscardReason;
+  outageId?:        string;
+}
+
+export interface ContingencyPreview {
+  shelfLifeDays:         number;
+  discardAt:             string;
+  cappedByOriginalExpiry: boolean;
+  /** Dia da cozinha da abertura (dia 1), para conferir com a folha. */
+  openedDate?:           string;
+  rule:                  { id: string | null; version: number | null; source: string | null; validated: boolean };
+  expired:               boolean;
+}
+
+export interface ContingencyRecord {
+  id:                 string;
+  productId:          string;
+  productName:        string;
+  productBrand:       string | null;
+  lot:                string;
+  originalExpiryDate: string;
+  openedAt:           string;
+  openedDate:         string;
+  storageType:        StorageType;
+  shelfLifeDays:      number;
+  ruleId:             string | null;
+  ruleVersion:        number | null;
+  ruleSource:         string | null;
+  discardAt:          string;
+  cappedByOriginalExpiry: boolean;
+  responsibleName:    string;
+  paperRef:           string | null;
+  note:               string | null;
+  outcome:            ContingencyOutcome;
+  discardReason:      DiscardReason | null;
+  closedAt:           string | null;
+  closedByName:       string | null;
+  createdByName:      string | null;
+  createdAt:          string;
+  outageId:           string | null;
+  expired:            boolean;
+}
+
+export interface ContingencyCloseDTO {
+  outcome:        'USADO' | 'DESCARTADO';
+  discardReason?: DiscardReason;
+  note?:          string;
+}
+
+// ── Temperatura por equipamento (item 14) ───────────────
+export interface Equipment {
+  id:             string;
+  name:           string;
+  storageType:    StorageType;
+  minTemperature: number;
+  maxTemperature: number;
+  active:         boolean;
+  createdAt:      string;
+  updatedAt:      string;
+}
+
+export interface EquipmentInput {
+  name:           string;
+  storageType:    StorageType;
+  minTemperature: number;
+  maxTemperature: number;
+}
+
+export interface EquipmentReadingDTO {
+  temperature:      number;
+  responsibleName?: string;
+  handlerToken?:    string;
+  note?:            string;
+  requestId?:       string;
+}
+
+export interface EquipmentReading {
+  id:              string;
+  equipmentId:     string;
+  temperature:     number;
+  minTemperature:  number;
+  maxTemperature:  number;
+  outOfRange:      boolean;
+  readAt:          string;
+  kitchenDate:     string;
+  responsibleName: string | null;
+  handlerId:       string | null;
+  note:            string | null;
+}
+
+/** Linha do histórico (ADMIN): a leitura com o nome do equipamento. */
+export interface EquipmentReadingRow extends EquipmentReading {
+  equipmentName?: string;           // nome na época da leitura
+  equipmentCurrentName?: string;
+  equipmentActive?: boolean;
+  equipment?: { id: string; name: string };
+}
+
+export interface EquipmentReadingsMeta {
+  total:      number;
+  outOfRange: number;
+}
+
+export interface EquipmentToday {
+  id:             string;
+  name:           string;
+  storageType:    StorageType;
+  minTemperature: number;
+  maxTemperature: number;
+  lastReading: {
+    temperature:     number;
+    readAt:          string;
+    responsibleName: string | null;
+    outOfRange:      boolean;
+  } | null;
+  readingsToday:    number;
+  outOfRangeToday:  number;
 }

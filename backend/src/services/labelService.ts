@@ -14,7 +14,7 @@ import { LotService } from './lotService';
 import { serializeRule } from './ruleService';
 import { SettingsService } from './settingsService';
 
-const capToOriginalExpiry = process.env.CAP_DISCARD_TO_ORIGINAL_EXPIRY !== 'false';
+export const capToOriginalExpiry = process.env.CAP_DISCARD_TO_ORIGINAL_EXPIRY !== 'false';
 
 /** Fonte gravada na etiqueta quando o prazo vem do cadastro do produto. */
 export const PRODUCT_DAYS_SOURCE = 'Prazo cadastrado no produto (sem regra validada)';
@@ -198,6 +198,20 @@ async function resolveShelfLife(
   const rule = await findActiveRule(db, product, storageType);
   const settings = await SettingsService.get(db);
   return { rule, shelfLifeDays: resolveShelfLifeDays(rule, product, storageType, settings.requireValidatedRule) };
+}
+
+/**
+ * Plano B (registro de contingência): mesma busca de regra e prazo da etiqueta, sem o bloqueio
+ * "exigir regra validada". A embalagem já foi aberta no papel; o registro guarda o que aconteceu
+ * e mostra "sem regra validada" quando o prazo vier do produto.
+ */
+export async function resolveShelfLifeUnblocked(
+  db: Db,
+  product: { id: string; category: string | null; daysValidRefrigerated: number; daysValidFrozen: number },
+  storageType: StorageType,
+) {
+  const rule = await findActiveRule(db, product, storageType);
+  return { rule, shelfLifeDays: resolveShelfLifeDays(rule, product, storageType, false) };
 }
 
 /** Arredonda a medição e confere a faixa da regra. Sem medição (só nas prévias), não confere. */
@@ -919,7 +933,7 @@ export const LabelService = {
     const label = await prisma.label.findUnique({
       where: { id },
       include: {
-        product: true, user: { select: { name: true, email: true } }, rule: true, parent: parentSelect,
+        product: true, user: { select: { name: true } }, rule: true, parent: parentSelect,
         children: {
           select: { id: true, shortCode: true, status: true, discardAt: true },
           orderBy: [{ createdAt: 'asc' }, { shortCode: 'asc' }],

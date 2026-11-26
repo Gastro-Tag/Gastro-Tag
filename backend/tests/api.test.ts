@@ -6,6 +6,7 @@ import { prisma } from '../src/prisma/client';
 import { AuthService } from '../src/services/authService';
 import { AdminBootstrapService } from '../src/services/adminBootstrapService';
 import { resetMigrationCutoffsForTests } from '../src/services/labelService';
+import { UserService } from '../src/services/userService';
 import { logger } from '../src/utils/logger';
 import { addMonths, generateShortCode, kitchenToday } from '../src/utils/dateUtils';
 import { DEFAULT_CATEGORIES, categoryKey } from '../src/domain/categories';
@@ -33,6 +34,7 @@ let operatorId = '';
 const productIds: string[] = [];
 const ruleIds: string[] = [];
 const createdUserIds: string[] = [];
+const equipmentIds: string[] = [];
 let accessToken = '';
 let refreshToken = '';
 let operatorToken = '';
@@ -45,7 +47,9 @@ const ruleBody = {
 
 beforeAll(async () => {
   // Uma execução interrompida pode ter deixado o bloqueio ou o limite do aviso ligados: começa sempre desligado.
-  await prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false, expiryWarningMonths: null } });
+  await prisma.kitchenSettings.updateMany({
+    data: { requireValidatedRule: false, expiryWarningMonths: null, equipmentTemperatureEnabled: false },
+  });
   const user = await prisma.user.create({ data: {
     name: 'Teste de integração', email,
     passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
@@ -60,6 +64,15 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Temperatura dos equipamentos: leituras apontam para equipamento e usuários (Restrict); apaga antes deles.
+  const testUserIds = [userId, operatorId, ...createdUserIds].filter(Boolean);
+  await prisma.temperatureReading.deleteMany({
+    where: { OR: [{ equipmentId: { in: equipmentIds } }, { userId: { in: testUserIds } }, { handlerId: { in: testUserIds } }] },
+  });
+  if (equipmentIds.length) await prisma.equipment.deleteMany({ where: { id: { in: equipmentIds } } });
+  // Plano B: registros apontam para produto, regra e usuário (Restrict); apaga antes deles.
+  if (productIds.length) await prisma.contingencyRecord.deleteMany({ where: { productId: { in: productIds } } });
+  await prisma.connectivityOutage.deleteMany({ where: { reportedById: { in: [userId, operatorId].filter(Boolean) } } });
   if (productIds.length) {
     // Origem com filhas não pode ser apagada (Restrict): apaga das folhas para a origem.
     for (let round = 0; round < 10; round++) {
@@ -1693,6 +1706,7 @@ describe('etapa G1: operador com PIN, limite de abertura, descarte do dia, CSV e
       expect(me.body.data.sub).toBe(operatorId);
       expect(me.body.meta).toEqual({
         kitchenToday: today(), maxBackdateDays: 2, requireValidatedRule: false, labelTemplate: null,
+        equipmentTemperatureEnabled: false,
       });
     });
 
@@ -3320,12 +3334,854 @@ describe('relatório do período para imprimir', () => {
   });
 
   it('refuses a period with more than 2,000 labels before fetching the rows', async () => {
-    const count = vi.spyOn(prisma.label, 'count').mockResolvedValueOnce(2_001);
-    const findMany = vi.spyOn(prisma.label, 'findMany');
-    const res = await report({ from: '2001-01-01', to: '2001-01-02' });
-    expect(count).toHaveBeenCalledTimes(1);
-    expect(res.status).toBe(422);
-    expect(res.body.error.message).toBe('O período tem mais de 2.000 etiquetas. Escolha um período menor.');
-    expect(findMany).not.toHaveBeenCalled();
+    // vi.spyOn + restore deixa `undefined` nos métodos do delegate do Prisma e quebra os testes seguintes
+    // (o export do titular falhava por isso). Troca e devolve os métodos originais à mão.
+    const delegate = prisma.label as unknown as Record<'count' | 'findMany', unknown>;
+    const original = { count: delegate.count, findMany: delegate.findMany };
+    const count = vi.fn().mockResolvedValue(2_001);
+    const findMany = vi.fn();
+    try {
+      delegate.count = count;
+      delegate.findMany = findMany;
+      const res = await report({ from: '2001-01-01', to: '2001-01-02' });
+      expect(count).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(422);
+      expect(res.body.error.message).toBe('O período tem mais de 2.000 etiquetas. Escolha um período menor.');
+      expect(findMany).not.toHaveBeenCalled();
+    } finally {
+      delegate.count = original.count;
+      delegate.findMany = original.findMany;
+    }
+    expect(typeof prisma.label.findMany).toBe('function');
+    expect(typeof prisma.label.count).toBe('function');
+  });
+});
+
+describe('dados do titular: exportar e remover dados pessoais', () => {
+  const tag = suffix.slice(0, 8);
+  const titularName = `Titular Exportação ${tag}`;
+  const titularEmail = `api-titular-${suffix}@example.test`;
+  let adminAuth = '';
+  let operatorAuth = '';
+  let titularId = '';
+  let titularRefresh = '';
+  const labelIds: Record<'created' | 'handler' | 'closed' | 'typed', string> = { created: '', handler: '', closed: '', typed: '' };
+  const asAdmin = () => `Bearer ${adminAuth}`;
+  const exportOf = (id: string, token = asAdmin()) =>
+    request(app).get(`/api/users/${id}/export`).set('Authorization', token);
+  const pseudonymize = (id: string, confirmName: unknown, token = asAdmin()) =>
+    request(app).post(`/api/users/${id}/pseudonymize`).set('Authorization', token).send({ confirmName });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.90')
+      .send({ email, password: 'TestPassword123!' }).expect(200);
+    adminAuth = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.91')
+      .send({ email: operatorEmail, password: 'TestPassword123!' }).expect(200);
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: titularName, email: titularEmail, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    titularId = created.body.data.id;
+    createdUserIds.push(titularId);
+    await request(app).patch(`/api/users/${titularId}/pin`).set('Authorization', asAdmin()).send({ pin: '2468' }).expect(200);
+    const titularLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.92')
+      .send({ email: titularEmail, password: 'TestPassword123!' }).expect(200);
+    titularRefresh = titularLogin.body.data.refreshToken;
+
+    // Prazos fictícios, só para o teste.
+    const product = await prisma.product.create({
+      data: { name: `Titular ${tag}`, brand: 'Teste', daysValidRefrigerated: 5, daysValidFrozen: 30 },
+    });
+    productIds.push(product.id);
+    for (const key of Object.keys(labelIds) as (keyof typeof labelIds)[]) {
+      const res = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+        productId: product.id, lot: 'LOT-TIT', originalExpiryDate: daysFromToday(60), openedAt: today(),
+        responsibleName: 'Outra pessoa', storageType: 'REFRIGERADO', storageTemperature: 4,
+      }).expect(201);
+      labelIds[key] = res.body.data.id;
+    }
+    // Cada etiqueta liga o titular de um jeito; a "typed" só pelo nome digitado, com outra caixa.
+    await prisma.label.update({ where: { id: labelIds.created }, data: { userId: titularId, responsibleName: titularName } });
+    await prisma.label.update({ where: { id: labelIds.handler }, data: { handlerId: titularId, responsibleName: titularName } });
+    await prisma.label.update({ where: { id: labelIds.closed }, data: { closedById: titularId, closedByName: titularName } });
+    await prisma.label.update({ where: { id: labelIds.typed }, data: { responsibleName: titularName.toUpperCase() } });
+  });
+
+  it('exports the data subject file without hashes and with every label link', async () => {
+    const res = await exportOf(titularId);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('application/json');
+    expect(res.headers['content-disposition']).toBe(`attachment; filename="titular-${titularId.slice(0, 8)}.json"`);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.body.success).toBeUndefined();
+    expect(res.text).not.toMatch(/passwordHash|pinHash|tokenHash|previousHash|\$2[aby]\$/);
+
+    const body = res.body;
+    expect(typeof body.exportedAt).toBe('string');
+    expect(body.notice).toContain('logs do Docker');
+    expect(body.notice).toContain('30 MB');
+    expect(body.notice).toContain('rastreabilidade');
+    expect(body.user).toMatchObject({
+      id: titularId, name: titularName, email: titularEmail, role: 'OPERATOR', active: true,
+      hasPin: true, pseudonymized: false,
+    });
+    expect(body.user.updatedAt).toBeTruthy();
+    expect(body.sessions.length).toBeGreaterThanOrEqual(1);
+    expect(Object.keys(body.sessions[0]).sort()).toEqual(['createdAt', 'expiresAt', 'revokedAt']);
+
+    const codes = (list: { items: { shortCode: string }[] }) => list.items.map((item) => item.shortCode);
+    const code = async (id: string) => (await prisma.label.findUniqueOrThrow({ where: { id } })).shortCode;
+    expect(body.labels.created).toMatchObject({ total: 1, truncated: false });
+    expect(codes(body.labels.created)).toEqual([await code(labelIds.created)]);
+    expect(Object.keys(body.labels.created.items[0]).sort()).toEqual(['createdAt', 'openedAt', 'productName', 'shortCode']);
+    expect(codes(body.labels.confirmedAsOperator)).toEqual([await code(labelIds.handler)]);
+    expect(codes(body.labels.closed)).toEqual([await code(labelIds.closed)]);
+    // Só a etiqueta sem ligação por id; as ligadas (mesmo com o nome igual) ficam nas outras listas.
+    expect(codes(body.labels.typedNameMatches)).toEqual([await code(labelIds.typed)]);
+    expect(body.rules).toEqual([]);
+    expect(body.settingsEdits).toEqual([]);
+  });
+
+  it('is only for admins and returns 404 for an unknown user', async () => {
+    expect((await exportOf(titularId, operatorAuth)).status).toBe(403);
+    expect((await pseudonymize(titularId, titularName, operatorAuth)).status).toBe(403);
+    expect((await exportOf(titularId, '')).status).toBe(401);
+    expect((await exportOf(randomUUID())).status).toBe(404);
+    expect((await pseudonymize(randomUUID(), 'Qualquer')).status).toBe(404);
+  });
+
+  it('refuses a wrong name, the own account, an extra field and an e-mail in the reserved domain', async () => {
+    const wrong = await pseudonymize(titularId, 'Outro nome');
+    expect(wrong.status).toBe(422);
+    expect(wrong.body.error.message).toBe('Digite o nome exatamente como está para confirmar.');
+    expect((await pseudonymize(titularId, undefined)).status).toBe(422);
+    const extra = await request(app).post(`/api/users/${titularId}/pseudonymize`).set('Authorization', asAdmin())
+      .send({ confirmName: titularName, force: true });
+    expect(extra.status).toBe(422);
+
+    const self = await pseudonymize(userId, 'Teste de integração');
+    expect(self.status).toBe(409);
+    expect(self.body.error.message).toBe('Você não pode remover os dados da própria conta.');
+
+    const reserved = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: 'Falso removido', email: `x-${tag}@removido.invalid`, password: 'TestPassword123!', role: 'OPERATOR',
+    });
+    expect(reserved.status).toBe(422);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: titularId } })).active).toBe(true);
+  });
+
+  it('removes the personal data, keeps the label copies and locks the account', async () => {
+    // Turno aberto no totem antes da remoção: o token de operador tem que cair junto.
+    const verified = await request(app).post('/api/totem/operators/verify').set('Authorization', asAdmin())
+      .set('X-Forwarded-For', '198.51.100.94').send({ userId: titularId, pin: '2468' });
+    expect(verified.status).toBe(200);
+    const handlerToken = verified.body.data.handlerToken as string;
+
+    const res = await pseudonymize(titularId, `  ${titularName}  `);
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      id: titularId, name: `Usuário removido ${titularId.slice(0, 8)}`,
+      email: `removido-${titularId}@removido.invalid`, active: false, hasPin: false, pseudonymized: true,
+    });
+    expect(res.body.data.pinHash).toBeUndefined();
+
+    // Some da lista do totem e o token do turno deixa de valer.
+    const operators = await request(app).get('/api/totem/operators').set('Authorization', asAdmin()).expect(200);
+    expect(operators.body.data.some((op: { id: string }) => op.id === titularId)).toBe(false);
+    const withToken = await request(app).post('/api/labels').set('Authorization', asAdmin()).send({
+      productId: productIds[productIds.length - 1], lot: 'LOT-TIT', originalExpiryDate: daysFromToday(60), openedAt: today(),
+      storageType: 'REFRIGERADO', storageTemperature: 4, handlerToken,
+    });
+    expect(withToken.status).toBe(401);
+    expect(withToken.body.error.code).toBe('HANDLER_INVALID');
+
+    // A senha antiga não entra mais e as sessões foram revogadas (o refresh falha).
+    const oldLogin = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.93')
+      .send({ email: titularEmail, password: 'TestPassword123!' });
+    expect(oldLogin.status).toBe(401);
+    expect((await request(app).post('/api/auth/refresh').send({ refreshToken: titularRefresh })).status).toBe(401);
+    const sessions = await prisma.userSession.findMany({ where: { userId: titularId } });
+    expect(sessions.length).toBeGreaterThanOrEqual(1);
+    expect(sessions.every((session) => session.revokedAt !== null)).toBe(true);
+
+    // As cópias de nome nas etiquetas não mudam (decisão pendente do jurídico).
+    const kept = await prisma.label.findUniqueOrThrow({ where: { id: labelIds.created } });
+    expect(kept.responsibleName).toBe(titularName);
+    expect(kept.userId).toBe(titularId);
+    expect((await prisma.label.findUniqueOrThrow({ where: { id: labelIds.closed } })).closedByName).toBe(titularName);
+
+    const again = await pseudonymize(titularId, res.body.data.name);
+    expect(again.status).toBe(409);
+
+    const locked = 'Dados pessoais removidos: o usuário não pode ser alterado.';
+    const put = await request(app).put(`/api/users/${titularId}`).set('Authorization', asAdmin()).send({ active: true });
+    expect(put.status).toBe(409);
+    expect(put.body.error.message).toBe(locked);
+    const password = await request(app).patch(`/api/users/${titularId}/password`).set('Authorization', asAdmin())
+      .send({ password: 'OutraSenha12345!' });
+    expect(password.status).toBe(409);
+    expect(password.body.error.message).toBe(locked);
+    const pin = await request(app).patch(`/api/users/${titularId}/pin`).set('Authorization', asAdmin()).send({ pin: '1357' });
+    expect(pin.status).toBe(409);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: titularId } })).active).toBe(false);
+
+    const list = await request(app).get('/api/users').set('Authorization', asAdmin()).expect(200);
+    const byId = (id: string) => list.body.data.find((user: { id: string }) => user.id === id);
+    expect(byId(titularId).pseudonymized).toBe(true);
+    expect(byId(userId).pseudonymized).toBe(false);
+
+    // O arquivo depois da remoção: o nome trocado não procura etiquetas digitadas.
+    const after = await exportOf(titularId).expect(200);
+    expect(after.body.user).toMatchObject({ pseudonymized: true, active: false, hasPin: false });
+    expect(after.body.labels.typedNameMatches).toEqual({ items: [], total: 0, truncated: false });
+    expect(after.body.labels.created.total).toBe(1);
+  });
+
+  it('refuses to remove the ADMIN_EMAIL account, which the boot would recreate', async () => {
+    const bootName = `Admin do boot ${tag}`;
+    const bootEmailAddr = `api-boot-admin-${suffix}@example.test`;
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: bootName, email: bootEmailAddr, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    createdUserIds.push(created.body.data.id);
+    const previous = process.env.ADMIN_EMAIL;
+    process.env.ADMIN_EMAIL = ` ${bootEmailAddr.toUpperCase()} `;
+    try {
+      const res = await pseudonymize(created.body.data.id, bootName);
+      expect(res.status).toBe(409);
+      expect(res.body.error.message).toContain('ADMIN_EMAIL');
+    } finally {
+      if (previous === undefined) delete process.env.ADMIN_EMAIL; else process.env.ADMIN_EMAIL = previous;
+    }
+    expect((await pseudonymize(created.body.data.id, bootName)).status).toBe(200);
+  });
+
+  it('refuses to remove the last active admin', async () => {
+    const lastAdmin = await prisma.user.create({ data: {
+      name: `Último admin ${tag}`, email: `api-last-admin-${suffix}@example.test`,
+      passwordHash: await AuthService.hashPassword('TestPassword123!'), role: 'ADMIN',
+    } });
+    createdUserIds.push(lastAdmin.id);
+    // Pela API o autor é sempre outro ADMIN ativo; o caso real é a corrida (dois admins removendo um ao outro).
+    // Aqui os outros ADMIN ficam inativos por um instante e voltam no finally.
+    const others = await prisma.user.findMany({
+      where: { role: 'ADMIN', active: true, id: { not: lastAdmin.id } }, select: { id: true },
+    });
+    const otherIds = others.map((user) => user.id);
+    try {
+      await prisma.user.updateMany({ where: { id: { in: otherIds } }, data: { active: false } });
+      await expect(UserService.pseudonymize(lastAdmin.id, randomUUID(), lastAdmin.name))
+        .rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      await prisma.user.updateMany({ where: { id: { in: otherIds } }, data: { active: true } });
+    }
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: lastAdmin.id } }))
+      .toMatchObject({ name: lastAdmin.name, active: true });
+  });
+});
+
+describe('plano B: queda de conexão e registro de contingência', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  let noRuleId = '';
+  let ruleProductId = '';
+  let inactiveId = '';
+  let ruleId = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const kitchenDayOf = (iso: string) => isoDate(kitchenToday(new Date(iso)));
+  const plusDays = (day: string, days: number) => isoDate(new Date(Date.parse(`${day}T00:00:00.000Z`) + days * DAY));
+  const reportOutage = (body: object, token = asAdmin()) =>
+    request(app).post('/api/contingency/outages').set('Authorization', token).send(body);
+  const recordBody = (productId: string, body: object = {}) => ({
+    productId, storageType: 'REFRIGERADO', lot: 'LOT-PAPEL', originalExpiryDate: daysFromToday(60),
+    openedAt: ago(60_000), responsibleName: 'Cozinheira do papel', paperRef: 'folha 3, linha 5', outcome: 'EM_USO',
+    ...body,
+  });
+  const preview = (productId: string, body: object = {}, token = asAdmin()) =>
+    request(app).post('/api/contingency/records/preview').set('Authorization', token).send(recordBody(productId, body));
+  const create = (productId: string, body: object = {}, token = asAdmin()) =>
+    request(app).post('/api/contingency/records').set('Authorization', token).send(recordBody(productId, body));
+  const closeRecord = (id: string, body: object) =>
+    request(app).post(`/api/contingency/records/${id}/close`).set('Authorization', asAdmin()).send(body);
+  const listRecords = (status?: string) => request(app).get('/api/contingency/records')
+    .query(status ? { status } : {}).set('Authorization', asAdmin());
+  const resetSettings = () => prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false } });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.120')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.121')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+    // Prazos fictícios, só para o teste.
+    const product = async (name: string, data: { active?: boolean } = {}) => {
+      const created = await prisma.product.create({
+        data: { name: `${name} ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30, ...data },
+      });
+      productIds.push(created.id);
+      return created.id;
+    };
+    noRuleId = await product('Contingência sem regra');
+    ruleProductId = await product('Contingência com regra');
+    inactiveId = await product('Contingência inativo', { active: false });
+    const rule = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+      .send({ ...ruleBody, shelfLifeDays: 5, storageType: 'REFRIGERADO', productId: ruleProductId });
+    expect(rule.status).toBe(201);
+    ruleId = rule.body.data.id;
+    ruleIds.push(ruleId);
+  });
+  afterEach(resetSettings);
+  afterAll(resetSettings);
+
+  it('lets any logged-in device report an outage, but only admins list, review and record', async () => {
+    expect((await request(app).post('/api/contingency/outages').send({ durationMs: 120_000 })).status).toBe(401);
+    const reported = await reportOutage({ durationMs: 120_000 }, operatorAuth);
+    expect(reported.status).toBe(201);
+    expect(reported.body.data).toMatchObject({ durationMs: 120_000, reportedByName: 'Operador de integração', reviewedAt: null });
+    const { reportedAt, startedAt } = reported.body.data;
+    expect(Date.parse(reportedAt) - Date.parse(startedAt)).toBe(120_000);
+
+    expect((await request(app).get('/api/contingency/outages').set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).post(`/api/contingency/outages/${reported.body.data.id}/review`)
+      .set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/contingency/records').set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await preview(noRuleId, {}, operatorAuth)).status).toBe(403);
+    expect((await create(noRuleId, {}, operatorAuth)).status).toBe(403);
+    expect((await request(app).post(`/api/contingency/records/${randomUUID()}/close`)
+      .set('Authorization', operatorAuth).send({ outcome: 'USADO' })).status).toBe(403);
+  });
+
+  it('validates the outage duration and returns the same outage on a resend within 60 s', async () => {
+    for (const body of [
+      { durationMs: 59_999 }, { durationMs: 7 * DAY + 1 }, { durationMs: 90_000.5 }, { durationMs: '90000' },
+      {}, { durationMs: 90_000, reportedAt: ago(0) },
+    ]) {
+      const res = await reportOutage(body);
+      expect(res.status, JSON.stringify(body)).toBe(422);
+    }
+    const first = await reportOutage({ durationMs: 7 * DAY });
+    expect(first.status).toBe(201);
+    const resend = await reportOutage({ durationMs: 60_000 });
+    expect(resend.status).toBe(200);
+    expect(resend.body.data).toMatchObject({ id: first.body.data.id, durationMs: 7 * DAY });
+
+    // Passado o intervalo, é uma queda nova.
+    await prisma.connectivityOutage.update({ where: { id: first.body.data.id }, data: { reportedAt: new Date(Date.now() - 61_000) } });
+    const later = await reportOutage({ durationMs: 60_000 });
+    expect(later.status).toBe(201);
+    expect(later.body.data.id).not.toBe(first.body.data.id);
+
+    // Reenvio atrasado: o início desconta há quanto tempo a rede voltou (até 24 h).
+    await prisma.connectivityOutage.update({ where: { id: later.body.data.id }, data: { reportedAt: new Date(Date.now() - 61_000) } });
+    expect((await reportOutage({ durationMs: 60_000, endedAgoMs: DAY + 1 })).status).toBe(422);
+    const delayed = await reportOutage({ durationMs: 300_000, endedAgoMs: 3_600_000 });
+    expect(delayed.status).toBe(201);
+    expect(Date.parse(delayed.body.data.reportedAt) - Date.parse(delayed.body.data.startedAt)).toBe(3_900_000);
+  });
+
+  it('lists outages (pending filter, pendingCount) and reviews them idempotently', async () => {
+    const mine = await prisma.connectivityOutage.findFirstOrThrow({ where: { reportedById: operatorId } });
+    const list = (query: Record<string, string> = {}) =>
+      request(app).get('/api/contingency/outages').query(query).set('Authorization', asAdmin());
+    const pending = await list({ pending: 'true' });
+    expect(pending.status).toBe(200);
+    expect(pending.body.data.some((item: { id: string }) => item.id === mine.id)).toBe(true);
+    expect(pending.body.data.every((item: { reviewedAt: string | null }) => item.reviewedAt === null)).toBe(true);
+    const pendingCount = pending.body.meta.pendingCount as number;
+    expect(pendingCount).toBeGreaterThanOrEqual(1);
+
+    const review = () => request(app).post(`/api/contingency/outages/${mine.id}/review`).set('Authorization', asAdmin());
+    const reviewed = await review();
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.data).toMatchObject({ id: mine.id, reviewedByName: 'Teste de integração' });
+    expect(reviewed.body.data.reviewedAt).not.toBeNull();
+    const again = await review();
+    expect(again.status).toBe(200);
+    expect(again.body.data.reviewedAt).toBe(reviewed.body.data.reviewedAt);
+
+    const after = await list({ pending: 'true' });
+    expect(after.body.data.some((item: { id: string }) => item.id === mine.id)).toBe(false);
+    expect(after.body.meta.pendingCount).toBe(pendingCount - 1);
+    const done = await list({ pending: 'false' });
+    expect(done.body.data.some((item: { id: string }) => item.id === mine.id)).toBe(true);
+    const all = await list();
+    expect(all.body.data.length).toBeLessThanOrEqual(100);
+    expect((await list({ pending: 'talvez' })).status).toBe(422);
+    expect((await request(app).post(`/api/contingency/outages/${randomUUID()}/review`)
+      .set('Authorization', asAdmin())).status).toBe(404);
+  });
+
+  it('uses the same rule resolution as the label and is never blocked by RULE_REQUIRED', async () => {
+    const on = await request(app).put('/api/settings').set('Authorization', asAdmin()).send({ requireValidatedRule: true });
+    expect(on.status).toBe(200);
+    // A etiqueta seria recusada; o registro de contingência não.
+    const labelPreview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: noRuleId, originalExpiryDate: daysFromToday(60), openedAt: today(), storageType: 'REFRIGERADO',
+    });
+    expect(labelPreview.body.error.code).toBe('RULE_REQUIRED');
+
+    const openedAt = ago(60_000);
+    const openedDate = kitchenDayOf(openedAt);
+    const noRule = await preview(noRuleId, { openedAt });
+    expect(noRule.status).toBe(200);
+    expect(noRule.body.data).toMatchObject({
+      shelfLifeDays: 3, openedDate, discardAt: plusDays(openedDate, 2), cappedByOriginalExpiry: false, expired: false,
+      rule: { id: null, version: null, validated: false, source: 'Prazo cadastrado no produto (sem regra validada)' },
+    });
+    const created = await create(noRuleId, { openedAt, note: 'Folha achada no balcão' });
+    expect(created.status).toBe(201);
+    expect(created.body.data).toMatchObject({
+      productId: noRuleId, productName: `Contingência sem regra ${tag}`, productBrand: 'Teste', lot: 'LOT-PAPEL',
+      openedAt, openedDate, discardAt: plusDays(openedDate, 2), shelfLifeDays: 3, ruleId: null, ruleVersion: null,
+      ruleSource: 'Prazo cadastrado no produto (sem regra validada)', ruleValidated: false, outcome: 'EM_USO',
+      responsibleName: 'Cozinheira do papel', paperRef: 'folha 3, linha 5', note: 'Folha achada no balcão',
+      closedAt: null, closedByName: null, createdByName: 'Teste de integração', createdById: userId, expired: false,
+    });
+
+    const withRule = await create(ruleProductId, { openedAt });
+    expect(withRule.status).toBe(201);
+    expect(withRule.body.data).toMatchObject({
+      shelfLifeDays: 5, discardAt: plusDays(openedDate, 4), ruleId, ruleVersion: 1,
+      ruleSource: 'Regra de teste de integração', ruleValidated: true,
+    });
+    const rulePreview = await preview(ruleProductId, { openedAt });
+    expect(rulePreview.body.data.rule).toEqual({ id: ruleId, version: 1, source: 'Regra de teste de integração', validated: true });
+
+    // Não é etiqueta: nada foi criado em /labels.
+    // SQL direto: um teste anterior espiona `prisma.label.count`.
+    const labels = await prisma.$queryRaw<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM labels WHERE product_id IN (${noRuleId}, ${ruleProductId})`;
+    expect(labels[0].n).toBe(0);
+  });
+
+  it('accepts an opening 3 days ago (beyond MAX_BACKDATE_DAYS) and refuses the future and more than 30 days', async () => {
+    const threeDaysAgo = ago(3 * DAY);
+    const openedDate = kitchenDayOf(threeDaysAgo);
+    const labelPreview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: ruleProductId, originalExpiryDate: daysFromToday(60), openedAt: openedDate, storageType: 'REFRIGERADO',
+    });
+    expect(labelPreview.status).toBe(422);
+
+    const res = await create(ruleProductId, { openedAt: threeDaysAgo });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ openedDate, discardAt: plusDays(openedDate, 4), expired: false });
+
+    const future = await preview(ruleProductId, { openedAt: new Date(Date.now() + 10 * 60_000).toISOString() });
+    expect(future.status).toBe(422);
+    expect(future.body.error.message).toBe('A abertura não pode ser no futuro.');
+    const tooOld = await create(ruleProductId, { openedAt: ago(31 * DAY), outcome: 'USADO' });
+    expect(tooOld.status).toBe(422);
+    expect(tooOld.body.error.message).toBe('A abertura não pode ser de mais de 30 dias atrás.');
+    expect((await preview(ruleProductId, { openedAt: ago(29 * DAY) })).status).toBe(200);
+  });
+
+  it('caps at the manufacturer expiry and refuses EM_USO when the deadline has passed', async () => {
+    const capped = await preview(ruleProductId, { originalExpiryDate: today() });
+    expect(capped.status).toBe(200);
+    expect(capped.body.data).toMatchObject({ discardAt: today(), cappedByOriginalExpiry: true, expired: false });
+
+    // Sem regra, 3 dias: aberto há 3 dias vence ontem.
+    const openedAt = ago(3 * DAY);
+    const expiredPreview = await preview(noRuleId, { openedAt });
+    expect(expiredPreview.body.data).toMatchObject({ discardAt: daysFromToday(-1), expired: true });
+    const inUse = await create(noRuleId, { openedAt });
+    expect(inUse.status).toBe(422);
+    expect(inUse.body.error.message).toBe('O prazo já venceu: registre como descartado ou usado.');
+
+    const used = await create(noRuleId, { openedAt, outcome: 'USADO' });
+    expect(used.status).toBe(201);
+    expect(used.body.data).toMatchObject({ outcome: 'USADO', closedByName: 'Teste de integração', expired: true });
+    expect(used.body.data.closedAt).not.toBeNull();
+    const discarded = await create(noRuleId, { openedAt, outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO' });
+    expect(discarded.status).toBe(201);
+    expect(discarded.body.data).toMatchObject({ outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO' });
+  });
+
+  it('validates the record body', async () => {
+    const invalid = [
+      { outcome: 'DESCARTADO' },
+      { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'ab' },
+      { outcome: 'USADO', discardReason: 'PRAZO_VENCIDO' },
+      { outcome: 'CANCELADO' },
+      { openedAt: today() },
+      { openedAt: '2026-11-20T10:00:00' },
+      { lot: '' }, { lot: 'x'.repeat(61) }, { lot: 'a\u0000b' },
+      { responsibleName: 'A' }, { responsibleName: 'x'.repeat(81) },
+      { paperRef: 'x'.repeat(81) }, { note: 'x'.repeat(301) },
+      { originalExpiryDate: '2026-02-30' },
+      { outageId: 'abc' },
+      { storageTemperature: 4 },
+      { lotId: randomUUID() },
+    ];
+    for (const body of invalid) {
+      const res = await create(noRuleId, body);
+      expect(res.status, JSON.stringify(body)).toBe(422);
+    }
+    const other = await create(noRuleId, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'Caiu no chão' });
+    expect(other.status).toBe(201);
+    // Abertura depois da validade do fabricante: mesmo cálculo da etiqueta.
+    expect((await create(noRuleId, { originalExpiryDate: daysFromToday(-5) })).status).toBe(422);
+  });
+
+  it('accepts an inactive product, refuses an unknown one and links the outage', async () => {
+    const inactive = await create(inactiveId);
+    expect(inactive.status).toBe(201);
+    expect((await create(randomUUID())).status).toBe(404);
+    expect((await create(noRuleId, { outageId: randomUUID() })).status).toBe(404);
+
+    const outage = await prisma.connectivityOutage.findFirstOrThrow({ where: { reportedById: userId } });
+    const linked = await create(noRuleId, { outageId: outage.id });
+    expect(linked.status).toBe(201);
+    expect(linked.body.data.outageId).toBe(outage.id);
+  });
+
+  it('closes only from EM_USO, idempotent for the same outcome, 409 otherwise', async () => {
+    const open = await create(ruleProductId, { note: 'Aberto no turno da noite' });
+    expect(open.status).toBe(201);
+    const id = open.body.data.id as string;
+
+    expect((await closeRecord(id, { outcome: 'EM_USO' })).status).toBe(422);
+    expect((await closeRecord(id, { outcome: 'DESCARTADO' })).status).toBe(422);
+    expect((await closeRecord(id, { outcome: 'USADO', extra: true })).status).toBe(422);
+
+    const closed = await closeRecord(id, { outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL', note: 'Cheiro alterado' });
+    expect(closed.status).toBe(200);
+    expect(closed.body.data).toMatchObject({
+      outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL', closedByName: 'Teste de integração',
+      note: 'Aberto no turno da noite\nEncerramento: Cheiro alterado',
+    });
+    const again = await closeRecord(id, { outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL' });
+    expect(again.status).toBe(200);
+    expect(again.body.data.closedAt).toBe(closed.body.data.closedAt);
+    expect((await closeRecord(id, { outcome: 'USADO' })).status).toBe(409);
+    expect((await closeRecord(id, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'Outro motivo' })).status).toBe(409);
+    expect((await closeRecord(randomUUID(), { outcome: 'USADO' })).status).toBe(404);
+  });
+
+  it('lists EM_USO first by discard date, then closed ones newest first, each with expired', async () => {
+    const later = await create(ruleProductId);
+    const sooner = await create(ruleProductId, { originalExpiryDate: today() });
+    const closedOld = await create(noRuleId, { outcome: 'USADO' });
+    const closedNew = await create(noRuleId, { outcome: 'USADO' });
+    for (const res of [later, sooner, closedOld, closedNew]) expect(res.status).toBe(201);
+    await prisma.contingencyRecord.update({ where: { id: closedOld.body.data.id }, data: { createdAt: new Date(Date.now() - HOUR) } });
+
+    type Item = { id: string; outcome: string; discardAt: string; createdAt: string; expired: boolean };
+    const all = await listRecords('all');
+    expect(all.status).toBe(200);
+    const items = all.body.data as Item[];
+    expect(items.length).toBeLessThanOrEqual(200);
+    const firstClosed = items.findIndex((item) => item.outcome !== 'EM_USO');
+    const lastOpen = items.map((item) => item.outcome).lastIndexOf('EM_USO');
+    if (firstClosed !== -1) expect(lastOpen).toBeLessThan(firstClosed);
+    const open = items.filter((item) => item.outcome === 'EM_USO');
+    expect(open.map((item) => item.discardAt)).toEqual([...open.map((item) => item.discardAt)].sort());
+    const closed = items.filter((item) => item.outcome !== 'EM_USO');
+    expect(closed.map((item) => item.createdAt)).toEqual([...closed.map((item) => item.createdAt)].sort().reverse());
+    const position = (id: string) => items.findIndex((item) => item.id === id);
+    expect(position(sooner.body.data.id)).toBeLessThan(position(later.body.data.id));
+    expect(position(closedNew.body.data.id)).toBeLessThan(position(closedOld.body.data.id));
+    expect(items.every((item) => typeof item.expired === 'boolean')).toBe(true);
+
+    const onlyOpen = await listRecords('open');
+    expect(onlyOpen.body.data.every((item: Item) => item.outcome === 'EM_USO')).toBe(true);
+    expect(onlyOpen.body.data.some((item: Item) => item.id === later.body.data.id)).toBe(true);
+    expect((await listRecords('closed')).status).toBe(422);
+  });
+});
+
+describe('temperatura dos equipamentos', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  let pinUserId = '';
+  const pinUserName = `Operador temperatura ${tag}`;
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const DAY = 86_400_000;
+  const setEnabled = (value: boolean) => request(app).put('/api/settings').set('Authorization', asAdmin())
+    .send({ equipmentTemperatureEnabled: value });
+  const createEquipment = async (body: object = {}) => {
+    const res = await request(app).post('/api/equipment').set('Authorization', asAdmin()).send({
+      name: `Geladeira ${randomUUID().slice(0, 8)}`, storageType: 'REFRIGERADO', minTemperature: 0, maxTemperature: 5, ...body,
+    });
+    expect(res.status).toBe(201);
+    equipmentIds.push(res.body.data.id);
+    return res.body.data as { id: string; name: string; active: boolean; minTemperature: number; maxTemperature: number };
+  };
+  const postReading = (id: string, body: object = {}, token = operatorAuth) =>
+    request(app).post(`/api/equipment/${id}/readings`).set('Authorization', token)
+      .send({ temperature: 3, responsibleName: 'Cozinheira da manhã', ...body });
+  const getToday = (token = operatorAuth) => request(app).get('/api/equipment/today').set('Authorization', token);
+  const getReadings = (query: Record<string, string> = {}) =>
+    request(app).get('/api/equipment/readings').query(query).set('Authorization', asAdmin());
+  /** Move a leitura para N dias atrás (dia da cozinha e hora juntos). */
+  const moveReading = (id: string, daysAgo: number) => prisma.temperatureReading.update({
+    where: { id },
+    data: { readAt: new Date(Date.now() - daysAgo * DAY), kitchenDate: new Date(kitchenToday().getTime() - daysAgo * DAY) },
+  });
+  const resetSettings = () => prisma.kitchenSettings.updateMany({ data: { equipmentTemperatureEnabled: false } });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.140')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.141')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+    const created = await request(app).post('/api/users').set('Authorization', asAdmin()).send({
+      name: pinUserName, email: `api-temp-pin-${suffix}@example.test`, password: 'TestPassword123!', role: 'OPERATOR',
+    }).expect(201);
+    pinUserId = created.body.data.id;
+    createdUserIds.push(pinUserId);
+    await request(app).patch(`/api/users/${pinUserId}/pin`).set('Authorization', asAdmin()).send({ pin: '2468' }).expect(200);
+    await resetSettings();
+  });
+  afterAll(resetSettings);
+
+  it('lets only admins manage equipment and validates the body', async () => {
+    expect((await request(app).get('/api/equipment')).status).toBe(401);
+    const body = { name: `Freezer ${tag}`, storageType: 'CONGELADO', minTemperature: -25, maxTemperature: -15 };
+    expect((await request(app).post('/api/equipment').set('Authorization', operatorAuth).send(body)).status).toBe(403);
+    const freezer = await createEquipment(body);
+    expect(freezer).toMatchObject({ name: `Freezer ${tag}`, active: true, minTemperature: -25, maxTemperature: -15 });
+
+    expect((await request(app).put(`/api/equipment/${freezer.id}`).set('Authorization', operatorAuth).send({ name: 'X' })).status).toBe(403);
+    expect((await request(app).delete(`/api/equipment/${freezer.id}`).set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/equipment/readings').set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/equipment').query({ all: 'true' }).set('Authorization', operatorAuth)).status).toBe(403);
+    const list = await request(app).get('/api/equipment').set('Authorization', operatorAuth);
+    expect(list.status).toBe(200);
+    expect(list.body.data.some((item: { id: string }) => item.id === freezer.id)).toBe(true);
+
+    const post = (extra: object) => request(app).post('/api/equipment').set('Authorization', asAdmin()).send({ ...body, ...extra });
+    expect((await post({ name: `freezer ${tag}` })).status).toBe(409); // mesmo nome ativo, sem diferenciar maiúsculas
+    expect((await post({ name: `Outro ${tag}`, minTemperature: -10, maxTemperature: -20 })).status).toBe(422);
+    expect((await post({ name: `Outro ${tag}`, minTemperature: -51 })).status).toBe(422);
+    expect((await post({ name: `Outro ${tag}`, active: false })).status).toBe(422);
+    expect((await post({ name: '   ' })).status).toBe(422);
+    expect((await post({ name: 'x'.repeat(61) })).status).toBe(422);
+
+    const put = (data: object) => request(app).put(`/api/equipment/${freezer.id}`).set('Authorization', asAdmin()).send(data);
+    expect((await put({ storageType: 'REFRIGERADO' })).status).toBe(422);
+    expect((await put({})).status).toBe(422);
+    expect((await put({ minTemperature: -10 })).status).toBe(422); // passaria da máxima gravada (−15)
+    expect((await request(app).put(`/api/equipment/${randomUUID()}`).set('Authorization', asAdmin()).send({ name: 'Y' })).status).toBe(404);
+  });
+
+  it('exposes the setting and refuses readings while it is off', async () => {
+    const equipment = await createEquipment();
+    const settings = await request(app).get('/api/settings').set('Authorization', operatorAuth);
+    expect(settings.body.data.equipmentTemperatureEnabled).toBe(false);
+    expect((await request(app).get('/api/auth/me').set('Authorization', operatorAuth)).body.meta.equipmentTemperatureEnabled).toBe(false);
+
+    const refused = await postReading(equipment.id);
+    expect(refused.status).toBe(422);
+    expect(refused.body.error).toEqual({
+      message: 'O registro de temperatura dos equipamentos está desligado.', code: 'EQUIPMENT_TEMPERATURE_DISABLED',
+    });
+    // Desligado, o "hoje" continua funcionando para o ADMIN preparar.
+    const today = await getToday(asAdmin());
+    expect(today.status).toBe(200);
+    expect(today.body.data.some((item: { id: string }) => item.id === equipment.id)).toBe(true);
+
+    expect((await request(app).put('/api/settings').set('Authorization', operatorAuth).send({ equipmentTemperatureEnabled: true })).status).toBe(403);
+    expect((await request(app).put('/api/settings').set('Authorization', asAdmin()).send({ equipmentTemperatureEnabled: 'sim' })).status).toBe(422);
+    const on = await setEnabled(true);
+    expect(on.status).toBe(200);
+    expect(on.body.data.equipmentTemperatureEnabled).toBe(true);
+    expect((await request(app).get('/api/auth/me').set('Authorization', operatorAuth)).body.meta.equipmentTemperatureEnabled).toBe(true);
+    // PUT parcial: mexer em outra configuração não desliga o registro.
+    await request(app).put('/api/settings').set('Authorization', asAdmin()).send({ requireValidatedRule: false }).expect(200);
+    expect((await request(app).get('/api/settings').set('Authorization', asAdmin())).body.data.equipmentTemperatureEnabled).toBe(true);
+  });
+
+  it('stores readings inside and outside the range without refusing them', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+
+    const inside = await postReading(equipment.id, { temperature: 4.25, note: '  porta fechada  ' });
+    expect(inside.status).toBe(201);
+    expect(inside.body.data).toMatchObject({
+      equipmentId: equipment.id, equipmentName: equipment.name, temperature: 4.3, minTemperature: 0, maxTemperature: 5,
+      outOfRange: false, responsibleName: 'Cozinheira da manhã', handlerId: null, handlerVerified: false,
+      userId: operatorId, note: 'porta fechada', kitchenDate: today(),
+    });
+
+    const outside = await postReading(equipment.id, { temperature: 9 });
+    expect(outside.status).toBe(201);
+    expect(outside.body.data.outOfRange).toBe(true);
+    expect((await postReading(equipment.id, { temperature: -0.1 })).body.data.outOfRange).toBe(true);
+    expect((await postReading(equipment.id, { temperature: 5 })).body.data.outOfRange).toBe(false);
+
+    expect((await postReading(equipment.id, { responsibleName: undefined })).status).toBe(422);
+    expect((await postReading(equipment.id, { responsibleName: 'A' })).status).toBe(422);
+    expect((await postReading(equipment.id, { temperature: 31 })).status).toBe(422);
+    expect((await postReading(equipment.id, { temperature: '4' })).status).toBe(422);
+    expect((await postReading(equipment.id, { note: 'x'.repeat(201) })).status).toBe(422);
+    expect((await postReading(equipment.id, { storageType: 'REFRIGERADO' })).status).toBe(422);
+    expect((await postReading(randomUUID())).status).toBe(404);
+    expect((await postReading('nao-e-id')).status).toBe(422);
+    expect((await request(app).post(`/api/equipment/${equipment.id}/readings`).send({ temperature: 3 })).status).toBe(401);
+  });
+
+  it('uses the PIN operator as responsible and refuses an invalid handler token', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment();
+    const verified = await request(app).post('/api/totem/operators/verify').set('Authorization', operatorAuth)
+      .set('X-Forwarded-For', '198.51.100.142').send({ userId: pinUserId, pin: '2468' });
+    expect(verified.status).toBe(200);
+    const { handlerToken } = verified.body.data;
+
+    const withToken = await postReading(equipment.id, { handlerToken, responsibleName: 'Ignorado' });
+    expect(withToken.status).toBe(201);
+    expect(withToken.body.data).toMatchObject({
+      responsibleName: pinUserName, handlerId: pinUserId, handlerVerified: true, userId: operatorId,
+    });
+    expect((await postReading(equipment.id, { handlerToken, responsibleName: undefined })).status).toBe(201);
+
+    const invalid = await postReading(equipment.id, { handlerToken: 'nao-e-um-token' });
+    expect(invalid.status).toBe(401);
+    expect(invalid.body.error.code).toBe('HANDLER_INVALID');
+    // Token de outra sessão (o ADMIN não conferiu este PIN) também é recusado.
+    const otherSession = await postReading(equipment.id, { handlerToken }, asAdmin());
+    expect(otherSession.body.error.code).toBe('HANDLER_INVALID');
+  });
+
+  it('returns the same reading on an idempotent resend, before the setting and the token are checked', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment();
+    const other = await createEquipment();
+    const requestId = randomUUID();
+
+    const first = await postReading(equipment.id, { requestId, temperature: 2 });
+    expect(first.status).toBe(201);
+    const resent = await postReading(equipment.id, { requestId, temperature: 2 });
+    expect(resent.status).toBe(200);
+    expect(resent.body.data.id).toBe(first.body.data.id);
+    expect(await prisma.temperatureReading.count({ where: { equipmentId: equipment.id } })).toBe(1);
+
+    expect((await postReading(other.id, { requestId })).status).toBe(409);
+    await setEnabled(false).expect(200);
+    const replayOff = await postReading(equipment.id, { requestId, handlerToken: 'nao-e-um-token' });
+    expect(replayOff.status).toBe(200);
+    expect(replayOff.body.data.id).toBe(first.body.data.id);
+    // O mesmo requestId de outra conta é outro pedido.
+    await setEnabled(true).expect(200);
+    const fromAdmin = await postReading(equipment.id, { requestId }, asAdmin());
+    expect(fromAdmin.status).toBe(201);
+    expect(fromAdmin.body.data.id).not.toBe(first.body.data.id);
+  });
+
+  it('counts only the kitchen day in today', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+    const empty = await createEquipment();
+    const yesterday = await postReading(equipment.id, { temperature: 8 });
+    await moveReading(yesterday.body.data.id, 1);
+    await postReading(equipment.id, { temperature: 9, responsibleName: 'Primeira de hoje' }).expect(201);
+    const last = await postReading(equipment.id, { temperature: 3, responsibleName: 'Última de hoje' });
+    expect(last.status).toBe(201);
+
+    const res = await getToday();
+    expect(res.status).toBe(200);
+    expect(res.body.meta.kitchenToday).toBe(today());
+    const item = res.body.data.find((row: { id: string }) => row.id === equipment.id);
+    expect(item).toMatchObject({
+      id: equipment.id, name: equipment.name, storageType: 'REFRIGERADO', minTemperature: 0, maxTemperature: 5,
+      readingsToday: 2, outOfRangeToday: 1,
+      lastReading: { temperature: 3, responsibleName: 'Última de hoje', outOfRange: false },
+    });
+    expect(item.lastReading.readAt).toBe(last.body.data.readAt);
+    expect(res.body.data.find((row: { id: string }) => row.id === empty.id))
+      .toMatchObject({ lastReading: null, readingsToday: 0, outOfRangeToday: 0 });
+  });
+
+  it('lists readings by kitchen day with defaults, filters and limits', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+    const old = await postReading(equipment.id, { temperature: 7 });
+    await moveReading(old.body.data.id, 10);
+    const edge = await postReading(equipment.id, { temperature: 2 });
+    await moveReading(edge.body.data.id, 6);
+    const recent = await postReading(equipment.id, { temperature: 8 });
+    expect(recent.status).toBe(201);
+
+    const byDefault = await getReadings({ equipmentId: equipment.id });
+    expect(byDefault.status).toBe(200);
+    expect(byDefault.headers['cache-control']).toBe('no-store');
+    expect(byDefault.body.data.map((row: { id: string }) => row.id)).toEqual([recent.body.data.id, edge.body.data.id]);
+    expect(byDefault.body.meta).toMatchObject({ from: daysFromToday(-6), to: today(), total: 2, outOfRange: 1, truncated: false });
+    expect(byDefault.body.data[0]).toMatchObject({ equipmentName: equipment.name, temperature: 8, outOfRange: true });
+
+    const wide = await getReadings({ equipmentId: equipment.id, from: daysFromToday(-10), to: today() });
+    expect(wide.body.meta).toMatchObject({ total: 3, outOfRange: 2 });
+    const onlyOld = await getReadings({ equipmentId: equipment.id, from: daysFromToday(-10), to: daysFromToday(-10) });
+    expect(onlyOld.body.data.map((row: { id: string }) => row.id)).toEqual([old.body.data.id]);
+
+    expect((await getReadings({ from: daysFromToday(-91), to: today() })).status).toBe(200);
+    expect((await getReadings({ from: daysFromToday(-92), to: today() })).status).toBe(422);
+    expect((await getReadings({ from: today(), to: daysFromToday(-1) })).status).toBe(422);
+    expect((await getReadings({ from: '2026-02-31' })).status).toBe(422);
+    expect((await getReadings({ equipmentId: 'x' })).status).toBe(422);
+  });
+
+  it('keeps the old range on past readings after the equipment is edited', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment({ minTemperature: 0, maxTemperature: 5 });
+    const before = await postReading(equipment.id, { temperature: 6 });
+    expect(before.body.data.outOfRange).toBe(true);
+
+    const newName = `Geladeira editada ${randomUUID().slice(0, 8)}`;
+    const edited = await request(app).put(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin())
+      .send({ name: newName, maxTemperature: 7 });
+    expect(edited.status).toBe(200);
+    expect(edited.body.data).toMatchObject({ name: newName, minTemperature: 0, maxTemperature: 7 });
+
+    const stored = await prisma.temperatureReading.findUniqueOrThrow({ where: { id: before.body.data.id } });
+    expect(Number(stored.maxTemperature)).toBe(5);
+    expect(stored.outOfRange).toBe(true);
+    // O nome também é a cópia da época; o atual vem em equipmentCurrentName.
+    expect(stored.equipmentName).toBe(equipment.name);
+    const history = await request(app).get('/api/equipment/readings').query({ equipmentId: equipment.id })
+      .set('Authorization', asAdmin()).expect(200);
+    expect(history.body.data.find((row: { id: string }) => row.id === before.body.data.id))
+      .toMatchObject({ equipmentName: equipment.name, equipmentCurrentName: newName, equipmentActive: true });
+    const after = await postReading(equipment.id, { temperature: 6 });
+    expect(after.body.data).toMatchObject({ outOfRange: false, maxTemperature: 7, equipmentName: newName });
+  });
+
+  it('only deactivates equipment and refuses readings for it', async () => {
+    await setEnabled(true).expect(200);
+    const equipment = await createEquipment();
+    const reading = await postReading(equipment.id);
+    expect(reading.status).toBe(201);
+
+    const removed = await request(app).delete(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin());
+    expect(removed.status).toBe(200);
+    expect(removed.body.data.active).toBe(false);
+    expect((await request(app).delete(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin())).status).toBe(200);
+    expect((await request(app).delete(`/api/equipment/${randomUUID()}`).set('Authorization', asAdmin())).status).toBe(404);
+    expect(await prisma.temperatureReading.count({ where: { equipmentId: equipment.id } })).toBe(1);
+
+    const active = await request(app).get('/api/equipment').set('Authorization', operatorAuth);
+    expect(active.body.data.some((item: { id: string }) => item.id === equipment.id)).toBe(false);
+    const all = await request(app).get('/api/equipment').query({ all: 'true' }).set('Authorization', asAdmin());
+    expect(all.body.data.find((item: { id: string }) => item.id === equipment.id)).toMatchObject({ active: false });
+    expect((await getToday()).body.data.some((item: { id: string }) => item.id === equipment.id)).toBe(false);
+
+    const refused = await postReading(equipment.id);
+    expect(refused.status).toBe(409);
+    expect((await request(app).put(`/api/equipment/${equipment.id}`).set('Authorization', asAdmin()).send({ name: 'Z' })).status).toBe(409);
+    // O nome fica livre para um equipamento novo; as leituras antigas continuam no período.
+    await createEquipment({ name: equipment.name });
+    const history = await getReadings({ equipmentId: equipment.id });
+    expect(history.body.data.map((row: { id: string }) => row.id)).toEqual([reading.body.data.id]);
   });
 });

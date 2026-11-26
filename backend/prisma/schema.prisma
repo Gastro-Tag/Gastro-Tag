@@ -20,12 +20,16 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  labels        Label[]
-  closedLabels  Label[]           @relation("LabelClosedBy")
-  handledLabels Label[]           @relation("LabelHandler")
-  sessions      UserSession[]
-  createdRules  ShelfLifeRule[]   @relation("RuleCreatedBy")
-  settingsEdits KitchenSettings[] @relation("SettingsUpdatedBy")
+  labels              Label[]
+  closedLabels        Label[]              @relation("LabelClosedBy")
+  handledLabels       Label[]              @relation("LabelHandler")
+  sessions            UserSession[]
+  createdRules        ShelfLifeRule[]      @relation("RuleCreatedBy")
+  settingsEdits       KitchenSettings[]    @relation("SettingsUpdatedBy")
+  contingencyRecords  ContingencyRecord[]  @relation("ContingencyCreatedBy")
+  outagesReported     ConnectivityOutage[] @relation("OutageReportedBy")
+  temperatureReadings TemperatureReading[] @relation("ReadingUser")
+  handledReadings     TemperatureReading[] @relation("ReadingHandler")
 
   @@map("users")
 }
@@ -51,19 +55,21 @@ model UserSession {
 // Configuração da cozinha: linha única (id 1). Sem linha, valem os padrões.
 // Na Fase 2 (várias cozinhas) vira uma linha por cliente.
 model KitchenSettings {
-  id                   Int      @id @default(1)
+  id                          Int      @id @default(1)
   // Ligado: etiqueta sem regra ativa (prazo do produto, "sem regra validada") é recusada.
-  requireValidatedRule Boolean  @default(false) @map("require_validated_rule")
+  requireValidatedRule        Boolean  @default(false) @map("require_validated_rule")
   // Aviso na prévia quando a validade digitada passa de abertura + N meses (1..60). Nulo: desligado.
-  expiryWarningMonths  Int?     @map("expiry_warning_months")
+  expiryWarningMonths         Int?     @map("expiry_warning_months")
   // Modelo de etiqueta padrão da cozinha (a4, t100x60, t60x40, t50x30; validado na API). Nulo: não definido.
-  labelTemplate        String?  @map("label_template")
+  labelTemplate               String?  @map("label_template")
   // Cabeçalho do relatório do período (1..80 caracteres, validado na API). Nulo: não informado.
-  kitchenName          String?  @map("kitchen_name") // nome da cozinha
-  technicalResponsible String?  @map("technical_responsible") // responsável técnico
-  updatedAt            DateTime @updatedAt @map("updated_at")
-  updatedById          String?  @map("updated_by_id")
-  updatedByName        String?  @map("updated_by_name") // cópia do nome de quem alterou
+  kitchenName                 String?  @map("kitchen_name") // nome da cozinha
+  technicalResponsible        String?  @map("technical_responsible") // responsável técnico
+  // Registro de temperatura dos equipamentos (geladeira, freezer). Desligado: a leitura é recusada (422).
+  equipmentTemperatureEnabled Boolean  @default(false) @map("equipment_temperature_enabled")
+  updatedAt                   DateTime @updatedAt @map("updated_at")
+  updatedById                 String?  @map("updated_by_id")
+  updatedByName               String?  @map("updated_by_name") // cópia do nome de quem alterou
 
   updatedBy User? @relation("SettingsUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 
@@ -89,9 +95,10 @@ model Product {
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
-  labels         Label[]
-  lots           ProductLot[]
-  shelfLifeRules ShelfLifeRule[]
+  labels             Label[]
+  lots               ProductLot[]
+  shelfLifeRules     ShelfLifeRule[]
+  contingencyRecords ContingencyRecord[]
 
   @@index([name])
   @@index([brand])
@@ -230,11 +237,12 @@ model ShelfLifeRule {
   createdAt         DateTime       @default(now()) @map("created_at")
   updatedAt         DateTime       @updatedAt @map("updated_at")
 
-  product         Product?       @relation(fields: [productId], references: [id], onDelete: Restrict)
-  createdBy       User?          @relation("RuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  previousVersion ShelfLifeRule? @relation("RuleVersions", fields: [previousVersionId], references: [id], onDelete: Restrict)
-  nextVersion     ShelfLifeRule? @relation("RuleVersions")
-  labels          Label[]
+  product            Product?            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy          User?               @relation("RuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  previousVersion    ShelfLifeRule?      @relation("RuleVersions", fields: [previousVersionId], references: [id], onDelete: Restrict)
+  nextVersion        ShelfLifeRule?      @relation("RuleVersions")
+  labels             Label[]
+  contingencyRecords ContingencyRecord[]
 
   @@index([productId, storageType, active])
   @@index([category, storageType, active])
@@ -251,4 +259,115 @@ enum RuleSourceType {
 enum StorageType {
   REFRIGERADO
   CONGELADO
+}
+
+// ── Plano B: registro de contingência ────────────────────
+// Embalagem aberta com etiqueta de papel enquanto o sistema estava fora do ar, lançada depois pelo ADMIN.
+// Não é etiqueta: não imprime, não entra no CSV nem em /labels. O prazo vem da mesma regra da etiqueta.
+model ContingencyRecord {
+  id                     String             @id @default(uuid())
+  productId              String             @map("product_id")
+  productName            String             @map("product_name") // cópia do nome do produto
+  productBrand           String             @map("product_brand") // cópia da marca
+  lot                    String
+  originalExpiryDate     DateTime           @map("original_expiry_date") @db.Date
+  openedAt               DateTime           @map("opened_at") // data e hora reais da abertura (da folha de papel)
+  openedDate             DateTime           @map("opened_date") @db.Date // dia da cozinha de openedAt: dia 1 do prazo
+  storageType            StorageType        @map("storage_type")
+  shelfLifeDays          Int                @map("shelf_life_days")
+  ruleId                 String?            @map("rule_id") // nulo: prazo do produto, sem regra validada
+  ruleVersion            Int?               @map("rule_version")
+  ruleSource             String?            @map("rule_source") // cópia da fonte da regra usada
+  discardAt              DateTime           @map("discard_at") @db.Date
+  cappedByOriginalExpiry Boolean            @map("capped_by_original_expiry")
+  responsibleName        String             @map("responsible_name") // quem abriu, como está no papel
+  paperRef               String?            @map("paper_ref") // onde está no papel (ex.: "folha 3, linha 5")
+  note                   String?
+  outcome                ContingencyOutcome
+  discardReason          DiscardReason?     @map("discard_reason") // só para DESCARTADO
+  closedAt               DateTime?          @map("closed_at")
+  closedByName           String?            @map("closed_by_name") // cópia do nome da conta que encerrou
+  createdById            String             @map("created_by_id")
+  createdByName          String             @map("created_by_name") // cópia do nome de quem lançou
+  createdAt              DateTime           @default(now()) @map("created_at")
+  outageId               String?            @map("outage_id")
+
+  product   Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  rule      ShelfLifeRule?      @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  createdBy User                @relation("ContingencyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  outage    ConnectivityOutage? @relation(fields: [outageId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([outcome])
+  @@index([productId])
+  @@map("contingency_records")
+}
+
+enum ContingencyOutcome {
+  EM_USO
+  USADO
+  DESCARTADO
+}
+
+// Queda de conexão avisada pelo aparelho quando a rede volta. O início é aproximado (aviso − duração).
+model ConnectivityOutage {
+  id             String    @id @default(uuid())
+  durationMs     Int       @map("duration_ms")
+  startedAt      DateTime  @map("started_at") // reportedAt − durationMs (aproximado: relógio do aparelho)
+  reportedAt     DateTime  @default(now()) @map("reported_at")
+  reportedById   String    @map("reported_by_id")
+  reportedByName String    @map("reported_by_name") // cópia do nome da conta
+  reviewedAt     DateTime? @map("reviewed_at")
+  reviewedByName String?   @map("reviewed_by_name")
+
+  reportedBy User                @relation("OutageReportedBy", fields: [reportedById], references: [id], onDelete: Restrict)
+  records    ContingencyRecord[]
+
+  @@index([reviewedAt])
+  @@map("connectivity_outages")
+}
+
+// ── Temperatura dos equipamentos ─────────────────────────
+// Registro separado da etiqueta: não entra no cálculo do descarte. A faixa é a que a cozinha cadastra
+// (não é catálogo regulatório validado).
+model Equipment {
+  id             String      @id @default(uuid())
+  name           String // 1..60; único entre os ativos (conferido na aplicação)
+  storageType    StorageType @map("storage_type")
+  minTemperature Decimal     @map("min_temperature") @db.Decimal(4, 1)
+  maxTemperature Decimal     @map("max_temperature") @db.Decimal(4, 1)
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  readings TemperatureReading[]
+
+  @@map("equipment")
+}
+
+// Leitura de temperatura. Guarda a faixa da época: editar o equipamento não muda leituras antigas.
+model TemperatureReading {
+  id              String   @id @default(uuid())
+  equipmentId     String   @map("equipment_id")
+  equipmentName   String   @map("equipment_name") // cópia do nome no momento da leitura
+  temperature     Decimal  @db.Decimal(4, 1)
+  minTemperature  Decimal  @map("min_temperature") @db.Decimal(4, 1) // cópia da faixa no momento da leitura
+  maxTemperature  Decimal  @map("max_temperature") @db.Decimal(4, 1)
+  outOfRange      Boolean  @map("out_of_range")
+  readAt          DateTime @default(now()) @map("read_at")
+  kitchenDate     DateTime @map("kitchen_date") @db.Date // dia da cozinha de readAt
+  responsibleName String   @map("responsible_name") // cópia do nome de quem leu
+  handlerId       String?  @map("handler_id") // operador confirmado com PIN; nulo: nome digitado
+  userId          String   @map("user_id") // conta logada no aparelho
+  note            String?
+  requestId       String?  @map("request_id") // repetir o envio devolve a mesma leitura
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+  handler   User?     @relation("ReadingHandler", fields: [handlerId], references: [id], onDelete: Restrict)
+  user      User      @relation("ReadingUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, requestId])
+  @@index([equipmentId, readAt])
+  @@index([kitchenDate])
+  @@map("temperature_readings")
 }
