@@ -11,16 +11,15 @@ export function formatBR(iso: string): string {
   return d.toLocaleDateString('pt-BR');
 }
 
+// Criado uma vez: montar o formatador a cada chamada pesa em listas grandes (relatório de até 2000 linhas).
+const MANAUS_DATE_TIME = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Manaus' });
+
 /** Format a timestamp consistently with the application's Manaus timezone. */
 export function formatDateTimeBR(iso?: string | null): string {
   if (!iso) return '—';
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('pt-BR', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-    timeZone: 'America/Manaus',
-  }).format(date);
+  return MANAUS_DATE_TIME.format(date);
 }
 
 /** Days between today and a future/past date (negative = past) */

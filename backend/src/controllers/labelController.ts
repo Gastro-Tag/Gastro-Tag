@@ -101,6 +101,12 @@ const metricsSchema = z.object({
   productId: z.string().uuid().optional(),
 }).refine(...periodOrder);
 
+// Relatório do período para imprimir: criação na cozinha, padrão os últimos 7 dias (máximo 31, no serviço).
+const reportSchema = z.object({
+  from: dateSchema.optional(),
+  to: dateSchema.optional(),
+}).refine(...periodOrder);
+
 const closeSchema = z.object({
   outcome: z.enum(['USADO', 'DESCARTADO', 'CANCELADO'], { error: 'Escolha o destino da etiqueta.' }),
   discardReason: z.enum(['PRAZO_VENCIDO', 'ALTERACAO_SENSORIAL', 'EMBALAGEM_DANIFICADA', 'OUTRO'], {
@@ -174,6 +180,13 @@ export const LabelController = {
   async metrics(req: Request, res: Response) {
     const query = metricsSchema.parse(req.query);
     const data = await LabelService.metrics(query);
+    res.json({ success: true, data });
+  },
+
+  async report(req: Request, res: Response) {
+    const query = reportSchema.parse(req.query);
+    const data = await LabelService.report(query);
+    res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, data });
   },
 
