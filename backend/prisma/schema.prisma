@@ -20,12 +20,14 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  labels        Label[]
-  closedLabels  Label[]           @relation("LabelClosedBy")
-  handledLabels Label[]           @relation("LabelHandler")
-  sessions      UserSession[]
-  createdRules  ShelfLifeRule[]   @relation("RuleCreatedBy")
-  settingsEdits KitchenSettings[] @relation("SettingsUpdatedBy")
+  labels             Label[]
+  closedLabels       Label[]              @relation("LabelClosedBy")
+  handledLabels      Label[]              @relation("LabelHandler")
+  sessions           UserSession[]
+  createdRules       ShelfLifeRule[]      @relation("RuleCreatedBy")
+  settingsEdits      KitchenSettings[]    @relation("SettingsUpdatedBy")
+  contingencyRecords ContingencyRecord[]  @relation("ContingencyCreatedBy")
+  outagesReported    ConnectivityOutage[] @relation("OutageReportedBy")
 
   @@map("users")
 }
@@ -89,9 +91,10 @@ model Product {
   createdAt             DateTime @default(now()) @map("created_at")
   updatedAt             DateTime @updatedAt @map("updated_at")
 
-  labels         Label[]
-  lots           ProductLot[]
-  shelfLifeRules ShelfLifeRule[]
+  labels             Label[]
+  lots               ProductLot[]
+  shelfLifeRules     ShelfLifeRule[]
+  contingencyRecords ContingencyRecord[]
 
   @@index([name])
   @@index([brand])
@@ -230,11 +233,12 @@ model ShelfLifeRule {
   createdAt         DateTime       @default(now()) @map("created_at")
   updatedAt         DateTime       @updatedAt @map("updated_at")
 
-  product         Product?       @relation(fields: [productId], references: [id], onDelete: Restrict)
-  createdBy       User?          @relation("RuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  previousVersion ShelfLifeRule? @relation("RuleVersions", fields: [previousVersionId], references: [id], onDelete: Restrict)
-  nextVersion     ShelfLifeRule? @relation("RuleVersions")
-  labels          Label[]
+  product            Product?            @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdBy          User?               @relation("RuleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  previousVersion    ShelfLifeRule?      @relation("RuleVersions", fields: [previousVersionId], references: [id], onDelete: Restrict)
+  nextVersion        ShelfLifeRule?      @relation("RuleVersions")
+  labels             Label[]
+  contingencyRecords ContingencyRecord[]
 
   @@index([productId, storageType, active])
   @@index([category, storageType, active])
@@ -251,4 +255,70 @@ enum RuleSourceType {
 enum StorageType {
   REFRIGERADO
   CONGELADO
+}
+
+// ── Plano B: registro de contingência ────────────────────
+// Embalagem aberta com etiqueta de papel enquanto o sistema estava fora do ar, lançada depois pelo ADMIN.
+// Não é etiqueta: não imprime, não entra no CSV nem em /labels. O prazo vem da mesma regra da etiqueta.
+model ContingencyRecord {
+  id                     String             @id @default(uuid())
+  productId              String             @map("product_id")
+  productName            String             @map("product_name") // cópia do nome do produto
+  productBrand           String             @map("product_brand") // cópia da marca
+  lot                    String
+  originalExpiryDate     DateTime           @map("original_expiry_date") @db.Date
+  openedAt               DateTime           @map("opened_at") // data e hora reais da abertura (da folha de papel)
+  openedDate             DateTime           @map("opened_date") @db.Date // dia da cozinha de openedAt: dia 1 do prazo
+  storageType            StorageType        @map("storage_type")
+  shelfLifeDays          Int                @map("shelf_life_days")
+  ruleId                 String?            @map("rule_id") // nulo: prazo do produto, sem regra validada
+  ruleVersion            Int?               @map("rule_version")
+  ruleSource             String?            @map("rule_source") // cópia da fonte da regra usada
+  discardAt              DateTime           @map("discard_at") @db.Date
+  cappedByOriginalExpiry Boolean            @map("capped_by_original_expiry")
+  responsibleName        String             @map("responsible_name") // quem abriu, como está no papel
+  paperRef               String?            @map("paper_ref") // onde está no papel (ex.: "folha 3, linha 5")
+  note                   String?
+  outcome                ContingencyOutcome
+  discardReason          DiscardReason?     @map("discard_reason") // só para DESCARTADO
+  closedAt               DateTime?          @map("closed_at")
+  closedByName           String?            @map("closed_by_name") // cópia do nome da conta que encerrou
+  createdById            String             @map("created_by_id")
+  createdByName          String             @map("created_by_name") // cópia do nome de quem lançou
+  createdAt              DateTime           @default(now()) @map("created_at")
+  outageId               String?            @map("outage_id")
+
+  product   Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  rule      ShelfLifeRule?      @relation(fields: [ruleId], references: [id], onDelete: Restrict)
+  createdBy User                @relation("ContingencyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  outage    ConnectivityOutage? @relation(fields: [outageId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([outcome])
+  @@index([productId])
+  @@map("contingency_records")
+}
+
+enum ContingencyOutcome {
+  EM_USO
+  USADO
+  DESCARTADO
+}
+
+// Queda de conexão avisada pelo aparelho quando a rede volta. O início é aproximado (aviso − duração).
+model ConnectivityOutage {
+  id             String    @id @default(uuid())
+  durationMs     Int       @map("duration_ms")
+  startedAt      DateTime  @map("started_at") // reportedAt − durationMs (aproximado: relógio do aparelho)
+  reportedAt     DateTime  @default(now()) @map("reported_at")
+  reportedById   String    @map("reported_by_id")
+  reportedByName String    @map("reported_by_name") // cópia do nome da conta
+  reviewedAt     DateTime? @map("reviewed_at")
+  reviewedByName String?   @map("reviewed_by_name")
+
+  reportedBy User                @relation("OutageReportedBy", fields: [reportedById], references: [id], onDelete: Restrict)
+  records    ContingencyRecord[]
+
+  @@index([reviewedAt])
+  @@map("connectivity_outages")
 }

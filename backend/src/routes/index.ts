@@ -9,6 +9,7 @@ import { UserController } from '../controllers/userController';
 import { RuleController } from '../controllers/ruleController';
 import { TotemController } from '../controllers/totemController';
 import { SettingsController } from '../controllers/settingsController';
+import { ContingencyController } from '../controllers/contingencyController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
 
 const router = Router();
@@ -119,6 +120,16 @@ router.post('/labels/:id/split', authenticate, LabelController.split);
 
 router.get('/settings', authenticate, SettingsController.get);
 router.put('/settings', authenticate, requireAdmin, SettingsController.update);
+
+// Plano B: o aviso de queda vem de qualquer aparelho logado (o totem roda com conta de operador);
+// listar, revisar e lançar registros de contingência é só do ADMIN.
+router.post('/contingency/outages', authenticate, ContingencyController.reportOutage);
+router.get('/contingency/outages', authenticate, requireAdmin, ContingencyController.listOutages);
+router.post('/contingency/outages/:id/review', authenticate, requireAdmin, ContingencyController.reviewOutage);
+router.post('/contingency/records/preview', authenticate, requireAdmin, ContingencyController.previewRecord);
+router.post('/contingency/records', authenticate, requireAdmin, ContingencyController.createRecord);
+router.get('/contingency/records', authenticate, requireAdmin, ContingencyController.listRecords);
+router.post('/contingency/records/:id/close', authenticate, requireAdmin, ContingencyController.closeRecord);
 
 router.get('/dashboard/stats', authenticate, DashboardController.getStats);
 

@@ -11,6 +11,7 @@ import { LabelsPage }       from '@/pages/LabelsPage';
 import { UsersPage }        from '@/pages/UsersPage';
 import { ShelfLifeRulesPage } from '@/pages/ShelfLifeRulesPage';
 import { ReportPage }       from '@/pages/ReportPage';
+import { ContingencyPage }  from '@/pages/ContingencyPage';
 import { RouteErrorScreen } from '@/components/errors/ErrorBoundary';
 import { TotemRoute }       from '@/components/totem/TotemShell';
 import { TotemLoginPage }   from '@/pages/totem/TotemLoginPage';
@@ -63,6 +64,7 @@ export const router = createBrowserRouter([
                   { path: '/users',             element: <UsersPage /> },
                   { path: '/rules',             element: <ShelfLifeRulesPage /> },
                   { path: '/reports',           element: <ReportPage /> },
+                  { path: '/contingency',       element: <ContingencyPage /> },
                 ],
               },
             ],

@@ -60,6 +60,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Plano B: registros apontam para produto, regra e usuário (Restrict); apaga antes deles.
+  if (productIds.length) await prisma.contingencyRecord.deleteMany({ where: { productId: { in: productIds } } });
+  await prisma.connectivityOutage.deleteMany({ where: { reportedById: { in: [userId, operatorId].filter(Boolean) } } });
   if (productIds.length) {
     // Origem com filhas não pode ser apagada (Restrict): apaga das folhas para a origem.
     for (let round = 0; round < 10; round++) {
@@ -3291,5 +3294,313 @@ describe('relatório do período para imprimir', () => {
     expect(res.status).toBe(422);
     expect(res.body.error.message).toBe('O período tem mais de 2.000 etiquetas. Escolha um período menor.');
     expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('plano B: queda de conexão e registro de contingência', () => {
+  const tag = suffix.slice(0, 8);
+  let adminToken = '';
+  let operatorAuth = '';
+  let noRuleId = '';
+  let ruleProductId = '';
+  let inactiveId = '';
+  let ruleId = '';
+  const asAdmin = () => `Bearer ${adminToken}`;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const kitchenDayOf = (iso: string) => isoDate(kitchenToday(new Date(iso)));
+  const plusDays = (day: string, days: number) => isoDate(new Date(Date.parse(`${day}T00:00:00.000Z`) + days * DAY));
+  const reportOutage = (body: object, token = asAdmin()) =>
+    request(app).post('/api/contingency/outages').set('Authorization', token).send(body);
+  const recordBody = (productId: string, body: object = {}) => ({
+    productId, storageType: 'REFRIGERADO', lot: 'LOT-PAPEL', originalExpiryDate: daysFromToday(60),
+    openedAt: ago(60_000), responsibleName: 'Cozinheira do papel', paperRef: 'folha 3, linha 5', outcome: 'EM_USO',
+    ...body,
+  });
+  const preview = (productId: string, body: object = {}, token = asAdmin()) =>
+    request(app).post('/api/contingency/records/preview').set('Authorization', token).send(recordBody(productId, body));
+  const create = (productId: string, body: object = {}, token = asAdmin()) =>
+    request(app).post('/api/contingency/records').set('Authorization', token).send(recordBody(productId, body));
+  const closeRecord = (id: string, body: object) =>
+    request(app).post(`/api/contingency/records/${id}/close`).set('Authorization', asAdmin()).send(body);
+  const listRecords = (status?: string) => request(app).get('/api/contingency/records')
+    .query(status ? { status } : {}).set('Authorization', asAdmin());
+  const resetSettings = () => prisma.kitchenSettings.updateMany({ data: { requireValidatedRule: false } });
+
+  beforeAll(async () => {
+    const login = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.120')
+      .send({ email, password: 'TestPassword123!' });
+    adminToken = login.body.data.accessToken;
+    const operator = await request(app).post('/api/auth/login').set('X-Forwarded-For', '198.51.100.121')
+      .send({ email: operatorEmail, password: 'TestPassword123!' });
+    operatorAuth = `Bearer ${operator.body.data.accessToken as string}`;
+    // Prazos fictícios, só para o teste.
+    const product = async (name: string, data: { active?: boolean } = {}) => {
+      const created = await prisma.product.create({
+        data: { name: `${name} ${tag}`, brand: 'Teste', daysValidRefrigerated: 3, daysValidFrozen: 30, ...data },
+      });
+      productIds.push(created.id);
+      return created.id;
+    };
+    noRuleId = await product('Contingência sem regra');
+    ruleProductId = await product('Contingência com regra');
+    inactiveId = await product('Contingência inativo', { active: false });
+    const rule = await request(app).post('/api/shelf-life-rules').set('Authorization', asAdmin())
+      .send({ ...ruleBody, shelfLifeDays: 5, storageType: 'REFRIGERADO', productId: ruleProductId });
+    expect(rule.status).toBe(201);
+    ruleId = rule.body.data.id;
+    ruleIds.push(ruleId);
+  });
+  afterEach(resetSettings);
+  afterAll(resetSettings);
+
+  it('lets any logged-in device report an outage, but only admins list, review and record', async () => {
+    expect((await request(app).post('/api/contingency/outages').send({ durationMs: 120_000 })).status).toBe(401);
+    const reported = await reportOutage({ durationMs: 120_000 }, operatorAuth);
+    expect(reported.status).toBe(201);
+    expect(reported.body.data).toMatchObject({ durationMs: 120_000, reportedByName: 'Operador de integração', reviewedAt: null });
+    const { reportedAt, startedAt } = reported.body.data;
+    expect(Date.parse(reportedAt) - Date.parse(startedAt)).toBe(120_000);
+
+    expect((await request(app).get('/api/contingency/outages').set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).post(`/api/contingency/outages/${reported.body.data.id}/review`)
+      .set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await request(app).get('/api/contingency/records').set('Authorization', operatorAuth)).status).toBe(403);
+    expect((await preview(noRuleId, {}, operatorAuth)).status).toBe(403);
+    expect((await create(noRuleId, {}, operatorAuth)).status).toBe(403);
+    expect((await request(app).post(`/api/contingency/records/${randomUUID()}/close`)
+      .set('Authorization', operatorAuth).send({ outcome: 'USADO' })).status).toBe(403);
+  });
+
+  it('validates the outage duration and returns the same outage on a resend within 60 s', async () => {
+    for (const body of [
+      { durationMs: 59_999 }, { durationMs: 7 * DAY + 1 }, { durationMs: 90_000.5 }, { durationMs: '90000' },
+      {}, { durationMs: 90_000, reportedAt: ago(0) },
+    ]) {
+      const res = await reportOutage(body);
+      expect(res.status, JSON.stringify(body)).toBe(422);
+    }
+    const first = await reportOutage({ durationMs: 7 * DAY });
+    expect(first.status).toBe(201);
+    const resend = await reportOutage({ durationMs: 60_000 });
+    expect(resend.status).toBe(200);
+    expect(resend.body.data).toMatchObject({ id: first.body.data.id, durationMs: 7 * DAY });
+
+    // Passado o intervalo, é uma queda nova.
+    await prisma.connectivityOutage.update({ where: { id: first.body.data.id }, data: { reportedAt: new Date(Date.now() - 61_000) } });
+    const later = await reportOutage({ durationMs: 60_000 });
+    expect(later.status).toBe(201);
+    expect(later.body.data.id).not.toBe(first.body.data.id);
+  });
+
+  it('lists outages (pending filter, pendingCount) and reviews them idempotently', async () => {
+    const mine = await prisma.connectivityOutage.findFirstOrThrow({ where: { reportedById: operatorId } });
+    const list = (query: Record<string, string> = {}) =>
+      request(app).get('/api/contingency/outages').query(query).set('Authorization', asAdmin());
+    const pending = await list({ pending: 'true' });
+    expect(pending.status).toBe(200);
+    expect(pending.body.data.some((item: { id: string }) => item.id === mine.id)).toBe(true);
+    expect(pending.body.data.every((item: { reviewedAt: string | null }) => item.reviewedAt === null)).toBe(true);
+    const pendingCount = pending.body.meta.pendingCount as number;
+    expect(pendingCount).toBeGreaterThanOrEqual(1);
+
+    const review = () => request(app).post(`/api/contingency/outages/${mine.id}/review`).set('Authorization', asAdmin());
+    const reviewed = await review();
+    expect(reviewed.status).toBe(200);
+    expect(reviewed.body.data).toMatchObject({ id: mine.id, reviewedByName: 'Teste de integração' });
+    expect(reviewed.body.data.reviewedAt).not.toBeNull();
+    const again = await review();
+    expect(again.status).toBe(200);
+    expect(again.body.data.reviewedAt).toBe(reviewed.body.data.reviewedAt);
+
+    const after = await list({ pending: 'true' });
+    expect(after.body.data.some((item: { id: string }) => item.id === mine.id)).toBe(false);
+    expect(after.body.meta.pendingCount).toBe(pendingCount - 1);
+    const done = await list({ pending: 'false' });
+    expect(done.body.data.some((item: { id: string }) => item.id === mine.id)).toBe(true);
+    const all = await list();
+    expect(all.body.data.length).toBeLessThanOrEqual(100);
+    expect((await list({ pending: 'talvez' })).status).toBe(422);
+    expect((await request(app).post(`/api/contingency/outages/${randomUUID()}/review`)
+      .set('Authorization', asAdmin())).status).toBe(404);
+  });
+
+  it('uses the same rule resolution as the label and is never blocked by RULE_REQUIRED', async () => {
+    const on = await request(app).put('/api/settings').set('Authorization', asAdmin()).send({ requireValidatedRule: true });
+    expect(on.status).toBe(200);
+    // A etiqueta seria recusada; o registro de contingência não.
+    const labelPreview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: noRuleId, originalExpiryDate: daysFromToday(60), openedAt: today(), storageType: 'REFRIGERADO',
+    });
+    expect(labelPreview.body.error.code).toBe('RULE_REQUIRED');
+
+    const openedAt = ago(60_000);
+    const openedDate = kitchenDayOf(openedAt);
+    const noRule = await preview(noRuleId, { openedAt });
+    expect(noRule.status).toBe(200);
+    expect(noRule.body.data).toMatchObject({
+      shelfLifeDays: 3, openedDate, discardAt: plusDays(openedDate, 2), cappedByOriginalExpiry: false, expired: false,
+      rule: { id: null, version: null, validated: false, source: 'Prazo cadastrado no produto (sem regra validada)' },
+    });
+    const created = await create(noRuleId, { openedAt, note: 'Folha achada no balcão' });
+    expect(created.status).toBe(201);
+    expect(created.body.data).toMatchObject({
+      productId: noRuleId, productName: `Contingência sem regra ${tag}`, productBrand: 'Teste', lot: 'LOT-PAPEL',
+      openedAt, openedDate, discardAt: plusDays(openedDate, 2), shelfLifeDays: 3, ruleId: null, ruleVersion: null,
+      ruleSource: 'Prazo cadastrado no produto (sem regra validada)', ruleValidated: false, outcome: 'EM_USO',
+      responsibleName: 'Cozinheira do papel', paperRef: 'folha 3, linha 5', note: 'Folha achada no balcão',
+      closedAt: null, closedByName: null, createdByName: 'Teste de integração', createdById: userId, expired: false,
+    });
+
+    const withRule = await create(ruleProductId, { openedAt });
+    expect(withRule.status).toBe(201);
+    expect(withRule.body.data).toMatchObject({
+      shelfLifeDays: 5, discardAt: plusDays(openedDate, 4), ruleId, ruleVersion: 1,
+      ruleSource: 'Regra de teste de integração', ruleValidated: true,
+    });
+    const rulePreview = await preview(ruleProductId, { openedAt });
+    expect(rulePreview.body.data.rule).toEqual({ id: ruleId, version: 1, source: 'Regra de teste de integração', validated: true });
+
+    // Não é etiqueta: nada foi criado em /labels.
+    // SQL direto: um teste anterior espiona `prisma.label.count`.
+    const labels = await prisma.$queryRaw<{ n: number }[]>`
+      SELECT COUNT(*)::int AS n FROM labels WHERE product_id IN (${noRuleId}, ${ruleProductId})`;
+    expect(labels[0].n).toBe(0);
+  });
+
+  it('accepts an opening 3 days ago (beyond MAX_BACKDATE_DAYS) and refuses the future and more than 30 days', async () => {
+    const threeDaysAgo = ago(3 * DAY);
+    const openedDate = kitchenDayOf(threeDaysAgo);
+    const labelPreview = await request(app).post('/api/labels/preview').set('Authorization', asAdmin()).send({
+      productId: ruleProductId, originalExpiryDate: daysFromToday(60), openedAt: openedDate, storageType: 'REFRIGERADO',
+    });
+    expect(labelPreview.status).toBe(422);
+
+    const res = await create(ruleProductId, { openedAt: threeDaysAgo });
+    expect(res.status).toBe(201);
+    expect(res.body.data).toMatchObject({ openedDate, discardAt: plusDays(openedDate, 4), expired: false });
+
+    const future = await preview(ruleProductId, { openedAt: new Date(Date.now() + 10 * 60_000).toISOString() });
+    expect(future.status).toBe(422);
+    expect(future.body.error.message).toBe('A abertura não pode ser no futuro.');
+    const tooOld = await create(ruleProductId, { openedAt: ago(31 * DAY), outcome: 'USADO' });
+    expect(tooOld.status).toBe(422);
+    expect(tooOld.body.error.message).toBe('A abertura não pode ser de mais de 30 dias atrás.');
+    expect((await preview(ruleProductId, { openedAt: ago(29 * DAY) })).status).toBe(200);
+  });
+
+  it('caps at the manufacturer expiry and refuses EM_USO when the deadline has passed', async () => {
+    const capped = await preview(ruleProductId, { originalExpiryDate: today() });
+    expect(capped.status).toBe(200);
+    expect(capped.body.data).toMatchObject({ discardAt: today(), cappedByOriginalExpiry: true, expired: false });
+
+    // Sem regra, 3 dias: aberto há 3 dias vence ontem.
+    const openedAt = ago(3 * DAY);
+    const expiredPreview = await preview(noRuleId, { openedAt });
+    expect(expiredPreview.body.data).toMatchObject({ discardAt: daysFromToday(-1), expired: true });
+    const inUse = await create(noRuleId, { openedAt });
+    expect(inUse.status).toBe(422);
+    expect(inUse.body.error.message).toBe('O prazo já venceu: registre como descartado ou usado.');
+
+    const used = await create(noRuleId, { openedAt, outcome: 'USADO' });
+    expect(used.status).toBe(201);
+    expect(used.body.data).toMatchObject({ outcome: 'USADO', closedByName: 'Teste de integração', expired: true });
+    expect(used.body.data.closedAt).not.toBeNull();
+    const discarded = await create(noRuleId, { openedAt, outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO' });
+    expect(discarded.status).toBe(201);
+    expect(discarded.body.data).toMatchObject({ outcome: 'DESCARTADO', discardReason: 'PRAZO_VENCIDO' });
+  });
+
+  it('validates the record body', async () => {
+    const invalid = [
+      { outcome: 'DESCARTADO' },
+      { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'ab' },
+      { outcome: 'USADO', discardReason: 'PRAZO_VENCIDO' },
+      { outcome: 'CANCELADO' },
+      { openedAt: today() },
+      { openedAt: '2026-11-20T10:00:00' },
+      { lot: '' }, { lot: 'x'.repeat(61) }, { lot: 'a\u0000b' },
+      { responsibleName: 'A' }, { responsibleName: 'x'.repeat(81) },
+      { paperRef: 'x'.repeat(81) }, { note: 'x'.repeat(301) },
+      { originalExpiryDate: '2026-02-30' },
+      { outageId: 'abc' },
+      { storageTemperature: 4 },
+      { lotId: randomUUID() },
+    ];
+    for (const body of invalid) {
+      const res = await create(noRuleId, body);
+      expect(res.status, JSON.stringify(body)).toBe(422);
+    }
+    const other = await create(noRuleId, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'Caiu no chão' });
+    expect(other.status).toBe(201);
+    // Abertura depois da validade do fabricante: mesmo cálculo da etiqueta.
+    expect((await create(noRuleId, { originalExpiryDate: daysFromToday(-5) })).status).toBe(422);
+  });
+
+  it('accepts an inactive product, refuses an unknown one and links the outage', async () => {
+    const inactive = await create(inactiveId);
+    expect(inactive.status).toBe(201);
+    expect((await create(randomUUID())).status).toBe(404);
+    expect((await create(noRuleId, { outageId: randomUUID() })).status).toBe(404);
+
+    const outage = await prisma.connectivityOutage.findFirstOrThrow({ where: { reportedById: userId } });
+    const linked = await create(noRuleId, { outageId: outage.id });
+    expect(linked.status).toBe(201);
+    expect(linked.body.data.outageId).toBe(outage.id);
+  });
+
+  it('closes only from EM_USO, idempotent for the same outcome, 409 otherwise', async () => {
+    const open = await create(ruleProductId, { note: 'Aberto no turno da noite' });
+    expect(open.status).toBe(201);
+    const id = open.body.data.id as string;
+
+    expect((await closeRecord(id, { outcome: 'EM_USO' })).status).toBe(422);
+    expect((await closeRecord(id, { outcome: 'DESCARTADO' })).status).toBe(422);
+    expect((await closeRecord(id, { outcome: 'USADO', extra: true })).status).toBe(422);
+
+    const closed = await closeRecord(id, { outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL', note: 'Cheiro alterado' });
+    expect(closed.status).toBe(200);
+    expect(closed.body.data).toMatchObject({
+      outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL', closedByName: 'Teste de integração',
+      note: 'Aberto no turno da noite\nEncerramento: Cheiro alterado',
+    });
+    const again = await closeRecord(id, { outcome: 'DESCARTADO', discardReason: 'ALTERACAO_SENSORIAL' });
+    expect(again.status).toBe(200);
+    expect(again.body.data.closedAt).toBe(closed.body.data.closedAt);
+    expect((await closeRecord(id, { outcome: 'USADO' })).status).toBe(409);
+    expect((await closeRecord(id, { outcome: 'DESCARTADO', discardReason: 'OUTRO', note: 'Outro motivo' })).status).toBe(409);
+    expect((await closeRecord(randomUUID(), { outcome: 'USADO' })).status).toBe(404);
+  });
+
+  it('lists EM_USO first by discard date, then closed ones newest first, each with expired', async () => {
+    const later = await create(ruleProductId);
+    const sooner = await create(ruleProductId, { originalExpiryDate: today() });
+    const closedOld = await create(noRuleId, { outcome: 'USADO' });
+    const closedNew = await create(noRuleId, { outcome: 'USADO' });
+    for (const res of [later, sooner, closedOld, closedNew]) expect(res.status).toBe(201);
+    await prisma.contingencyRecord.update({ where: { id: closedOld.body.data.id }, data: { createdAt: new Date(Date.now() - HOUR) } });
+
+    type Item = { id: string; outcome: string; discardAt: string; createdAt: string; expired: boolean };
+    const all = await listRecords('all');
+    expect(all.status).toBe(200);
+    const items = all.body.data as Item[];
+    expect(items.length).toBeLessThanOrEqual(200);
+    const firstClosed = items.findIndex((item) => item.outcome !== 'EM_USO');
+    const lastOpen = items.map((item) => item.outcome).lastIndexOf('EM_USO');
+    if (firstClosed !== -1) expect(lastOpen).toBeLessThan(firstClosed);
+    const open = items.filter((item) => item.outcome === 'EM_USO');
+    expect(open.map((item) => item.discardAt)).toEqual([...open.map((item) => item.discardAt)].sort());
+    const closed = items.filter((item) => item.outcome !== 'EM_USO');
+    expect(closed.map((item) => item.createdAt)).toEqual([...closed.map((item) => item.createdAt)].sort().reverse());
+    const position = (id: string) => items.findIndex((item) => item.id === id);
+    expect(position(sooner.body.data.id)).toBeLessThan(position(later.body.data.id));
+    expect(position(closedNew.body.data.id)).toBeLessThan(position(closedOld.body.data.id));
+    expect(items.every((item) => typeof item.expired === 'boolean')).toBe(true);
+
+    const onlyOpen = await listRecords('open');
+    expect(onlyOpen.body.data.every((item: Item) => item.outcome === 'EM_USO')).toBe(true);
+    expect(onlyOpen.body.data.some((item: Item) => item.id === later.body.data.id)).toBe(true);
+    expect((await listRecords('closed')).status).toBe(422);
   });
 });

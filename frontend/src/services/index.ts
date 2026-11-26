@@ -6,6 +6,7 @@ import type {
   CloseLabelDTO, CloseLabelResult, SplitPreview, SplitPreviewDTO, SplitLabelDTO, SplitResult, LabelListParams,
   ShelfLifeRule, RuleFilters, AppSettings, SettingsUpdateMeta, ProductWithoutRule, ProductsWithoutRuleMeta, RuleVersionDTO, CreateRuleDTO,
   DashboardStats,
+  ContingencyOutage, ContingencyOutagesResponse, ContingencyRecordDTO, ContingencyPreview, ContingencyRecord, ContingencyCloseDTO,
   DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelReport, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
 import type { LabelTemplateId } from '@/utils/labelTemplates';
@@ -194,4 +195,31 @@ export const settingsApi = {
   /** ADMIN. `meta` traz quantos produtos/combinações ficam bloqueados. */
   update: (changes: { requireValidatedRule?: boolean; expiryWarningMonths?: number | null; labelTemplate?: LabelTemplateId | null; kitchenName?: string | null; technicalResponsible?: string | null }) =>
     api.put<ApiResponse<AppSettings> & { meta: SettingsUpdateMeta }>('/settings', changes),
+};
+
+// ── Plano B / contingência ──────────────────────────────
+export const contingencyApi = {
+  /** Totem (qualquer usuário logado): 201 na criação, 200 no reenvio. `durationMs` de 60 000 a 7 dias. */
+  reportOutage: (durationMs: number) =>
+    api.post<ApiResponse<ContingencyOutage>>('/contingency/outages', { durationMs }),
+
+  /** ADMIN. `meta.pendingCount` = quedas ainda não revisadas. */
+  listOutages: (pending = true) =>
+    api.get<ContingencyOutagesResponse>('/contingency/outages', { params: pending ? { pending: true } : undefined }),
+
+  reviewOutage: (id: string) =>
+    api.post<ApiResponse<ContingencyOutage>>(`/contingency/outages/${id}/review`),
+
+  preview: (data: ContingencyRecordDTO) =>
+    api.post<ApiResponse<ContingencyPreview>>('/contingency/records/preview', data),
+
+  create: (data: ContingencyRecordDTO) =>
+    api.post<ApiResponse<ContingencyRecord>>('/contingency/records', data),
+
+  list: (status: 'open' | 'all' = 'open') =>
+    api.get<ApiResponse<ContingencyRecord[]>>('/contingency/records', { params: { status } }),
+
+  /** 409 se o registro não estiver mais em uso. */
+  close: (id: string, data: ContingencyCloseDTO) =>
+    api.post<ApiResponse<ContingencyRecord>>(`/contingency/records/${id}/close`, data),
 };
