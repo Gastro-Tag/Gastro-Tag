@@ -588,6 +588,8 @@ export interface ContingencyPreview {
   shelfLifeDays:         number;
   discardAt:             string;
   cappedByOriginalExpiry: boolean;
+  /** Dia da cozinha da abertura (dia 1), para conferir com a folha. */
+  openedDate?:           string;
   rule:                  { id: string | null; version: number | null; source: string | null; validated: boolean };
   expired:               boolean;
 }

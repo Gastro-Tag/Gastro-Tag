@@ -3392,6 +3392,13 @@ describe('plano B: queda de conexão e registro de contingência', () => {
     const later = await reportOutage({ durationMs: 60_000 });
     expect(later.status).toBe(201);
     expect(later.body.data.id).not.toBe(first.body.data.id);
+
+    // Reenvio atrasado: o início desconta há quanto tempo a rede voltou (até 24 h).
+    await prisma.connectivityOutage.update({ where: { id: later.body.data.id }, data: { reportedAt: new Date(Date.now() - 61_000) } });
+    expect((await reportOutage({ durationMs: 60_000, endedAgoMs: DAY + 1 })).status).toBe(422);
+    const delayed = await reportOutage({ durationMs: 300_000, endedAgoMs: 3_600_000 });
+    expect(delayed.status).toBe(201);
+    expect(Date.parse(delayed.body.data.reportedAt) - Date.parse(delayed.body.data.startedAt)).toBe(3_900_000);
   });
 
   it('lists outages (pending filter, pendingCount) and reviews them idempotently', async () => {

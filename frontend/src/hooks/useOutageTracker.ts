@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { contingencyApi } from '@/services';
 import { subscribeApiActivity } from '@/services/api';
-import { clearPending, loadPending, markOffline, savePending, takeOutage } from '@/utils/outage';
+import { clearPending, loadPendingOutage, markOffline, savePending, takeOutage } from '@/utils/outage';
+
+/** Toque até 60 s antes da falha conta como uso do totem durante a queda. */
+const RECENT_USE_MS = 60_000;
 
 /**
  * Plano B no totem: mede a queda de rede e avisa o gerente pelo servidor.
@@ -14,14 +17,17 @@ export function useOutageTracker(): { noticeMs: number | null; dismiss: () => vo
 
   useEffect(() => {
     let sending = false;
+    let lastInteraction = 0;
+    const onInteraction = () => { lastInteraction = Date.now(); };
+    const usedRecently = () => Date.now() - lastInteraction <= RECENT_USE_MS;
 
     async function send() {
       if (sending) return;
-      const durationMs = loadPending(Date.now());
-      if (durationMs === null) return;
+      const pending = loadPendingOutage(Date.now());
+      if (pending === null) return;
       sending = true;
       try {
-        await contingencyApi.reportOutage(durationMs);
+        await contingencyApi.reportOutage(pending.durationMs, pending.endedAgoMs);
         clearPending();
       } catch (err) {
         // Rede, 5xx, 401 (a renovação da sessão cuida) e 429 tentam de novo na próxima resposta de sucesso;
@@ -43,16 +49,20 @@ export function useOutageTracker(): { noticeMs: number | null; dismiss: () => vo
       void send();
     }
 
-    const onOffline = () => markOffline(Date.now());
+    const onOffline = () => markOffline(Date.now(), usedRecently());
     window.addEventListener('offline', onOffline);
+    window.addEventListener('pointerdown', onInteraction, { capture: true, passive: true });
+    window.addEventListener('keydown', onInteraction, { capture: true, passive: true });
     window.addEventListener('online', recovered);
     const unsubscribe = subscribeApiActivity((activity) => {
-      if (activity === 'network-error') markOffline(Date.now());
+      if (activity === 'network-error') markOffline(Date.now(), usedRecently());
       else recovered();
     });
     return () => {
       window.removeEventListener('offline', onOffline);
       window.removeEventListener('online', recovered);
+      window.removeEventListener('pointerdown', onInteraction, { capture: true });
+      window.removeEventListener('keydown', onInteraction, { capture: true });
       unsubscribe();
     };
   }, []);

@@ -8,6 +8,9 @@ const OUTAGE_DURATION_ERROR = 'Informe a duração da queda em milissegundos int
 const outageSchema = z.strictObject({
   durationMs: z.number({ error: OUTAGE_DURATION_ERROR })
     .int(OUTAGE_DURATION_ERROR).min(OUTAGE_MIN_MS, OUTAGE_DURATION_ERROR).max(OUTAGE_MAX_MS, OUTAGE_DURATION_ERROR),
+  // Há quanto tempo a rede voltou (reenvio atrasado), até 24 h: o início fica certo mesmo assim.
+  endedAgoMs: z.number({ error: 'Informe endedAgoMs em milissegundos inteiros, de 0 a 24 h.' })
+    .int().min(0).max(24 * 60 * 60_000, 'endedAgoMs deve ser de no máximo 24 h.').optional(),
 });
 
 const outageListSchema = z.object({
@@ -87,8 +90,8 @@ const actor = (req: Request) => ({ id: req.user!.sub, name: req.user!.name });
 
 export const ContingencyController = {
   async reportOutage(req: Request, res: Response) {
-    const { durationMs } = outageSchema.parse(req.body);
-    const { outage, replayed } = await ContingencyService.reportOutage(durationMs, actor(req));
+    const { durationMs, endedAgoMs } = outageSchema.parse(req.body);
+    const { outage, replayed } = await ContingencyService.reportOutage(durationMs, actor(req), endedAgoMs ?? 0);
     res.status(replayed ? 200 : 201).json({ success: true, data: outage });
   },
 

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  MAX_OUTAGE_MS, OFFLINE_KEY, PENDING_KEY, PENDING_TTL_MS, clearPending, isMarkedOffline, loadPending, markOffline,
+  MAX_OUTAGE_MS, OFFLINE_KEY, PENDING_KEY, PENDING_TTL_MS, clearPending, isMarkedOffline, loadPending, loadPendingOutage, markOffline,
   outageDurationText, outageNoticeText, savePending, takeOutage,
 } from './outage';
 
@@ -87,5 +87,21 @@ describe('textos', () => {
     expect(outageNoticeText(12 * MIN)).toBe(
       'A rede ficou fora por cerca de 12 min. Se usou etiqueta de papel, entregue a folha ao gerente para lançar no sistema.',
     );
+  });
+});
+
+describe('queda só conta com uso do totem e guarda o fim', () => {
+  it('consulta automática sem toque não vira queda', () => {
+    markOffline(1_000, false);
+    expect(takeOutage(1_000 + 9 * 60 * MIN)).toBeNull();
+  });
+  it('um uso no meio da queda conta a queda inteira', () => {
+    markOffline(1_000, false);
+    markOffline(1_000 + 60 * MIN, true);
+    expect(takeOutage(1_000 + 90 * MIN)).toBe(90 * MIN);
+  });
+  it('reenvio atrasado informa há quanto tempo a rede voltou', () => {
+    savePending(8 * MIN, 1_000, 1_000);
+    expect(loadPendingOutage(1_000 + 6 * 60 * MIN)).toEqual({ durationMs: 8 * MIN, endedAgoMs: 6 * 60 * MIN });
   });
 });

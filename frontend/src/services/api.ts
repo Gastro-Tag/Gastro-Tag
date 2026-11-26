@@ -31,7 +31,11 @@ let refreshPromise: Promise<string> | null = null;
 api.interceptors.response.use(
   (response) => { notifyActivity('success'); return response; },
   async (error: AxiosError) => {
-    if (!error.response && !axios.isCancel(error)) notifyActivity('network-error');
+    // Sem resposta, ou o nginx/túnel respondendo que a API não está lá: conta como queda para o plano B.
+    const status = error.response?.status;
+    if ((!error.response || status === 502 || status === 503 || status === 504 || status === 530) && !axios.isCancel(error)) {
+      notifyActivity('network-error');
+    }
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
     const url = original?.url ?? '';
     // Login, refresh e logout devolvem 401 por motivo próprio. PIN errado e token de operador recusado são 401 do

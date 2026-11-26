@@ -3,6 +3,9 @@
 
 export const OFFLINE_KEY = 'gastrotag:totem:offlineSince';
 export const PENDING_KEY = 'gastrotag:totem:outagePending';
+/** Alguém tentou usar o totem durante a queda. Sem isso (servidor desligado à noite, aba fechada no meio de
+ *  um envio), a queda não é avisada: só interessa a que pode ter gerado etiqueta de papel. */
+export const USED_KEY = 'gastrotag:totem:offlineUsed';
 
 export const MIN_OUTAGE_MS = 5 * 60_000;
 /** Teto aceito pela API (7 dias). */
@@ -20,11 +23,14 @@ function remove(key: string): void {
   try { localStorage.removeItem(key); } catch { /* ignora */ }
 }
 
-/** Marca o início da queda; só grava se ainda não houver uma em andamento. */
-export function markOffline(now: number): void {
+/**
+ * Marca o início da queda; só grava se ainda não houver uma em andamento.
+ * `used`: a falha veio de um uso de verdade (toque recente), não de uma consulta automática.
+ */
+export function markOffline(now: number, used = true): void {
   const current = Number(read(OFFLINE_KEY));
-  if (Number.isFinite(current) && current > 0) return;
-  write(OFFLINE_KEY, String(now));
+  if (!(Number.isFinite(current) && current > 0)) write(OFFLINE_KEY, String(now));
+  if (used) write(USED_KEY, '1');
 }
 
 /** Há uma queda em andamento (sem retorno de rede ainda)? */
@@ -39,8 +45,10 @@ export function isMarkedOffline(): boolean {
  */
 export function takeOutage(now: number, minMs: number = MIN_OUTAGE_MS): number | null {
   const raw = read(OFFLINE_KEY);
+  const used = read(USED_KEY) === '1';
   remove(OFFLINE_KEY);
-  if (raw === null) return null;
+  remove(USED_KEY);
+  if (raw === null || !used) return null;
   const since = Number(raw);
   if (!Number.isFinite(since) || since <= 0) return null;
   const durationMs = now - since;
@@ -48,11 +56,24 @@ export function takeOutage(now: number, minMs: number = MIN_OUTAGE_MS): number |
   return Math.min(Math.round(durationMs), MAX_OUTAGE_MS);
 }
 
-interface Pending { durationMs: number; savedAt: number }
+interface Pending { durationMs: number; savedAt: number; endedAt?: number }
 
-/** Guarda uma duração que ainda não foi enviada ao servidor. */
-export function savePending(durationMs: number, now: number): void {
-  write(PENDING_KEY, JSON.stringify({ durationMs, savedAt: now } satisfies Pending));
+/** Guarda uma duração que ainda não foi enviada ao servidor; `endedAt` = quando a rede voltou. */
+export function savePending(durationMs: number, now: number, endedAt: number = now): void {
+  write(PENDING_KEY, JSON.stringify({ durationMs, savedAt: now, endedAt } satisfies Pending));
+}
+
+/** Pendente com o fim da queda, para o servidor calcular o início certo mesmo num reenvio atrasado. */
+export function loadPendingOutage(now: number): { durationMs: number; endedAgoMs: number } | null {
+  const durationMs = loadPending(now);
+  if (durationMs === null) return null;
+  try {
+    const { endedAt, savedAt } = JSON.parse(read(PENDING_KEY) ?? '{}') as Partial<Pending>;
+    const end = typeof endedAt === 'number' ? endedAt : savedAt ?? now;
+    return { durationMs, endedAgoMs: Math.min(Math.max(0, Math.round(now - end)), PENDING_TTL_MS) };
+  } catch {
+    return { durationMs, endedAgoMs: 0 };
+  }
 }
 
 /** Duração aguardando reenvio; vencida (24 h), ilegível ou fora do intervalo é apagada e vira null. */

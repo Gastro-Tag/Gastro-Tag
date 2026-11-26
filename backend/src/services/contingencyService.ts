@@ -104,7 +104,7 @@ export const ContingencyService = {
    * Aviso de queda vindo do aparelho quando a rede volta. Reenvio do mesmo usuário em até 60 s devolve
    * o aviso já gravado (`replayed`); a trava por usuário evita dois avisos em envios simultâneos.
    */
-  async reportOutage(durationMs: number, actor: Actor) {
+  async reportOutage(durationMs: number, actor: Actor, endedAgoMs = 0) {
     return prisma.$transaction(async (tx) => {
       const key = `outage:${actor.id}`;
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
@@ -116,7 +116,7 @@ export const ContingencyService = {
       if (recent) return { outage: recent, replayed: true };
       const outage = await tx.connectivityOutage.create({
         data: {
-          durationMs, reportedAt: now, startedAt: new Date(now.getTime() - durationMs),
+          durationMs, reportedAt: now, startedAt: new Date(now.getTime() - endedAgoMs - durationMs),
           reportedById: actor.id, reportedByName: actor.name,
         },
       });
@@ -215,7 +215,7 @@ export const ContingencyService = {
       const current = await tx.contingencyRecord.findUnique({ where: { id } });
       if (!current) throw Errors.notFound('Registro de contingência');
       const note = data.note
-        ? (current.note ? `${current.note}\nEncerramento: ${data.note}` : data.note)
+        ? (current.note ? `${current.note}\nEncerramento: ${data.note}` : `Encerramento: ${data.note}`)
         : current.note;
       // Atualização condicional: dois encerramentos ao mesmo tempo não passam os dois.
       const updated = await tx.contingencyRecord.updateMany({

@@ -200,8 +200,8 @@ export const settingsApi = {
 // ── Plano B / contingência ──────────────────────────────
 export const contingencyApi = {
   /** Totem (qualquer usuário logado): 201 na criação, 200 no reenvio. `durationMs` de 60 000 a 7 dias. */
-  reportOutage: (durationMs: number) =>
-    api.post<ApiResponse<ContingencyOutage>>('/contingency/outages', { durationMs }),
+  reportOutage: (durationMs: number, endedAgoMs = 0) =>
+    api.post<ApiResponse<ContingencyOutage>>('/contingency/outages', { durationMs, endedAgoMs }),
 
   /** ADMIN. `meta.pendingCount` = quedas ainda não revisadas. */
   listOutages: (pending = true) =>

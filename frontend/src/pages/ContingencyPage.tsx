@@ -228,7 +228,8 @@ function RecordRow({ record, onClose }: { record: ContingencyRecord; onClose: (o
         </div>
         {open && (
           <div className="flex shrink-0 gap-2">
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => onClose('USADO')}>Usado</button>
+            {/* Vencido só sai como descartado, como no totem e no painel de descarte. */}
+            {!overdue && <button type="button" className="btn btn-outline btn-sm" onClick={() => onClose('USADO')}>Usado</button>}
             <button type="button" className="btn btn-danger btn-sm" onClick={() => onClose('DESCARTADO')}>Descartado</button>
           </div>
         )}
@@ -366,7 +367,7 @@ function PaperRecordForm({ products, productsError, onRetryProducts, linkedOutag
         </div>
         <div>
           <label htmlFor="pb-resp" className="mb-1 block text-xs font-bold text-slate-500">Responsável da folha</label>
-          <input id="pb-resp" className="input min-h-[44px]" maxLength={100} value={form.responsibleName} onChange={(e) => setField('responsibleName', e.target.value)} />
+          <input id="pb-resp" className="input min-h-[44px]" maxLength={80} value={form.responsibleName} onChange={(e) => setField('responsibleName', e.target.value)} />
         </div>
         <div>
           <label htmlFor="pb-ref" className="mb-1 block text-xs font-bold text-slate-500">Referência da folha (opcional)</label>
@@ -409,6 +410,9 @@ function PaperRecordForm({ products, productsError, onRetryProducts, linkedOutag
         {summary && preview && (
           <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm" role="status">
             <p className="font-bold text-charcoal-800">Descarte em {formatBR(preview.discardAt)} · prazo de {preview.shelfLifeDays} {preview.shelfLifeDays === 1 ? 'dia' : 'dias'}</p>
+            {preview.openedDate && (
+              <p className="text-xs text-slate-600">Dia 1 (abertura, data da cozinha): {formatBR(preview.openedDate)}. Confira com a folha.</p>
+            )}
             <p className={cn('text-xs', preview.rule.validated ? 'text-slate-600' : 'font-bold text-amber-800')}>{summary.ruleText.charAt(0).toUpperCase() + summary.ruleText.slice(1)}</p>
             {preview.cappedByOriginalExpiry && <p className="text-xs text-slate-600">Limitado pela validade do fabricante.</p>}
             {summary.warning && <p className="mt-1 font-bold text-rose-700">{summary.warning}</p>}
