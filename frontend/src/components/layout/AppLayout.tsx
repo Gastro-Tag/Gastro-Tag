@@ -15,6 +15,7 @@ import {
   Users,
   KeyRound,
   BookOpenCheck,
+  ClipboardList,
   FileText,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
@@ -28,6 +29,7 @@ const navItems = [
   { to: '/labels',   label: 'Etiquetas',  icon: Tag             },
   { to: '/rules',    label: 'Regras de validade', icon: BookOpenCheck, adminOnly: true },
   { to: '/reports',  label: 'Relatório',  icon: FileText, adminOnly: true },
+  { to: '/contingency', label: 'Plano B', icon: ClipboardList, adminOnly: true },
   { to: '/users',    label: 'Usuários',   icon: Users, adminOnly: true },
   { to: '/totem',    label: 'Modo Totem', icon: Tablet          },
 ];
@@ -52,6 +54,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (location.pathname.startsWith('/labels')) return { title: 'Etiquetas & Descarte', subtitle: 'Geração, impressão e rastreabilidade' };
     if (location.pathname.startsWith('/rules')) return { title: 'Regras de validade', subtitle: 'Prazos com fonte, responsável e versões' };
     if (location.pathname.startsWith('/reports')) return { title: 'Relatório do período', subtitle: 'Etiquetas criadas, para imprimir ou salvar em PDF' };
+    if (location.pathname.startsWith('/contingency')) return { title: 'Plano B', subtitle: 'Etiquetas de papel usadas quando a rede caiu' };
     if (location.pathname.startsWith('/users')) return { title: 'Usuários', subtitle: 'Contas, perfis e acesso ao sistema' };
     return { title: 'GastroTag', subtitle: 'Gestão Inteligente de Alimentos' };
   };

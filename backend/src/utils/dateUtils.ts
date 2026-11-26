@@ -59,11 +59,12 @@ export function daysUntil(date: Date): number {
   return Math.round((d.getTime() - now.getTime()) / 86_400_000);
 }
 
-export function kitchenToday(): Date {
+/** Dia da cozinha (meia-noite UTC) de um instante; sem instante, o de agora. */
+export function kitchenToday(at: Date = new Date()): Date {
   const timeZone = process.env.KITCHEN_TIME_ZONE || 'America/Manaus';
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date());
+  }).formatToParts(at);
   const part = (type: string) => Number(parts.find((item) => item.type === type)?.value);
   return new Date(Date.UTC(part('year'), part('month') - 1, part('day')));
 }

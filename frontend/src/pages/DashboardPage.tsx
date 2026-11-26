@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import {
   Package,
   Tag,
@@ -12,8 +12,9 @@ import {
   Snowflake,
   Refrigerator,
   UtensilsCrossed,
+  WifiOff,
 } from 'lucide-react';
-import { dashboardApi } from '@/services';
+import { contingencyApi, dashboardApi } from '@/services';
 import { extractError } from '@/services/api';
 import type { DashboardStats } from '@/types';
 import { PageLoader } from '@/components/ui/Spinner';
@@ -45,6 +46,17 @@ export function DashboardPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Plano B (ADMIN): quedas de rede ainda não conferidas. Se falhar, o cartão simplesmente não aparece.
+  const [pendingOutages, setPendingOutages] = useState(0);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let active = true;
+    contingencyApi.listOutages(true)
+      .then(({ data }) => { if (active) setPendingOutages(data.meta?.pendingCount ?? 0); })
+      .catch(() => { /* sem erro na tela */ });
+    return () => { active = false; };
+  }, [isAdmin]);
 
   if (loading) return <PageLoader />;
   if (!stats) return (
@@ -90,6 +102,20 @@ export function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {isAdmin && pendingOutages > 0 && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200/80 bg-amber-50/80 p-4">
+          <div className="flex items-center gap-3">
+            <WifiOff className="h-5 w-5 shrink-0 text-amber-600" aria-hidden="true" />
+            <p className="text-sm font-bold text-amber-950">
+              Plano B: {pendingOutages} {pendingOutages === 1 ? 'queda' : 'quedas'} de rede para conferir
+            </p>
+          </div>
+          <Link to="/contingency" className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100/50">
+            Abrir Plano B
+          </Link>
+        </div>
+      )}
 
       {/* ── Critical Alert Banner (if any expiring) ────────── */}
       {products.expiring > 0 && (

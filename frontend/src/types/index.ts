@@ -550,3 +550,81 @@ export interface LabelReport {
   summary: ReportSummary;
   rows: ReportRow[];
 }
+
+// ── Plano B (contingência) ──────────────────────────────
+export type ContingencyOutcome = 'EM_USO' | 'USADO' | 'DESCARTADO';
+
+export interface ContingencyOutage {
+  id:             string;
+  durationMs:     number;
+  startedAt:      string;
+  reportedAt:     string;
+  reportedByName: string | null;
+  reviewedAt:     string | null;
+  reviewedByName: string | null;
+}
+
+export interface ContingencyOutagesResponse {
+  success: boolean;
+  data:    ContingencyOutage[];
+  meta:    { pendingCount: number };
+}
+
+export interface ContingencyRecordDTO {
+  productId:        string;
+  storageType:      StorageType;
+  lot:              string;
+  originalExpiryDate: string;   // YYYY-MM-DD
+  openedAt:         string;     // ISO com hora
+  responsibleName:  string;
+  paperRef?:        string;
+  note?:            string;
+  outcome:          ContingencyOutcome;
+  discardReason?:   DiscardReason;
+  outageId?:        string;
+}
+
+export interface ContingencyPreview {
+  shelfLifeDays:         number;
+  discardAt:             string;
+  cappedByOriginalExpiry: boolean;
+  /** Dia da cozinha da abertura (dia 1), para conferir com a folha. */
+  openedDate?:           string;
+  rule:                  { id: string | null; version: number | null; source: string | null; validated: boolean };
+  expired:               boolean;
+}
+
+export interface ContingencyRecord {
+  id:                 string;
+  productId:          string;
+  productName:        string;
+  productBrand:       string | null;
+  lot:                string;
+  originalExpiryDate: string;
+  openedAt:           string;
+  openedDate:         string;
+  storageType:        StorageType;
+  shelfLifeDays:      number;
+  ruleId:             string | null;
+  ruleVersion:        number | null;
+  ruleSource:         string | null;
+  discardAt:          string;
+  cappedByOriginalExpiry: boolean;
+  responsibleName:    string;
+  paperRef:           string | null;
+  note:               string | null;
+  outcome:            ContingencyOutcome;
+  discardReason:      DiscardReason | null;
+  closedAt:           string | null;
+  closedByName:       string | null;
+  createdByName:      string | null;
+  createdAt:          string;
+  outageId:           string | null;
+  expired:            boolean;
+}
+
+export interface ContingencyCloseDTO {
+  outcome:        'USADO' | 'DESCARTADO';
+  discardReason?: DiscardReason;
+  note?:          string;
+}

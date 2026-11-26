@@ -47,3 +47,10 @@ describe('addMonths and daysBetween', () => {
     expect(daysBetween(day('2028-02-01'), day('2028-03-01'))).toBe(29);
   });
 });
+
+describe('kitchenToday(at)', () => {
+  it('usa o dia da cozinha do instante dado, não o UTC (America/Manaus, UTC−4)', () => {
+    expect(kitchenToday(new Date('2026-11-26T03:30:00Z')).toISOString().slice(0, 10)).toBe('2026-11-25');
+    expect(kitchenToday(new Date('2026-11-26T04:30:00Z')).toISOString().slice(0, 10)).toBe('2026-11-26');
+  });
+});
