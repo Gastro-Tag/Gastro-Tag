@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import { UserService } from '../services/userService';
+import { isPseudonymized, UserService } from '../services/userService';
 
 const passwordSchema = z.string()
   .min(12, 'Senha deve ter ao menos 12 caracteres.')
@@ -9,7 +9,9 @@ const passwordSchema = z.string()
 const userFields = z.object({
   name:  z.string().trim().min(2, 'Nome deve ter ao menos 2 caracteres.').max(100),
   // Guardado em minúsculas: "Ana@x.com" e "ana@x.com" são a mesma conta.
-  email: z.string().trim().toLowerCase().email('E-mail inválido.').max(120),
+  // O domínio de quem teve os dados removidos é reservado: um e-mail nele faria a conta parecer removida.
+  email: z.string().trim().toLowerCase().email('E-mail inválido.').max(120)
+    .refine((value) => !isPseudonymized(value), 'E-mail inválido.'),
   role:  z.enum(['ADMIN', 'OPERATOR']),
 });
 
@@ -22,6 +24,10 @@ const pinBodySchema = z.object({
     z.string({ error: 'O PIN deve ter de 4 a 6 dígitos.' }).regex(/^\d{4,6}$/, 'O PIN deve ter de 4 a 6 dígitos.'),
     z.null(),
   ], { error: 'O PIN deve ter de 4 a 6 dígitos.' }),
+});
+
+const pseudonymizeSchema = z.strictObject({
+  confirmName: z.string({ error: 'Digite o nome do usuário para confirmar.' }).max(200),
 });
 
 export const UserController = {
@@ -46,6 +52,21 @@ export const UserController = {
     const { password } = passwordBodySchema.parse(req.body);
     await UserService.resetPassword(req.params.id, password);
     res.json({ success: true, data: null });
+  },
+
+  /** Arquivo cru (sem o envelope success) para o admin baixar e entregar ao titular. */
+  async exportData(req: Request, res: Response) {
+    const data = await UserService.exportData(req.params.id);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="titular-${data.user.id.slice(0, 8)}.json"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(JSON.stringify(data, null, 2));
+  },
+
+  async pseudonymize(req: Request, res: Response) {
+    const { confirmName } = pseudonymizeSchema.parse(req.body);
+    const user = await UserService.pseudonymize(req.params.id, req.user!.sub, confirmName);
+    res.json({ success: true, data: user });
   },
 
   async setPin(req: Request, res: Response) {

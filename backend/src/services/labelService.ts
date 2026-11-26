@@ -809,7 +809,7 @@ export const LabelService = {
     const label = await prisma.label.findUnique({
       where: { id },
       include: {
-        product: true, user: { select: { name: true, email: true } }, rule: true, parent: parentSelect,
+        product: true, user: { select: { name: true } }, rule: true, parent: parentSelect,
         children: {
           select: { id: true, shortCode: true, status: true, discardAt: true },
           orderBy: [{ createdAt: 'asc' }, { shortCode: 'asc' }],

@@ -9,6 +9,7 @@ import type {
   DueLabelsResult, KitchenInfo, LabelMetrics, LabelMetricsParams, LabelExportParams, TotemOperator, VerifyOperatorResult,
 } from '@/types';
 import type { LabelTemplateId } from '@/utils/labelTemplates';
+import { exportFilename } from '@/utils/titular';
 
 // ── Auth ────────────────────────────────────────────────
 export const authApi = {
@@ -50,6 +51,25 @@ export const userApi = {
   /** PIN de operador (4 a 6 dígitos); `null` remove. ADMIN. */
   setPin: (id: string, pin: string | null) =>
     api.patch<ApiResponse<ManagedUser>>(`/users/${id}/pin`, { pin }),
+
+  /** Arquivo JSON com os dados do titular (ADMIN). Devolve o arquivo e o nome sugerido. */
+  exportData: async (id: string): Promise<{ blob: Blob; filename: string }> => {
+    try {
+      const response = await api.get<Blob>(`/users/${id}/export`, { responseType: 'blob', timeout: 60_000 });
+      return { blob: response.data, filename: exportFilename(response.headers['content-disposition'], id) };
+    } catch (err) {
+      // Com responseType blob, o corpo do erro também vem como Blob: converte para o JSON da API.
+      const body = (err as { response?: { data?: unknown } }).response?.data;
+      if (body instanceof Blob) {
+        try { (err as { response: { data: unknown } }).response.data = JSON.parse(await body.text()); } catch { /* corpo não é JSON */ }
+      }
+      throw err;
+    }
+  },
+
+  /** Irreversível (ADMIN). 422 se o nome não confere; 409 se é o próprio, o último admin ou já removido. */
+  pseudonymize: (id: string, confirmName: string) =>
+    api.post<ApiResponse<ManagedUser>>(`/users/${id}/pseudonymize`, { confirmName }),
 };
 
 // ── Totem: operador com PIN ─────────────────────────────

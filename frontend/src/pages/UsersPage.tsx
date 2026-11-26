@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useState } from 'react';
-import { Hash, KeyRound, Pencil, Plus, Power, ShieldCheck, User as UserIcon } from 'lucide-react';
+import { Download, Eraser, Hash, KeyRound, Pencil, Plus, Power, ShieldCheck, User as UserIcon } from 'lucide-react';
 import { userApi } from '@/services';
 import { extractError } from '@/services/api';
 import type { ManagedUser, UserRole } from '@/types';
@@ -11,6 +11,7 @@ import { PasswordInput } from '@/components/ui/PasswordInput';
 import { useToastContext } from '@/components/ui/Toast';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/utils/cn';
+import { canConfirmPseudonymize } from '@/utils/titular';
 
 type Dialog =
   | { kind: 'create' }
@@ -30,6 +31,8 @@ export function UsersPage() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toToggle, setToToggle] = useState<ManagedUser | null>(null);
   const [toRemovePin, setToRemovePin] = useState<ManagedUser | null>(null);
+  const [toPseudonymize, setToPseudonymize] = useState<ManagedUser | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,6 +75,27 @@ export function UsersPage() {
     }
   }
 
+  async function exportData(target: ManagedUser) {
+    if (exportingId) return;
+    setExportingId(target.id);
+    try {
+      const { blob, filename } = await userApi.exportData(target.id);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      toast('Arquivo de dados gerado. Antes de entregar, confira a lista "typedNameMatches": pode trazer etiquetas de outra pessoa com o mesmo nome.', 'success');
+    } catch (err) {
+      toast(extractError(err), 'error');
+    } finally {
+      setExportingId(null);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -107,31 +131,45 @@ export function UsersPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="truncate text-base font-bold text-charcoal-800">{user.name}{isSelf && ' (você)'}</h3>
                       <span className="badge badge-neutral">{ROLE_LABEL[user.role]}</span>
-                      {!user.active && <span className="badge badge-expired">Desativado</span>}
+                      {user.pseudonymized
+                        ? <span className="badge badge-neutral">Dados removidos</span>
+                        : !user.active && <span className="badge badge-expired">Desativado</span>}
                       {user.hasPin && <span className="badge badge-valid gap-1" title="Pode confirmar a identidade no totem com PIN"><Hash className="h-3 w-3" />PIN</span>}
                     </div>
                     <p className="truncate text-xs text-slate-500">{user.email}</p>
                   </div>
                 </div>
 
-                <div className="flex shrink-0 items-center gap-2">
-                  <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'edit', user })}>
-                    <Pencil className="h-3.5 w-3.5" /> Editar
-                  </button>
-                  <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'password', user })}>
-                    <KeyRound className="h-3.5 w-3.5" /> Senha
-                  </button>
-                  <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'pin', user })}>
-                    <Hash className="h-3.5 w-3.5" /> {user.hasPin ? 'Trocar PIN' : 'Definir PIN'}
-                  </button>
-                  {user.hasPin && (
-                    <button className="btn btn-ghost btn-sm" onClick={() => setToRemovePin(user)}>
-                      Remover PIN
-                    </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  {!user.pseudonymized && (
+                    <>
+                      <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'edit', user })}>
+                        <Pencil className="h-3.5 w-3.5" /> Editar
+                      </button>
+                      <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'password', user })}>
+                        <KeyRound className="h-3.5 w-3.5" /> Senha
+                      </button>
+                      <button className="btn btn-outline btn-sm" onClick={() => setDialog({ kind: 'pin', user })}>
+                        <Hash className="h-3.5 w-3.5" /> {user.hasPin ? 'Trocar PIN' : 'Definir PIN'}
+                      </button>
+                      {user.hasPin && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => setToRemovePin(user)}>
+                          Remover PIN
+                        </button>
+                      )}
+                      {!isSelf && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => setToToggle(user)}>
+                          <Power className="h-3.5 w-3.5" /> {user.active ? 'Desativar' : 'Reativar'}
+                        </button>
+                      )}
+                    </>
                   )}
-                  {!isSelf && (
-                    <button className="btn btn-ghost btn-sm" onClick={() => setToToggle(user)}>
-                      <Power className="h-3.5 w-3.5" /> {user.active ? 'Desativar' : 'Reativar'}
+                  <button className="btn btn-outline btn-sm" disabled={exportingId === user.id} onClick={() => void exportData(user)}>
+                    {exportingId === user.id ? <Spinner size="sm" /> : <Download className="h-3.5 w-3.5" />} Exportar dados
+                  </button>
+                  {!user.pseudonymized && !isSelf && (
+                    <button className="btn btn-danger btn-sm" onClick={() => setToPseudonymize(user)}>
+                      <Eraser className="h-3.5 w-3.5" /> Remover dados pessoais
                     </button>
                   )}
                 </div>
@@ -147,6 +185,14 @@ export function UsersPage() {
           isSelf={dialog.kind !== 'create' && dialog.user.id === currentUserId}
           onClose={() => setDialog(null)}
           onSaved={(message) => { setDialog(null); toast(message, 'success'); void load(); }}
+        />
+      )}
+
+      {toPseudonymize && (
+        <PseudonymizeDialog
+          user={toPseudonymize}
+          onClose={() => setToPseudonymize(null)}
+          onDone={(name) => { setToPseudonymize(null); toast(`Dados pessoais de ${name} removidos.`, 'success'); void load(); }}
         />
       )}
 
@@ -171,6 +217,76 @@ export function UsersPage() {
         onConfirm={() => void confirmToggle()}
         onCancel={() => setToToggle(null)}
       />
+    </div>
+  );
+}
+
+function PseudonymizeDialog({ user, onClose, onDone }: {
+  user: ManagedUser;
+  onClose: () => void;
+  onDone: (name: string) => void;
+}) {
+  const inputId = useId();
+  const titleId = useId();
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const enabled = canConfirmPseudonymize(typed, user.name) && !busy;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !busy) onClose(); }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [busy, onClose]);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!enabled) return;
+    setBusy(true);
+    setError('');
+    try {
+      await userApi.pseudonymize(user.id, typed.trim());
+      onDone(user.name);
+    } catch (err) {
+      setError(extractError(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <form onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby={titleId} className="max-h-full w-full max-w-md space-y-4 overflow-y-auto rounded-3xl border border-slate-200/80 bg-white p-6 shadow-card-lg">
+        <h2 id={titleId} className="text-base font-bold text-charcoal-800">Remover dados pessoais de {user.name}</h2>
+
+        <div className="space-y-2 text-xs leading-relaxed text-slate-600">
+          <p className="font-bold text-rose-700">Esta ação é irreversível.</p>
+          <ul className="list-disc space-y-1 pl-4">
+            <li>O nome passa a ser &quot;Usuário removido …&quot;.</li>
+            <li>O e-mail e o PIN são apagados.</li>
+            <li>A conta é desativada e as sessões são encerradas.</li>
+            <li>As etiquetas já registradas mantêm o nome que foi impresso ou digitado, para rastreabilidade. A remoção desses nomes depende de orientação jurídica.</li>
+          </ul>
+          <p>Recomendamos usar &quot;Exportar dados&quot; antes de continuar.</p>
+        </div>
+
+        {error && (
+          <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{error}</p>
+        )}
+
+        <div>
+          <label htmlFor={inputId} className="block text-xs font-bold text-slate-500">
+            Para confirmar, digite o nome exato: <span className="text-charcoal-800">{user.name}</span>
+          </label>
+          <input id={inputId} autoFocus autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} className="input mt-1.5" />
+        </div>
+
+        <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} disabled={busy} className="btn btn-ghost">Cancelar</button>
+          <button type="submit" disabled={!enabled} className="btn btn-danger">
+            {busy ? <Spinner size="sm" className="text-white" /> : 'Remover dados pessoais'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
