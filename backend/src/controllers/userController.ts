@@ -53,4 +53,9 @@ export const UserController = {
     const user = await UserService.setPin(req.params.id, pin);
     res.json({ success: true, data: user });
   },
+
+  async unlockPin(req: Request, res: Response) {
+    const user = await UserService.unlockPin(req.params.id);
+    res.json({ success: true, data: user });
+  },
 };

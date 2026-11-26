@@ -10,6 +10,7 @@ import { RuleController } from '../controllers/ruleController';
 import { TotemController } from '../controllers/totemController';
 import { SettingsController } from '../controllers/settingsController';
 import { authenticate, requireAdmin } from '../middlewares/auth';
+import { pinLockoutGeneration } from '../utils/pinLockout';
 
 const router = Router();
 
@@ -56,16 +57,20 @@ const changePasswordRateLimit = rateLimit({
 });
 
 // PIN tem poucas combinações: 5 erros por aparelho e operador escolhido bloqueiam por 15 minutos.
+// A geração do operador entra na chave para o ADMIN poder desbloquear (utils/pinLockout.ts).
 const verifyPinRateLimit = rateLimit({
   ...countOnlyRejected,
   windowMs: 15 * 60 * 1000,
   limit: 5,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  keyGenerator: (req) => `${ipKeyGenerator(req.ip ?? '')}:${String(req.body?.userId ?? '').slice(0, 64)}`,
+  keyGenerator: (req) => {
+    const userId = String(req.body?.userId ?? '').slice(0, 64);
+    return `${ipKeyGenerator(req.ip ?? '')}:${userId}:${pinLockoutGeneration(userId)}`;
+  },
   message: {
     success: false,
-    error: { message: 'Muitas tentativas de PIN. Tente novamente em 15 minutos.', code: 'RATE_LIMITED' },
+    error: { message: 'Muitas tentativas de PIN. Tente novamente em 15 minutos ou peça ao administrador para desbloquear.', code: 'RATE_LIMITED' },
   },
 });
 
@@ -81,6 +86,7 @@ router.post('/users', authenticate, requireAdmin, UserController.create);
 router.put('/users/:id', authenticate, requireAdmin, UserController.update);
 router.patch('/users/:id/password', authenticate, requireAdmin, UserController.resetPassword);
 router.patch('/users/:id/pin', authenticate, requireAdmin, UserController.setPin);
+router.post('/users/:id/pin/unlock', authenticate, requireAdmin, UserController.unlockPin);
 
 router.get('/totem/operators', authenticate, TotemController.operators);
 router.post('/totem/operators/verify', authenticate, verifyPinRateLimit, TotemController.verifyOperator);

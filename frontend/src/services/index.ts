@@ -50,6 +50,9 @@ export const userApi = {
   /** PIN de operador (4 a 6 dígitos); `null` remove. ADMIN. */
   setPin: (id: string, pin: string | null) =>
     api.patch<ApiResponse<ManagedUser>>(`/users/${id}/pin`, { pin }),
+
+  unlockPin: (id: string) =>
+    api.post<ApiResponse<ManagedUser>>(`/users/${id}/pin/unlock`),
 };
 
 // ── Totem: operador com PIN ─────────────────────────────
